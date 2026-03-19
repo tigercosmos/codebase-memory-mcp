@@ -322,6 +322,10 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
     int rc = cbm_discover(p->repo_path, &opts, &files, &file_count);
     if (rc != 0) {
         cbm_log_error("pipeline.err", "phase", "discover", "rc", itoa_buf(rc));
+        cbm_discover_free(files, file_count);
+        cbm_set_user_lang_config(NULL);
+        cbm_userconfig_free(p->userconfig);
+        p->userconfig = NULL;
         return -1;
     }
     cbm_log_info("pipeline.discover", "files", itoa_buf(file_count), "elapsed_ms",
@@ -329,6 +333,9 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
 
     if (check_cancel(p)) {
         cbm_discover_free(files, file_count);
+        cbm_set_user_lang_config(NULL);
+        cbm_userconfig_free(p->userconfig);
+        p->userconfig = NULL;
         return -1;
     }
 

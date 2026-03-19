@@ -304,6 +304,10 @@ cbm_userconfig_t *cbm_userconfig_load(const char *repo_path) {
     snprintf(global_path, sizeof(global_path), "%s/config.json", global_dir);
 
     if (load_config_file(global_path, &entries, &count) != 0) {
+        for (int i = 0; i < count; i++) {
+            free(entries[i].ext);
+        }
+        free(entries);
         free(cfg);
         return NULL;
     }

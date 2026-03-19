@@ -17,6 +17,7 @@
 #include "graph_buffer/graph_buffer.h"
 #include "store/store.h"
 #include "discover/discover.h"
+#include "discover/userconfig.h"
 #include "foundation/platform.h"
 #include "foundation/compat_fs.h"
 #include "foundation/log.h"
@@ -44,6 +45,9 @@ struct cbm_pipeline {
     /* Indexing state (set during run) */
     cbm_gbuf_t *gbuf;
     cbm_registry_t *registry;
+
+    /* User-defined extension overrides (loaded once per run) */
+    cbm_userconfig_t *userconfig;
 };
 
 /* ── Timing helper ──────────────────────────────────────────────── */
@@ -302,6 +306,10 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
 
     struct timespec t0;
     cbm_clock_gettime(CLOCK_MONOTONIC, &t0);
+
+    /* Load user-defined extension overrides (fail-open: NULL on error) */
+    p->userconfig = cbm_userconfig_load(p->repo_path);
+    cbm_set_user_lang_config(p->userconfig);
 
     /* Phase 1: Discover files */
     cbm_discover_opts_t opts = {
@@ -759,5 +767,9 @@ cleanup:
     p->gbuf = NULL;
     cbm_registry_free(p->registry);
     p->registry = NULL;
+    /* Clear and free user extension config */
+    cbm_set_user_lang_config(NULL);
+    cbm_userconfig_free(p->userconfig);
+    p->userconfig = NULL;
     return rc;
 }

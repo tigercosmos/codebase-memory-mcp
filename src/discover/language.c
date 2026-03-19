@@ -3,8 +3,11 @@
  *
  * Maps file extensions and special filenames to CBMLanguage enum values.
  * Handles .m disambiguation (Objective-C vs Magma vs MATLAB).
+ * Consults the process-global user config (set via cbm_set_user_lang_config)
+ * before the built-in lookup table.
  */
 #include "discover/discover.h"
+#include "discover/userconfig.h"
 #include "cbm.h" // CBMLanguage, CBM_LANG_*
 
 #include <ctype.h>
@@ -352,6 +355,15 @@ static const char *LANG_NAMES[CBM_LANG_COUNT] = {
 CBMLanguage cbm_language_for_extension(const char *ext) {
     if (!ext || !ext[0]) {
         return CBM_LANG_COUNT;
+    }
+
+    /* Check user-defined overrides first */
+    const cbm_userconfig_t *ucfg = cbm_get_user_lang_config();
+    if (ucfg) {
+        CBMLanguage ulang = cbm_userconfig_lookup(ucfg, ext);
+        if (ulang != CBM_LANG_COUNT) {
+            return ulang;
+        }
     }
 
     for (size_t i = 0; i < EXT_TABLE_SIZE; i++) {

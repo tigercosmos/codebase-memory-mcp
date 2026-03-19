@@ -148,6 +148,7 @@ MCP_SRCS = src/mcp/mcp.c
 # Discover module (new)
 DISCOVER_SRCS = \
     src/discover/language.c \
+    src/discover/userconfig.c \
     src/discover/gitignore.c \
     src/discover/discover.c
 
@@ -259,6 +260,7 @@ TEST_MCP_SRCS = \
 
 TEST_DISCOVER_SRCS = \
     tests/test_language.c \
+    tests/test_userconfig.c \
     tests/test_gitignore.c \
     tests/test_discover.c
 

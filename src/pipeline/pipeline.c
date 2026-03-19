@@ -101,6 +101,12 @@ void cbm_pipeline_free(cbm_pipeline_t *p) {
     free(p->db_path);
     free(p->project_name);
     /* gbuf, store, registry freed during/after run */
+    /* Defensively free userconfig in case run() was never called or panicked */
+    if (p->userconfig) {
+        cbm_set_user_lang_config(NULL);
+        cbm_userconfig_free(p->userconfig);
+        p->userconfig = NULL;
+    }
     free(p);
 }
 

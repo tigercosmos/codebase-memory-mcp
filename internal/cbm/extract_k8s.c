@@ -57,7 +57,7 @@ static const char *get_scalar_text(CBMArena *a, TSNode node, const char *source)
 static int is_kustomize_list_key(const char *key) {
     return (strcmp(key, "resources") == 0 || strcmp(key, "bases") == 0 ||
             strcmp(key, "patches") == 0 || strcmp(key, "components") == 0 ||
-            strcmp(key, "patchesStrategicMerge") == 0);
+            strcmp(key, "patchesStrategicMerge") == 0 || strcmp(key, "crds") == 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -196,10 +196,8 @@ static void extract_k8s_scalars(CBMExtractCtx *ctx, TSNode mapping, char *kind_b
             }
         } else if (strcmp(key, "metadata") == 0) {
             // Descend into metadata block_mapping to find "name"
+            // val_node is already unwrapped from block_node above.
             TSNode meta_mapping = val_node;
-            if (strcmp(ts_node_type(meta_mapping), "block_node") == 0) {
-                meta_mapping = ts_node_named_child(meta_mapping, 0);
-            }
             if (ts_node_is_null(meta_mapping) ||
                 strcmp(ts_node_type(meta_mapping), "block_mapping") != 0) {
                 continue;
@@ -269,7 +267,7 @@ static void extract_k8s_manifest(CBMExtractCtx *ctx) {
         CBMDefinition def = {0};
         def.name = cbm_arena_strdup(a, def_name);
         def.qualified_name = cbm_arena_sprintf(a, "%s.%s", ctx->module_qn, def_name);
-        def.label = "Resource";
+        def.label = cbm_arena_strdup(a, "Resource");
         def.file_path = ctx->rel_path;
         def.start_line = ts_node_start_point(mapping).row + 1;
         def.end_line = ts_node_end_point(mapping).row + 1;

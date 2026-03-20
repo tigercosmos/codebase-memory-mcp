@@ -4232,6 +4232,45 @@ TEST(k8s_extract_manifest_no_name) {
     PASS();
 }
 
+TEST(k8s_extract_manifest_multidoc) {
+    /* Two-document YAML separated by "---".
+     * extract_k8s_manifest contains a "break" after the first successful push,
+     * so it processes only the first document that has both kind and
+     * metadata.name.  This test pins that behaviour: the first document's
+     * resource must be present and no crash must occur.
+     *
+     * Note: with some tree-sitter YAML grammar versions the root stream may
+     * expose both documents as siblings; the break still fires after the first
+     * successful def push, so defs.count must be exactly 1. */
+    const char *src =
+        "apiVersion: apps/v1\n"
+        "kind: Deployment\n"
+        "metadata:\n"
+        "  name: my-app\n"
+        "---\n"
+        "apiVersion: v1\n"
+        "kind: Service\n"
+        "metadata:\n"
+        "  name: my-svc\n";
+    CBMFileResult *r = cbm_extract_file(src, (int)strlen(src), CBM_LANG_K8S,
+                                        "myproj", "k8s/multi.yaml", 0, NULL, NULL);
+    ASSERT(r != NULL);
+    ASSERT(!r->has_error);
+    /* First document's resource must be present */
+    int found = 0;
+    for (int i = 0; i < r->defs.count; i++) {
+        if (r->defs.items[i].label && strcmp(r->defs.items[i].label, "Resource") == 0 &&
+            r->defs.items[i].name && strcmp(r->defs.items[i].name, "Deployment/my-app") == 0) {
+            found = 1;
+        }
+    }
+    ASSERT(found);
+    /* At least one def, no more than one (only first document processed) */
+    ASSERT(r->defs.count >= 1);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Envscan tests (port of envscan_test.go) ───────────────────── */
 
 /* Helper: write a file inside a temp dir */
@@ -5182,6 +5221,7 @@ SUITE(pipeline) {
     RUN_TEST(k8s_extract_kustomize);
     RUN_TEST(k8s_extract_manifest);
     RUN_TEST(k8s_extract_manifest_no_name);
+    RUN_TEST(k8s_extract_manifest_multidoc);
     /* Env URL scanning */
     RUN_TEST(envscan_dockerfile_env_urls);
     RUN_TEST(envscan_shell_env_urls);

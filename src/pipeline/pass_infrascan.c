@@ -207,10 +207,7 @@ bool cbm_is_k8s_manifest(const char *name, const char *content) {
         return false;
     }
     char buf[4097];
-    size_t n = strlen(content);
-    if (n > 4096) {
-        n = 4096;
-    }
+    size_t n = strnlen(content, 4096);
     memcpy(buf, content, n);
     buf[n] = '\0';
     return ci_strstr(buf, "apiVersion:") != NULL;

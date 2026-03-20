@@ -279,6 +279,11 @@ static const filename_entry_t FILENAME_TABLE[] = {
     {"meson_options.txt", CBM_LANG_MESON},
     {"kustomization.yaml", CBM_LANG_KUSTOMIZE},
     {"kustomization.yml", CBM_LANG_KUSTOMIZE},
+    /* Note: FILENAME_TABLE uses case-sensitive strcmp, so mixed-case variants
+     * (e.g. "Kustomization.yaml") are not matched here.  They fall through to
+     * CBM_LANG_YAML and are re-classified by cbm_is_kustomize_file() in
+     * pass_k8s.c, which performs a case-insensitive comparison.  This is the
+     * intended behaviour — no additional entries are needed. */
     {".vimrc", CBM_LANG_VIMSCRIPT},
 };
 

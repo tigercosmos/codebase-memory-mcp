@@ -89,7 +89,7 @@ Language support is split between two layers:
 Languages like **Dockerfile**, **docker-compose**, **Kubernetes manifests**, and **Kustomize** do not use tree-sitter grammars. Instead they follow an *infra-pass* pattern:
 
 1. **Detection helpers** in `src/pipeline/pass_infrascan.c` — functions like `cbm_is_dockerfile()`, `cbm_is_k8s_manifest()`, `cbm_is_kustomize_file()` identify files by name and/or content heuristics (e.g., presence of `apiVersion:`).
-2. **Custom extractors** in `src/pipeline/extract_k8s.c` (or `extract_infra.c`) — hand-written parsers that walk the raw YAML/text and populate `CBMFileResult` with imports and definitions.
+2. **Custom extractors** in `internal/cbm/extract_k8s.c` — tree-sitter-based parsers that walk the YAML AST (using the tree-sitter YAML grammar) and populate `CBMFileResult` with imports and definitions.
 3. **Pipeline pass** (`pass_k8s.c`, `pass_infrascan.c`) — calls the extractor and emits graph nodes/edges. K8s manifests emit `Resource` nodes; Kustomize files emit `Module` nodes with `IMPORTS` edges to referenced resource files.
 
 **When adding a new infrastructure language:**

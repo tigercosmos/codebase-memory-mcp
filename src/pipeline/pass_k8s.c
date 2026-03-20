@@ -142,24 +142,15 @@ static void handle_kustomize(cbm_pipeline_ctx_t *ctx, const char *path, const ch
 
 /* ── K8s manifest handler ────────────────────────────────────────── */
 
+/* source/src_len are the already-read file bytes (caller retains ownership and
+ * must free after this call returns). */
 static void handle_k8s_manifest(cbm_pipeline_ctx_t *ctx, const char *path, const char *rel_path,
-                                CBMFileResult *result) {
+                                const char *source, int src_len) {
+    (void)path; /* retained for symmetry; source is always provided now */
     int resource_count = 0;
-    CBMFileResult *res = result;
-    bool allocated = false;
 
-    if (!res) {
-        /* Fall back to re-extraction */
-        int src_len = 0;
-        char *source = k8s_read_file(path, &src_len);
-        if (source) {
-            res = cbm_extract_file(source, src_len, CBM_LANG_K8S, ctx->project_name, rel_path,
-                                   CBM_EXTRACT_BUDGET, NULL, NULL);
-            free(source);
-            allocated = true;
-        }
-    }
-
+    CBMFileResult *res = cbm_extract_file(source, src_len, CBM_LANG_K8S, ctx->project_name,
+                                          rel_path, CBM_EXTRACT_BUDGET, NULL, NULL);
     if (!res) {
         return;
     }
@@ -191,9 +182,7 @@ static void handle_k8s_manifest(cbm_pipeline_ctx_t *ctx, const char *path, const
         resource_count++;
     }
 
-    if (allocated) {
-        cbm_free_result(res);
-    }
+    cbm_free_result(res);
 
     cbm_log_info("pass.k8s.manifest", "file", rel_path, "resources", itoa_k8s(resource_count));
 }
@@ -226,38 +215,20 @@ int cbm_pipeline_pass_k8s(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
             handle_kustomize(ctx, path, rel, cached);
             kustomize_count++;
         } else if (lang == CBM_LANG_YAML || lang == CBM_LANG_K8S) {
-            /* Need source content for cbm_is_k8s_manifest check */
-            if (cached) {
-                /* Use cached result — the file is a k8s manifest if lang is CBM_LANG_K8S,
-                 * or if we check the source. With a cached result available, trust the
-                 * language field set during discovery. */
-                if (lang == CBM_LANG_K8S) {
-                    handle_k8s_manifest(ctx, path, rel, cached);
+            /* Read source once to classify (and reuse for uncached extraction). */
+            int src_len = 0;
+            char *source = k8s_read_file(path, &src_len);
+            if (source) {
+                if (cbm_is_k8s_manifest(base, source)) {
+                    /* Always re-extract with CBM_LANG_K8S regardless of any cached
+                     * result: cached results were produced during the parallel YAML
+                     * pass and contain no "Resource" definitions.  Pass the already-
+                     * read source buffer so handle_k8s_manifest does not re-read. */
+                    (void)cached; /* cached YAML result intentionally discarded */
+                    handle_k8s_manifest(ctx, path, rel, source, src_len);
                     manifest_count++;
-                } else {
-                    /* CBM_LANG_YAML: need source to confirm apiVersion presence */
-                    int src_len = 0;
-                    char *source = k8s_read_file(path, &src_len);
-                    if (source) {
-                        if (cbm_is_k8s_manifest(base, source)) {
-                            handle_k8s_manifest(ctx, path, rel, cached);
-                            manifest_count++;
-                        }
-                        free(source);
-                    }
                 }
-            } else {
-                /* No cached result — read source to classify */
-                int src_len = 0;
-                char *source = k8s_read_file(path, &src_len);
-                if (source) {
-                    if (cbm_is_k8s_manifest(base, source)) {
-                        /* Pass NULL result — handle_k8s_manifest will re-extract */
-                        handle_k8s_manifest(ctx, path, rel, NULL);
-                        manifest_count++;
-                    }
-                    free(source);
-                }
+                free(source);
             }
         }
     }

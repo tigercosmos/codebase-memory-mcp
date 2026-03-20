@@ -363,4 +363,7 @@ void cbm_extract_type_assigns(CBMExtractCtx *ctx);
 // Single-pass unified extraction (replaces the 7 calls above except defs+imports).
 void cbm_extract_unified(CBMExtractCtx *ctx);
 
+// K8s / Kustomize semantic extractor (called when language is CBM_LANG_K8S or CBM_LANG_KUSTOMIZE).
+void cbm_extract_k8s(CBMExtractCtx *ctx);
+
 #endif // CBM_H

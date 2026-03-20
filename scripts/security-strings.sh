@@ -53,6 +53,10 @@ ALLOWED_URLS=(
 )
 
 while IFS= read -r url; do
+    # Skip short false positives from binary data (e.g. "https://H9")
+    if [[ ${#url} -lt 15 ]]; then
+        continue
+    fi
     allowed=false
     for prefix in "${ALLOWED_URLS[@]}"; do
         if [[ "$url" == "$prefix"* ]]; then

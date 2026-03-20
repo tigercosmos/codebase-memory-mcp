@@ -813,7 +813,7 @@ int cbm_remove_zed_mcp(const char *config_path) {
 /* ── Agent detection ──────────────────────────────────────────── */
 
 cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
-    cbm_detected_agents_t agents = {false, false, false, false, false, false, false, false};
+    cbm_detected_agents_t agents = {false, false, false, false, false, false, false, false, false};
     if (!home_dir || !home_dir[0]) {
         return agents;
     }
@@ -872,6 +872,16 @@ cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
     snprintf(path, sizeof(path), "%s/.config/Code/User/globalStorage/kilocode.kilo-code", home_dir);
     if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
         agents.kilocode = true;
+    }
+
+    /* VS Code: User config dir */
+#ifdef __APPLE__
+    snprintf(path, sizeof(path), "%s/Library/Application Support/Code/User", home_dir);
+#else
+    snprintf(path, sizeof(path), "%s/.config/Code/User", home_dir);
+#endif
+    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+        agents.vscode = true;
     }
 
     return agents;
@@ -2038,8 +2048,11 @@ int cbm_cmd_install(int argc, char **argv) {
     if (agents.kilocode) {
         printf(" KiloCode");
     }
+    if (agents.vscode) {
+        printf(" VS-Code");
+    }
     if (!agents.claude_code && !agents.codex && !agents.gemini && !agents.zed && !agents.opencode &&
-        !agents.antigravity && !agents.aider && !agents.kilocode) {
+        !agents.antigravity && !agents.aider && !agents.kilocode && !agents.vscode) {
         printf(" (none)");
     }
     printf("\n\n");
@@ -2200,7 +2213,23 @@ int cbm_cmd_install(int argc, char **argv) {
         printf("  instructions: %s\n", instr_path);
     }
 
-    /* Step 12: Ensure PATH */
+    /* Step 12: Install VS Code */
+    if (agents.vscode) {
+        printf("VS Code:\n");
+        char config_path[1024];
+#ifdef __APPLE__
+        snprintf(config_path, sizeof(config_path),
+                 "%s/Library/Application Support/Code/User/mcp.json", home);
+#else
+        snprintf(config_path, sizeof(config_path), "%s/.config/Code/User/mcp.json", home);
+#endif
+        if (!dry_run) {
+            cbm_install_vscode_mcp(self_path, config_path);
+        }
+        printf("  mcp: %s\n", config_path);
+    }
+
+    /* Step 13: Ensure PATH */
     char bin_dir[1024];
     snprintf(bin_dir, sizeof(bin_dir), "%s/.local/bin", home);
     const char *rc = cbm_detect_shell_rc(home);
@@ -2372,6 +2401,20 @@ int cbm_cmd_uninstall(int argc, char **argv) {
             cbm_remove_instructions(instr_path);
         }
         printf("  removed instructions\n");
+    }
+
+    if (agents.vscode) {
+        char config_path[1024];
+#ifdef __APPLE__
+        snprintf(config_path, sizeof(config_path),
+                 "%s/Library/Application Support/Code/User/mcp.json", home);
+#else
+        snprintf(config_path, sizeof(config_path), "%s/.config/Code/User/mcp.json", home);
+#endif
+        if (!dry_run) {
+            cbm_remove_vscode_mcp(config_path);
+        }
+        printf("VS Code: removed MCP config entry\n");
     }
 
     /* Step 2: Remove indexes */

@@ -269,7 +269,7 @@ codebase-memory-mcp cli --raw search_graph '{"label": "Function"}' | jq '.result
 
 ### Node Labels
 
-`Project`, `Package`, `Folder`, `File`, `Module`, `Class`, `Function`, `Method`, `Interface`, `Enum`, `Type`, `Route`
+`Project`, `Package`, `Folder`, `File`, `Module`, `Class`, `Function`, `Method`, `Interface`, `Enum`, `Type`, `Route`, `Resource`
 
 ### Edge Types
 

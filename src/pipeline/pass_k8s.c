@@ -82,9 +82,8 @@ static void handle_kustomize(cbm_pipeline_ctx_t *ctx, const char *path, const ch
     }
 
     // NOLINTNEXTLINE(misc-include-cleaner)
-    int64_t mod_id =
-        cbm_gbuf_upsert_node(ctx->gbuf, "Module", k8s_basename(rel_path), mod_qn, rel_path, 1, 0,
-                             "{\"source\":\"kustomize\"}");
+    int64_t mod_id = cbm_gbuf_upsert_node(ctx->gbuf, "Module", k8s_basename(rel_path), mod_qn,
+                                          rel_path, 1, 0, "{\"source\":\"kustomize\"}");
     free(mod_qn);
 
     if (mod_id <= 0) {
@@ -220,9 +219,8 @@ int cbm_pipeline_pass_k8s(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
         CBMLanguage lang = files[i].language;
         const char *base = k8s_basename(rel);
 
-        CBMFileResult *cached = (ctx->result_cache && ctx->result_cache[i])
-                                    ? ctx->result_cache[i]
-                                    : NULL;
+        CBMFileResult *cached =
+            (ctx->result_cache && ctx->result_cache[i]) ? ctx->result_cache[i] : NULL;
 
         if (cbm_is_kustomize_file(base)) {
             handle_kustomize(ctx, path, rel, cached);

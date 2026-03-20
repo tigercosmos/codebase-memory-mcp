@@ -66,8 +66,7 @@ static int is_kustomize_list_key(const char *key) {
 
 // Walk a block_sequence node and emit one CBMImport per block_sequence_item
 // scalar child, using key_name as the local_name.
-static void emit_kustomize_sequence(CBMExtractCtx *ctx, TSNode seq_node,
-                                    const char *key_name) {
+static void emit_kustomize_sequence(CBMExtractCtx *ctx, TSNode seq_node, const char *key_name) {
     CBMArena *a = ctx->arena;
     uint32_t n = ts_node_child_count(seq_node);
     for (uint32_t i = 0; i < n; i++) {
@@ -84,7 +83,7 @@ static void emit_kustomize_sequence(CBMExtractCtx *ctx, TSNode seq_node,
                 continue;
             }
             CBMImport imp = {
-                .local_name  = cbm_arena_strdup(a, key_name),
+                .local_name = cbm_arena_strdup(a, key_name),
                 .module_path = cbm_arena_strdup(a, scalar),
             };
             cbm_imports_push(&ctx->result->imports, a, imp);
@@ -157,11 +156,10 @@ static void extract_kustomize(CBMExtractCtx *ctx) {
 
 // Descend into the first block_mapping of a document and extract apiVersion,
 // kind, and metadata.name. Returns void; fills kind_buf and meta_name_buf.
-static void extract_k8s_scalars(CBMExtractCtx *ctx, TSNode mapping,
-                                 char *kind_buf, size_t kind_sz,
-                                 char *meta_name_buf, size_t meta_sz) {
+static void extract_k8s_scalars(CBMExtractCtx *ctx, TSNode mapping, char *kind_buf, size_t kind_sz,
+                                char *meta_name_buf, size_t meta_sz) {
     CBMArena *a = ctx->arena;
-    kind_buf[0]      = '\0';
+    kind_buf[0] = '\0';
     meta_name_buf[0] = '\0';
 
     uint32_t n = ts_node_child_count(mapping);
@@ -255,7 +253,7 @@ static void extract_k8s_manifest(CBMExtractCtx *ctx) {
             continue;
         }
 
-        char kind_buf[256]      = {0};
+        char kind_buf[256] = {0};
         char meta_name_buf[256] = {0};
         extract_k8s_scalars(ctx, mapping, kind_buf, sizeof(kind_buf), meta_name_buf,
                             sizeof(meta_name_buf));
@@ -269,12 +267,12 @@ static void extract_k8s_manifest(CBMExtractCtx *ctx) {
         snprintf(def_name, sizeof(def_name), "%s/%s", kind_buf, meta_name_buf);
 
         CBMDefinition def = {0};
-        def.name           = cbm_arena_strdup(a, def_name);
+        def.name = cbm_arena_strdup(a, def_name);
         def.qualified_name = cbm_arena_sprintf(a, "%s.%s", ctx->module_qn, def_name);
-        def.label          = "Resource";
-        def.file_path      = ctx->rel_path;
-        def.start_line     = ts_node_start_point(mapping).row + 1;
-        def.end_line       = ts_node_end_point(mapping).row + 1;
+        def.label = "Resource";
+        def.file_path = ctx->rel_path;
+        def.start_line = ts_node_start_point(mapping).row + 1;
+        def.end_line = ts_node_end_point(mapping).row + 1;
         cbm_defs_push(&ctx->result->defs, a, def);
 
         break; // Only the first document per file

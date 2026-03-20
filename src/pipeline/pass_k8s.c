@@ -15,6 +15,7 @@
 #include "graph_buffer/graph_buffer.h"
 #include "discover/discover.h"
 #include "foundation/log.h"
+#include "foundation/compat.h"
 #include "cbm.h"
 
 #include <stdlib.h>

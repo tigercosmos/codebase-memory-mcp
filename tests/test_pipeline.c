@@ -3331,6 +3331,30 @@ TEST(infra_is_dockerfile) {
     PASS();
 }
 
+TEST(infra_is_kustomize_file) {
+    ASSERT(cbm_is_kustomize_file("kustomization.yaml"));
+    ASSERT(cbm_is_kustomize_file("kustomization.yml"));
+    ASSERT(cbm_is_kustomize_file("KUSTOMIZATION.YAML")); /* case-insensitive */
+    ASSERT(!cbm_is_kustomize_file("deployment.yaml"));
+    ASSERT(!cbm_is_kustomize_file("kustomize.yaml"));
+    ASSERT(!cbm_is_kustomize_file(NULL));
+    PASS();
+}
+
+TEST(infra_is_k8s_manifest) {
+    const char *deploy = "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: my-app\n";
+    const char *plain  = "name: foo\nvalue: bar\n";
+    const char *kust   = "apiVersion: kustomize.config.k8s.io/v1beta1\nkind: Kustomization\n";
+
+    ASSERT(cbm_is_k8s_manifest("deployment.yaml", deploy));
+    ASSERT(!cbm_is_k8s_manifest("deployment.yaml", plain));
+    /* kustomize file should return false even if it has apiVersion */
+    ASSERT(!cbm_is_k8s_manifest("kustomization.yaml", kust));
+    ASSERT(!cbm_is_k8s_manifest(NULL, deploy));
+    ASSERT(!cbm_is_k8s_manifest("deployment.yaml", NULL));
+    PASS();
+}
+
 TEST(infra_is_env_file) {
     ASSERT(cbm_is_env_file(".env"));
     ASSERT(cbm_is_env_file(".env.local"));
@@ -4136,6 +4160,75 @@ TEST(infra_pipeline_idempotent) {
     ASSERT_EQ(r1.port_count, r2.port_count);
     ASSERT_EQ(r1.env_count, r2.env_count);
 
+    PASS();
+}
+
+/* ── K8s / Kustomize extraction tests ──────────────────────────── */
+
+TEST(k8s_extract_kustomize) {
+    const char *src =
+        "apiVersion: kustomize.config.k8s.io/v1beta1\n"
+        "kind: Kustomization\n"
+        "resources:\n"
+        "  - deployment.yaml\n"
+        "  - service.yaml\n";
+    CBMFileResult *r = cbm_extract_file(src, (int)strlen(src), CBM_LANG_KUSTOMIZE,
+                                        "myproj", "base/kustomization.yaml",
+                                        0, NULL, NULL);
+    ASSERT(r != NULL);
+    ASSERT_GTE(r->imports.count, 2);
+
+    bool found_deploy = false, found_svc = false;
+    for (int i = 0; i < r->imports.count; i++) {
+        if (r->imports.items[i].module_path &&
+            strcmp(r->imports.items[i].module_path, "deployment.yaml") == 0)
+            found_deploy = true;
+        if (r->imports.items[i].module_path &&
+            strcmp(r->imports.items[i].module_path, "service.yaml") == 0)
+            found_svc = true;
+    }
+    ASSERT_TRUE(found_deploy);
+    ASSERT_TRUE(found_svc);
+
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(k8s_extract_manifest) {
+    const char *src =
+        "apiVersion: apps/v1\n"
+        "kind: Deployment\n"
+        "metadata:\n"
+        "  name: my-app\n"
+        "  namespace: production\n";
+    CBMFileResult *r = cbm_extract_file(src, (int)strlen(src), CBM_LANG_K8S,
+                                        "myproj", "k8s/deployment.yaml",
+                                        0, NULL, NULL);
+    ASSERT(r != NULL);
+    ASSERT_GTE(r->defs.count, 1);
+
+    bool found_resource = false;
+    for (int d = 0; d < r->defs.count; d++) {
+        if (r->defs.items[d].label &&
+            strcmp(r->defs.items[d].label, "Resource") == 0 &&
+            r->defs.items[d].name &&
+            strstr(r->defs.items[d].name, "Deployment") != NULL)
+            found_resource = true;
+    }
+    ASSERT_TRUE(found_resource);
+
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(k8s_extract_manifest_no_name) {
+    const char *src = "apiVersion: apps/v1\nkind: Deployment\n";
+    CBMFileResult *r = cbm_extract_file(src, (int)strlen(src), CBM_LANG_K8S,
+                                        "myproj", "k8s/deploy.yaml", 0, NULL, NULL);
+    ASSERT(r != NULL);
+    /* No crash — defs count may be 0 because metadata.name is absent */
+    ASSERT(!r->has_error);
+    cbm_free_result(r);
     PASS();
 }
 
@@ -5055,6 +5148,8 @@ SUITE(pipeline) {
     RUN_TEST(infra_is_cloudbuild_file);
     RUN_TEST(infra_is_shell_script);
     RUN_TEST(infra_is_dockerfile);
+    RUN_TEST(infra_is_kustomize_file);
+    RUN_TEST(infra_is_k8s_manifest);
     RUN_TEST(infra_is_env_file);
     RUN_TEST(infra_clean_json_brackets);
     RUN_TEST(infra_secret_detection);
@@ -5083,6 +5178,10 @@ SUITE(pipeline) {
     /* Infrascan: pipeline integration */
     RUN_TEST(infra_pipeline_integration);
     RUN_TEST(infra_pipeline_idempotent);
+    /* K8s / Kustomize extraction */
+    RUN_TEST(k8s_extract_kustomize);
+    RUN_TEST(k8s_extract_manifest);
+    RUN_TEST(k8s_extract_manifest_no_name);
     /* Env URL scanning */
     RUN_TEST(envscan_dockerfile_env_urls);
     RUN_TEST(envscan_shell_env_urls);

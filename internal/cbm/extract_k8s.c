@@ -22,9 +22,19 @@
 
 // Return the raw source text for a scalar node (plain, single-quoted, or
 // double-quoted). Surrounding quote characters are stripped for quoted forms.
+// Handles flow_node wrappers transparently by descending into the first named
+// child (the tree-sitter YAML grammar often wraps scalars in flow_node).
 // Returns NULL for non-scalar node types.
 static const char *get_scalar_text(CBMArena *a, TSNode node, const char *source) {
     const char *type = ts_node_type(node);
+    // Unwrap flow_node: the actual scalar is the first named child
+    if (strcmp(type, "flow_node") == 0) {
+        TSNode inner = ts_node_named_child(node, 0);
+        if (ts_node_is_null(inner)) {
+            return NULL;
+        }
+        return get_scalar_text(a, inner, source);
+    }
     if (strcmp(type, "plain_scalar") == 0) {
         return cbm_node_text(a, node, source);
     }

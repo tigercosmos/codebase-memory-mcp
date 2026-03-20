@@ -98,11 +98,30 @@ TEST(jsonrpc_format_error) {
  * ══════════════════════════════════════════════════════════════════ */
 
 TEST(mcp_initialize_response) {
-    char *json = cbm_mcp_initialize_response();
+    /* Default (no params): returns latest supported version */
+    char *json = cbm_mcp_initialize_response(NULL);
     ASSERT_NOT_NULL(json);
     ASSERT_NOT_NULL(strstr(json, "codebase-memory-mcp"));
     ASSERT_NOT_NULL(strstr(json, "capabilities"));
     ASSERT_NOT_NULL(strstr(json, "tools"));
+    ASSERT_NOT_NULL(strstr(json, "2025-11-25"));
+    free(json);
+
+    /* Client requests a supported version: server echoes it */
+    json = cbm_mcp_initialize_response("{\"protocolVersion\":\"2024-11-05\"}");
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "2024-11-05"));
+    free(json);
+
+    json = cbm_mcp_initialize_response("{\"protocolVersion\":\"2025-06-18\"}");
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "2025-06-18"));
+    free(json);
+
+    /* Client requests unknown version: server returns its latest */
+    json = cbm_mcp_initialize_response("{\"protocolVersion\":\"9999-01-01\"}");
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "2025-11-25"));
     free(json);
     PASS();
 }
@@ -125,6 +144,35 @@ TEST(mcp_tools_list) {
     ASSERT_NOT_NULL(strstr(json, "detect_changes"));
     ASSERT_NOT_NULL(strstr(json, "manage_adr"));
     ASSERT_NOT_NULL(strstr(json, "ingest_traces"));
+    free(json);
+    PASS();
+}
+
+TEST(mcp_tools_array_schemas_have_items) {
+    /* VS Code 1.112+ rejects array schemas without "items" (see
+     * https://github.com/microsoft/vscode/issues/248810).
+     * Walk every tool's inputSchema and verify that every "type":"array"
+     * property also contains "items". */
+    char *json = cbm_mcp_tools_list();
+    ASSERT_NOT_NULL(json);
+
+    /* Scan for all occurrences of "type":"array" — each must be followed
+     * by "items" before the next closing brace of that property. */
+    const char *p = json;
+    while ((p = strstr(p, "\"type\":\"array\"")) != NULL) {
+        /* Find the enclosing '}' for this property object */
+        const char *end = strchr(p, '}');
+        ASSERT_NOT_NULL(end);
+        /* "items" must appear between p and end */
+        size_t span = (size_t)(end - p);
+        char *segment = malloc(span + 1);
+        memcpy(segment, p, span);
+        segment[span] = '\0';
+        ASSERT_NOT_NULL(strstr(segment, "\"items\"")); /* array missing items */
+        free(segment);
+        p = end;
+    }
+
     free(json);
     PASS();
 }
@@ -1185,6 +1233,7 @@ SUITE(mcp) {
     /* MCP protocol helpers */
     RUN_TEST(mcp_initialize_response);
     RUN_TEST(mcp_tools_list);
+    RUN_TEST(mcp_tools_array_schemas_have_items);
     RUN_TEST(mcp_text_result);
     RUN_TEST(mcp_text_result_error);
 

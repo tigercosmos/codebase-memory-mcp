@@ -2188,13 +2188,22 @@ int cbm_cmd_install(int argc, char **argv) {
             printf("  removed old monolithic skill\n");
         }
 
-        /* MCP config (.mcp.json) */
+        /* MCP config — write to both locations for compatibility.
+         * Claude Code <=2.1.x reads ~/.claude/.mcp.json
+         * Claude Code >=2.1.80 reads ~/.claude.json */
         char mcp_path[1024];
         snprintf(mcp_path, sizeof(mcp_path), "%s/.claude/.mcp.json", home);
         if (!dry_run) {
             cbm_install_editor_mcp(self_path, mcp_path);
         }
         printf("  mcp: %s\n", mcp_path);
+
+        char mcp_path2[1024];
+        snprintf(mcp_path2, sizeof(mcp_path2), "%s/.claude.json", home);
+        if (!dry_run) {
+            cbm_install_editor_mcp(self_path, mcp_path2);
+        }
+        printf("  mcp: %s\n", mcp_path2);
 
         /* PreToolUse hook */
         char settings_path[1024];
@@ -2402,6 +2411,13 @@ int cbm_cmd_uninstall(int argc, char **argv) {
             cbm_remove_editor_mcp(mcp_path);
         }
         printf("  removed MCP config entry\n");
+
+        /* Also remove from new location (Claude Code >=2.1.80) */
+        char mcp_path2[1024];
+        snprintf(mcp_path2, sizeof(mcp_path2), "%s/.claude.json", home);
+        if (!dry_run) {
+            cbm_remove_editor_mcp(mcp_path2);
+        }
 
         char settings_path[1024];
         snprintf(settings_path, sizeof(settings_path), "%s/.claude/settings.json", home);

@@ -361,8 +361,7 @@ char *cbm_mcp_initialize_response(const char *params_json) {
     if (params_json) {
         yyjson_doc *pdoc = yyjson_read(params_json, strlen(params_json), 0);
         if (pdoc) {
-            yyjson_val *pv =
-                yyjson_obj_get(yyjson_doc_get_root(pdoc), "protocolVersion");
+            yyjson_val *pv = yyjson_obj_get(yyjson_doc_get_root(pdoc), "protocolVersion");
             if (pv && yyjson_is_str(pv)) {
                 const char *requested = yyjson_get_str(pv);
                 for (int i = 0; i < SUPPORTED_VERSION_COUNT; i++) {

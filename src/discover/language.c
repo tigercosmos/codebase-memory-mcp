@@ -273,6 +273,8 @@ static const filename_entry_t FILENAME_TABLE[] = {
     {"GNUmakefile", CBM_LANG_MAKEFILE}, {"Makefile", CBM_LANG_MAKEFILE},
     {"makefile", CBM_LANG_MAKEFILE},    {"meson.build", CBM_LANG_MESON},
     {"meson.options", CBM_LANG_MESON},  {"meson_options.txt", CBM_LANG_MESON},
+    {"kustomization.yaml", CBM_LANG_KUSTOMIZE},
+    {"kustomization.yml",  CBM_LANG_KUSTOMIZE},
     {".vimrc", CBM_LANG_VIMSCRIPT},
 };
 
@@ -345,6 +347,8 @@ static const char *LANG_NAMES[CBM_LANG_COUNT] = {
     [CBM_LANG_FORM] = "FORM",
     [CBM_LANG_MAGMA] = "Magma",
     [CBM_LANG_WOLFRAM] = "Wolfram",
+    [CBM_LANG_KUSTOMIZE] = "Kustomize",
+    [CBM_LANG_K8S]       = "Kubernetes",
 };
 
 /* ── Public API ──────────────────────────────────────────────────── */

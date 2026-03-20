@@ -16,6 +16,8 @@
 #include "foundation/compat.h"
 #include "cbm.h"
 
+#include "foundation/compat_regex.h"
+
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -289,5 +291,312 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
     cbm_log_info("pass.done", "pass", "calls", "total", itoa_log(total_calls), "resolved",
                  itoa_log(resolved), "unresolved", itoa_log(unresolved), "errors",
                  itoa_log(errors));
+
+    /* Additional pattern-based edge passes run after normal call resolution */
+    cbm_pipeline_pass_fastapi_depends(ctx, files, file_count);
+    cbm_pipeline_pass_dll_resolve(ctx, files, file_count);
+
     return 0;
+}
+
+/* ── FastAPI Depends() tracking ──────────────────────────────────── */
+/* Scans Python function signatures for Depends(func_ref) patterns and
+ * creates CALLS edges from the endpoint to the dependency function.
+ * Without this, FastAPI auth/DI functions appear as dead code (in_degree=0). */
+
+// NOLINTNEXTLINE(misc-include-cleaner) — cbm_file_info_t provided by standard header
+void cbm_pipeline_pass_fastapi_depends(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
+                                       int file_count) {
+    cbm_regex_t depends_re;
+    if (cbm_regcomp(&depends_re, "Depends\\(([A-Za-z_][A-Za-z0-9_.]*)", CBM_REG_EXTENDED) != 0) {
+        return;
+    }
+
+    int edge_count = 0;
+    for (int i = 0; i < file_count; i++) {
+        if (files[i].language != CBM_LANG_PYTHON) {
+            continue;
+        }
+        if (cbm_pipeline_check_cancel(ctx)) {
+            break;
+        }
+
+        /* Check if file has Depends call in cached extraction */
+        CBMFileResult *result = ctx->result_cache ? ctx->result_cache[i] : NULL;
+        if (!result) {
+            continue;
+        }
+        bool has_depends = false;
+        for (int c = 0; c < result->calls.count; c++) {
+            if (result->calls.items[c].callee_name &&
+                strcmp(result->calls.items[c].callee_name, "Depends") == 0) {
+                has_depends = true;
+                break;
+            }
+        }
+        if (!has_depends) {
+            continue;
+        }
+
+        /* Read source and scan for Depends(func_ref) in function signatures */
+        int source_len = 0;
+        char *source = read_file(files[i].path, &source_len);
+        if (!source) {
+            continue;
+        }
+
+        char *module_qn = cbm_pipeline_fqn_module(ctx->project_name, files[i].rel_path);
+
+        /* Build import map for alias resolution */
+        const char **imp_keys = NULL;
+        const char **imp_vals = NULL;
+        int imp_count = 0;
+        build_import_map(ctx, files[i].rel_path, result, &imp_keys, &imp_vals, &imp_count);
+
+        for (int d = 0; d < result->defs.count; d++) {
+            CBMDefinition *def = &result->defs.items[d];
+            if (!def->qualified_name || def->start_line == 0) {
+                continue;
+            }
+            if (strcmp(def->label, "Function") != 0 && strcmp(def->label, "Method") != 0) {
+                continue;
+            }
+
+            /* Extract function signature (def line through ~15 lines for multi-line sigs) */
+            int sig_end_line = (int)def->start_line + 15;
+            if (def->end_line > 0 && sig_end_line > (int)def->end_line) {
+                sig_end_line = (int)def->end_line;
+            }
+
+            /* Find signature region in source */
+            const char *p = source;
+            int line = 1;
+            while (*p && line < def->start_line) {
+                if (*p == '\n') {
+                    line++;
+                }
+                p++;
+            }
+            const char *sig_start = p;
+            while (*p && line < sig_end_line) {
+                if (*p == '\n') {
+                    line++;
+                }
+                p++;
+                /* Stop at closing paren + colon (end of Python signature) */
+                if (p > sig_start + 1 && p[-1] == ':' && p[-2] == ')') {
+                    break;
+                }
+            }
+            size_t sig_len = (size_t)(p - sig_start);
+            char *sig = malloc(sig_len + 1);
+            if (!sig) {
+                continue;
+            }
+            memcpy(sig, sig_start, sig_len);
+            sig[sig_len] = '\0';
+
+            /* Match Depends(func_ref) patterns */
+            cbm_regmatch_t match[2];
+            const char *scan = sig;
+            while (cbm_regexec(&depends_re, scan, 2, match, 0) == 0) {
+                int ref_len = match[1].rm_eo - match[1].rm_so;
+                char func_ref[256];
+                if (ref_len >= (int)sizeof(func_ref)) {
+                    ref_len = (int)sizeof(func_ref) - 1;
+                }
+                memcpy(func_ref, scan + match[1].rm_so, (size_t)ref_len);
+                func_ref[ref_len] = '\0';
+
+                /* Resolve through registry */
+                cbm_resolution_t res = cbm_registry_resolve(ctx->registry, func_ref, module_qn,
+                                                            imp_keys, imp_vals, imp_count);
+                if (res.qualified_name && res.qualified_name[0] != '\0') {
+                    const cbm_gbuf_node_t *src_node =
+                        cbm_gbuf_find_by_qn(ctx->gbuf, def->qualified_name);
+                    const cbm_gbuf_node_t *tgt_node =
+                        cbm_gbuf_find_by_qn(ctx->gbuf, res.qualified_name);
+                    if (src_node && tgt_node && src_node->id != tgt_node->id) {
+                        cbm_gbuf_insert_edge(ctx->gbuf, src_node->id, tgt_node->id, "CALLS",
+                                             "{\"confidence\":0.95,\"strategy\":\"fastapi_depends\""
+                                             "}");
+                        edge_count++;
+                    }
+                }
+                scan += match[0].rm_eo;
+            }
+            free(sig);
+        }
+
+        free(module_qn);
+        free_import_map(imp_keys, imp_vals, imp_count);
+        free(source);
+    }
+
+    cbm_regfree(&depends_re);
+    if (edge_count > 0) {
+        cbm_log_info("pass.fastapi_depends", "edges", itoa_log(edge_count));
+    }
+}
+
+/* ── DLL resolve tracking ────────────────────────────────────────── */
+/* Scans C/C++ function source for dynamic DLL resolution patterns
+ * (GetProcAddress, dlsym, Resolve) and creates CALLS edges to synthetic
+ * stub nodes, enabling call graph tracking across DLL boundaries. */
+
+// NOLINTNEXTLINE(misc-include-cleaner) — cbm_file_info_t provided by standard header
+void cbm_pipeline_pass_dll_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
+                                   int file_count) {
+    cbm_regex_t getproc_re;
+    cbm_regex_t dlsym_re;
+    cbm_regex_t resolve_re;
+
+    if (cbm_regcomp(&getproc_re,
+                    "GetProcAddress[AW]?\\([^,]+,[[:space:]]*\"([A-Za-z_][A-Za-z0-9_]*)\"",
+                    CBM_REG_EXTENDED) != 0) {
+        return;
+    }
+    if (cbm_regcomp(&dlsym_re, "dlsym\\([^,]+,[[:space:]]*\"([A-Za-z_][A-Za-z0-9_]*)\"",
+                    CBM_REG_EXTENDED) != 0) {
+        cbm_regfree(&getproc_re);
+        return;
+    }
+    if (cbm_regcomp(&resolve_re, "[.>]Resolve\\([[:space:]]*\"([A-Za-z_][A-Za-z0-9_]*)\"",
+                    CBM_REG_EXTENDED) != 0) {
+        cbm_regfree(&getproc_re);
+        cbm_regfree(&dlsym_re);
+        return;
+    }
+
+    cbm_regex_t *patterns[] = {&getproc_re, &dlsym_re, &resolve_re};
+
+    int edge_count = 0;
+    for (int i = 0; i < file_count; i++) {
+        if (files[i].language != CBM_LANG_C && files[i].language != CBM_LANG_CPP) {
+            continue;
+        }
+        if (cbm_pipeline_check_cancel(ctx)) {
+            break;
+        }
+
+        CBMFileResult *result = ctx->result_cache ? ctx->result_cache[i] : NULL;
+        if (!result) {
+            continue;
+        }
+
+        /* Early bail: check if any call targets a DLL resolution function */
+        bool has_dll_call = false;
+        for (int c = 0; c < result->calls.count; c++) {
+            const char *name = result->calls.items[c].callee_name;
+            if (!name) {
+                continue;
+            }
+            if (strcmp(name, "GetProcAddress") == 0 || strcmp(name, "GetProcAddressA") == 0 ||
+                strcmp(name, "GetProcAddressW") == 0 || strcmp(name, "dlsym") == 0 ||
+                strstr(name, "Resolve") != NULL) {
+                has_dll_call = true;
+                break;
+            }
+        }
+        if (!has_dll_call) {
+            continue;
+        }
+
+        int source_len = 0;
+        char *source = read_file(files[i].path, &source_len);
+        if (!source) {
+            continue;
+        }
+
+        char *module_qn = cbm_pipeline_fqn_module(ctx->project_name, files[i].rel_path);
+
+        for (int d = 0; d < result->defs.count; d++) {
+            CBMDefinition *def = &result->defs.items[d];
+            if (!def->qualified_name || def->start_line == 0 || def->end_line == 0) {
+                continue;
+            }
+            if (strcmp(def->label, "Function") != 0 && strcmp(def->label, "Method") != 0) {
+                continue;
+            }
+
+            /* Extract function body from source */
+            const char *p = source;
+            int line = 1;
+            while (*p && line < def->start_line) {
+                if (*p == '\n') {
+                    line++;
+                }
+                p++;
+            }
+            const char *body_start = p;
+            while (*p && line < def->end_line) {
+                if (*p == '\n') {
+                    line++;
+                }
+                p++;
+            }
+            size_t body_len = (size_t)(p - body_start);
+            char *body = malloc(body_len + 1);
+            if (!body) {
+                continue;
+            }
+            memcpy(body, body_start, body_len);
+            body[body_len] = '\0';
+
+            /* Match each DLL resolution pattern */
+            for (int pi = 0; pi < 3; pi++) {
+                cbm_regmatch_t match[2];
+                const char *scan = body;
+                while (cbm_regexec(patterns[pi], scan, 2, match, 0) == 0) {
+                    int fn_len = match[1].rm_eo - match[1].rm_so;
+                    char func_name[256];
+                    if (fn_len >= (int)sizeof(func_name)) {
+                        fn_len = (int)sizeof(func_name) - 1;
+                    }
+                    memcpy(func_name, scan + match[1].rm_so, (size_t)fn_len);
+                    func_name[fn_len] = '\0';
+
+                    /* Create edge to synthetic DLL stub node */
+                    char target_qn[512];
+                    snprintf(target_qn, sizeof(target_qn), "%s.dll.external.%s", module_qn,
+                             func_name);
+
+                    const cbm_gbuf_node_t *src_node =
+                        cbm_gbuf_find_by_qn(ctx->gbuf, def->qualified_name);
+                    if (src_node) {
+                        /* Create stub node if it doesn't exist */
+                        if (!cbm_gbuf_find_by_qn(ctx->gbuf, target_qn)) {
+                            char stub_props[256];
+                            snprintf(stub_props, sizeof(stub_props),
+                                     "{\"stub\":true,\"source\":\"dll_resolve\","
+                                     "\"dll_function\":\"%s\"}",
+                                     func_name);
+                            cbm_gbuf_upsert_node(ctx->gbuf, "Function", func_name, target_qn,
+                                                 files[i].rel_path, (int)def->start_line,
+                                                 (int)def->start_line, stub_props);
+                        }
+                        const cbm_gbuf_node_t *tgt_node = cbm_gbuf_find_by_qn(ctx->gbuf, target_qn);
+                        if (tgt_node) {
+                            cbm_gbuf_insert_edge(ctx->gbuf, src_node->id, tgt_node->id, "CALLS",
+                                                 "{\"confidence\":0.85,\"strategy\":\"dll_resolve\""
+                                                 "}");
+                            edge_count++;
+                        }
+                    }
+                    scan += match[0].rm_eo;
+                }
+            }
+            free(body);
+        }
+
+        free(module_qn);
+        free(source);
+    }
+
+    cbm_regfree(&getproc_re);
+    cbm_regfree(&dlsym_re);
+    cbm_regfree(&resolve_re);
+    if (edge_count > 0) {
+        cbm_log_info("pass.dll_resolve", "edges", itoa_log(edge_count));
+    }
 }

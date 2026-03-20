@@ -2406,12 +2406,55 @@ int cbm_mcp_server_run(cbm_mcp_server_t *srv, FILE *in, FILE *out) {
             break;
         }
 
-        /* Trim trailing newline */
+        /* Trim trailing newline/CR */
         size_t len = strlen(line);
         while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
             line[--len] = '\0';
         }
         if (len == 0) {
+            continue;
+        }
+
+        /* Content-Length framing support (LSP-style transport).
+         * Some MCP clients (OpenCode, VS Code extensions) send:
+         *   Content-Length: <n>\r\n\r\n<json>
+         * instead of bare JSONL. Detect the header, read the payload,
+         * and respond with the same framing. */
+        if (strncmp(line, "Content-Length:", 15) == 0) {
+            int content_len = (int)strtol(line + 15, NULL, 10);
+            if (content_len <= 0 || content_len > 10 * 1024 * 1024) {
+                continue; /* invalid or too large */
+            }
+
+            /* Skip blank line(s) between header and body */
+            while (cbm_getline(&line, &cap, in) > 0) {
+                size_t hlen = strlen(line);
+                while (hlen > 0 && (line[hlen - 1] == '\n' || line[hlen - 1] == '\r')) {
+                    line[--hlen] = '\0';
+                }
+                if (hlen == 0) {
+                    break; /* found the blank separator */
+                }
+                /* Skip other headers (e.g. Content-Type) */
+            }
+
+            /* Read exact content_len bytes */
+            char *body = malloc((size_t)content_len + 1);
+            if (!body) {
+                continue;
+            }
+            size_t nread = fread(body, 1, (size_t)content_len, in);
+            body[nread] = '\0';
+
+            char *resp = cbm_mcp_server_handle(srv, body);
+            free(body);
+
+            if (resp) {
+                size_t rlen = strlen(resp);
+                (void)fprintf(out, "Content-Length: %zu\r\n\r\n%s", rlen, resp);
+                (void)fflush(out);
+                free(resp);
+            }
             continue;
         }
 

@@ -342,12 +342,44 @@ char *cbm_mcp_tools_list(void) {
     return out;
 }
 
-char *cbm_mcp_initialize_response(void) {
+/* Supported protocol versions, newest first. The server picks the newest
+ * version that it shares with the client (per MCP spec version negotiation). */
+static const char *SUPPORTED_PROTOCOL_VERSIONS[] = {
+    "2025-11-25",
+    "2025-06-18",
+    "2025-03-26",
+    "2024-11-05",
+};
+static const int SUPPORTED_VERSION_COUNT =
+    (int)(sizeof(SUPPORTED_PROTOCOL_VERSIONS) / sizeof(SUPPORTED_PROTOCOL_VERSIONS[0]));
+
+char *cbm_mcp_initialize_response(const char *params_json) {
+    /* Determine protocol version: if client requests a version we support,
+     * echo it back; otherwise respond with our latest. */
+    const char *version = SUPPORTED_PROTOCOL_VERSIONS[0]; /* default: latest */
+    if (params_json) {
+        yyjson_doc *pdoc = yyjson_read(params_json, strlen(params_json), 0);
+        if (pdoc) {
+            yyjson_val *pv =
+                yyjson_obj_get(yyjson_doc_get_root(pdoc), "protocolVersion");
+            if (pv && yyjson_is_str(pv)) {
+                const char *requested = yyjson_get_str(pv);
+                for (int i = 0; i < SUPPORTED_VERSION_COUNT; i++) {
+                    if (strcmp(requested, SUPPORTED_PROTOCOL_VERSIONS[i]) == 0) {
+                        version = SUPPORTED_PROTOCOL_VERSIONS[i];
+                        break;
+                    }
+                }
+            }
+            yyjson_doc_free(pdoc);
+        }
+    }
+
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root);
 
-    yyjson_mut_obj_add_str(doc, root, "protocolVersion", "2024-11-05");
+    yyjson_mut_obj_add_str(doc, root, "protocolVersion", version);
 
     yyjson_mut_val *impl = yyjson_mut_obj(doc);
     yyjson_mut_obj_add_str(doc, impl, "name", "codebase-memory-mcp");
@@ -2253,7 +2285,7 @@ char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
     char *result_json = NULL;
 
     if (strcmp(req.method, "initialize") == 0) {
-        result_json = cbm_mcp_initialize_response();
+        result_json = cbm_mcp_initialize_response(req.params_raw);
         start_update_check(srv);
         detect_session(srv);
         maybe_auto_index(srv);

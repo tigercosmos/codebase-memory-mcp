@@ -98,11 +98,30 @@ TEST(jsonrpc_format_error) {
  * ══════════════════════════════════════════════════════════════════ */
 
 TEST(mcp_initialize_response) {
-    char *json = cbm_mcp_initialize_response();
+    /* Default (no params): returns latest supported version */
+    char *json = cbm_mcp_initialize_response(NULL);
     ASSERT_NOT_NULL(json);
     ASSERT_NOT_NULL(strstr(json, "codebase-memory-mcp"));
     ASSERT_NOT_NULL(strstr(json, "capabilities"));
     ASSERT_NOT_NULL(strstr(json, "tools"));
+    ASSERT_NOT_NULL(strstr(json, "2025-11-25"));
+    free(json);
+
+    /* Client requests a supported version: server echoes it */
+    json = cbm_mcp_initialize_response("{\"protocolVersion\":\"2024-11-05\"}");
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "2024-11-05"));
+    free(json);
+
+    json = cbm_mcp_initialize_response("{\"protocolVersion\":\"2025-06-18\"}");
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "2025-06-18"));
+    free(json);
+
+    /* Client requests unknown version: server returns its latest */
+    json = cbm_mcp_initialize_response("{\"protocolVersion\":\"9999-01-01\"}");
+    ASSERT_NOT_NULL(json);
+    ASSERT_NOT_NULL(strstr(json, "2025-11-25"));
     free(json);
     PASS();
 }

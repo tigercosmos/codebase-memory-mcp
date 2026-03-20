@@ -234,3 +234,26 @@ char **cbm_str_split(CBMArena *a, const char *s, char delim, int *out_count) {
     *out_count = count;
     return result;
 }
+
+bool cbm_validate_shell_arg(const char *s) {
+    if (!s) {
+        return false;
+    }
+    for (const char *p = s; *p; p++) {
+        switch (*p) {
+        case '\'':
+        case ';':
+        case '|':
+        case '&':
+        case '$':
+        case '`':
+        case '\n':
+        case '\r':
+        case '\\':
+            return false;
+        default:
+            break;
+        }
+    }
+    return true;
+}

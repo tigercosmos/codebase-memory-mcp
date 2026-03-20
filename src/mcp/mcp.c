@@ -19,6 +19,7 @@
 #include "foundation/compat_fs.h"
 #include "foundation/compat_thread.h"
 #include "foundation/log.h"
+#include "foundation/str_util.h"
 
 #ifdef _WIN32
 #include <process.h> /* _getpid */
@@ -1363,13 +1364,34 @@ static char *build_snippet_response(cbm_mcp_server_t *srv, cbm_node_t *node,
     int end = node->end_line > start ? node->end_line : start + SNIPPET_DEFAULT_LINES;
     char *source = NULL;
 
-    /* Build absolute path (persists until free) */
+    /* Build absolute path and verify it's within the project root.
+     * Prevents path traversal via crafted file_path (e.g., "../../.ssh/id_rsa"). */
     char *abs_path = NULL;
     if (root_path && node->file_path) {
         size_t apsz = strlen(root_path) + strlen(node->file_path) + 2;
         abs_path = malloc(apsz);
         snprintf(abs_path, apsz, "%s/%s", root_path, node->file_path);
-        source = read_file_lines(abs_path, start, end);
+
+        /* Path containment: resolve symlinks/../ and verify file stays within root */
+        char real_root[4096];
+        char real_file[4096];
+        bool path_ok = false;
+#ifdef _WIN32
+        if (_fullpath(real_root, root_path, sizeof(real_root)) &&
+            _fullpath(real_file, abs_path, sizeof(real_file))) {
+#else
+        if (realpath(root_path, real_root) && realpath(abs_path, real_file)) {
+#endif
+            size_t root_len = strlen(real_root);
+            if (strncmp(real_file, real_root, root_len) == 0 &&
+                (real_file[root_len] == '/' || real_file[root_len] == '\\' ||
+                 real_file[root_len] == '\0')) {
+                path_ok = true;
+            }
+        }
+        if (path_ok) {
+            source = read_file_lines(abs_path, start, end);
+        }
     }
 
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
@@ -1593,6 +1615,16 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
         return cbm_mcp_text_result("project not found or not indexed", true);
     }
 
+    /* Reject shell metacharacters in user-supplied arguments */
+    if (!cbm_validate_shell_arg(root_path) ||
+        (file_pattern && !cbm_validate_shell_arg(file_pattern))) {
+        free(root_path);
+        free(pattern);
+        free(project);
+        free(file_pattern);
+        return cbm_mcp_text_result("path or file_pattern contains invalid characters", true);
+    }
+
     /* Write pattern to temp file to avoid shell injection */
     char tmpfile[256];
 #ifdef _WIN32
@@ -1712,11 +1744,25 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
         base_branch = heap_strdup("main");
     }
 
+    /* Reject shell metacharacters in user-supplied branch name */
+    if (!cbm_validate_shell_arg(base_branch)) {
+        free(project);
+        free(base_branch);
+        return cbm_mcp_text_result("base_branch contains invalid characters", true);
+    }
+
     char *root_path = get_project_root(srv, project);
     if (!root_path) {
         free(project);
         free(base_branch);
         return cbm_mcp_text_result("project not found", true);
+    }
+
+    if (!cbm_validate_shell_arg(root_path)) {
+        free(root_path);
+        free(project);
+        free(base_branch);
+        return cbm_mcp_text_result("project path contains invalid characters", true);
     }
 
     /* Get changed files via git */
@@ -2104,6 +2150,10 @@ static void maybe_auto_index(cbm_mcp_server_t *srv) {
     }
 
     /* Quick file count check to avoid OOM on massive repos */
+    if (!cbm_validate_shell_arg(srv->session_root)) {
+        cbm_log_warn("autoindex.skip", "reason", "path contains shell metacharacters");
+        return;
+    }
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "git -C '%s' ls-files 2>/dev/null | wc -l", srv->session_root);
     // NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c)

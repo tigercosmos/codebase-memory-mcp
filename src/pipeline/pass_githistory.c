@@ -18,6 +18,7 @@
 #include "foundation/platform.h"
 #include "foundation/compat.h"
 #include "foundation/compat_fs.h"
+#include "foundation/str_util.h"
 
 /* Minimum coupling score to create an edge */
 #define MIN_COUPLING_SCORE 0.3
@@ -213,6 +214,10 @@ static int parse_git_log(const char *repo_path, commit_t **out, int *out_count) 
 static int parse_git_log(const char *repo_path, commit_t **out, int *out_count) {
     *out = NULL;
     *out_count = 0;
+
+    if (!cbm_validate_shell_arg(repo_path)) {
+        return -1;
+    }
 
     char cmd[1024];
     snprintf(cmd, sizeof(cmd),

@@ -57,6 +57,24 @@ jobs:
       - name: Lint
         run: scripts/lint.sh CLANG_FORMAT=clang-format-20
 
+  # ── Step 1b: Security audit (source-only, runs parallel with lint+tests) ──
+  # No build needed — scans source files and vendored deps only.
+  # Binary-level security (L2/L3/L4/L7) runs in smoke jobs per-platform.
+  security-static:
+    if: ${{ !inputs.skip_lint }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: "Layer 1: Static allow-list audit"
+        run: scripts/security-audit.sh
+
+      - name: "Layer 6: UI security audit"
+        run: scripts/security-ui.sh
+
+      - name: "Layer 8: Vendored dependency integrity"
+        run: scripts/security-vendored.sh
+
   # ── Step 2: Unit tests (ASan + UBSan) ───────────────────────
   # macOS: use cc (Apple Clang) — GCC on macOS doesn't ship ASan runtime
   # Linux: use system gcc — full ASan/UBSan support
@@ -166,6 +184,10 @@ jobs:
       - name: Build UI binary
         run: scripts/build.sh --with-ui CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
 
+      - name: Frontend integrity scan (post-build dist/)
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: scripts/security-ui.sh
+
       - name: Archive UI binary
         run: |
           tar -czf codebase-memory-mcp-ui-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
@@ -264,6 +286,22 @@ jobs:
       - name: Smoke test (${{ matrix.variant }}, ${{ matrix.goos }}-${{ matrix.goarch }})
         run: scripts/smoke-test.sh ./codebase-memory-mcp
 
+      - name: Binary string audit (${{ matrix.goos }}-${{ matrix.goarch }})
+        if: matrix.variant == 'standard'
+        run: scripts/security-strings.sh ./codebase-memory-mcp
+
+      - name: Install output audit (${{ matrix.goos }}-${{ matrix.goarch }})
+        if: matrix.variant == 'standard'
+        run: scripts/security-install.sh ./codebase-memory-mcp
+
+      - name: Network egress test (${{ matrix.goos }}-${{ matrix.goarch }})
+        if: matrix.variant == 'standard'
+        run: scripts/security-network.sh ./codebase-memory-mcp
+
+      - name: MCP robustness test
+        if: matrix.variant == 'standard' && matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: scripts/security-fuzz.sh ./codebase-memory-mcp
+
   smoke-windows:
     if: ${{ !inputs.skip_builds }}
     needs: [build-windows]
@@ -297,3 +335,13 @@ jobs:
       - name: Smoke test (${{ matrix.variant }}, windows-amd64)
         shell: msys2 {0}
         run: scripts/smoke-test.sh ./codebase-memory-mcp.exe
+
+      - name: Binary string audit (windows-amd64)
+        if: matrix.variant == 'standard'
+        shell: msys2 {0}
+        run: scripts/security-strings.sh ./codebase-memory-mcp.exe
+
+      - name: Install output audit (windows-amd64)
+        if: matrix.variant == 'standard'
+        shell: msys2 {0}
+        run: scripts/security-install.sh ./codebase-memory-mcp.exe

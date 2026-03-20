@@ -1951,6 +1951,106 @@ static bool prompt_yn(const char *question) {
     return (buf[0] == 'y' || buf[0] == 'Y') ? true : false;
 }
 
+/* ── SHA-256 checksum verification ─────────────────────────────── */
+
+/* SHA-256 hex digest: 64 hex chars + NUL */
+#define SHA256_HEX_LEN 64
+#define SHA256_BUF_SIZE (SHA256_HEX_LEN + 1)
+/* Minimum line length in checksums.txt: 64 hex + 2 spaces + 1 char filename */
+#define CHECKSUM_LINE_MIN (SHA256_HEX_LEN + 2)
+
+/* Compute SHA-256 of a file using platform tools (sha256sum/shasum).
+ * Writes 64-char hex digest + NUL to out. Returns 0 on success. */
+static int sha256_file(const char *path, char *out, size_t out_size) {
+    if (out_size < SHA256_BUF_SIZE) {
+        return -1;
+    }
+    char cmd[1024];
+#ifdef __APPLE__
+    snprintf(cmd, sizeof(cmd), "shasum -a 256 '%s' 2>/dev/null", path);
+#else
+    snprintf(cmd, sizeof(cmd), "sha256sum '%s' 2>/dev/null", path);
+#endif
+    // NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c)
+    FILE *fp = cbm_popen(cmd, "r");
+    if (!fp) {
+        return -1;
+    }
+    char line[256];
+    if (fgets(line, sizeof(line), fp)) {
+        /* Output format: <64-char hash>  <filename> */
+        char *space = strchr(line, ' ');
+        if (space && space - line == SHA256_HEX_LEN) {
+            memcpy(out, line, SHA256_HEX_LEN);
+            out[SHA256_HEX_LEN] = '\0';
+            cbm_pclose(fp);
+            return 0;
+        }
+    }
+    cbm_pclose(fp);
+    return -1;
+}
+
+/* Download checksums.txt and verify the archive integrity.
+ * Returns: 0 = verified OK, 1 = mismatch (FAIL), -1 = could not verify (warning). */
+static int verify_download_checksum(const char *archive_path, const char *archive_name) {
+    char checksum_file[256];
+    snprintf(checksum_file, sizeof(checksum_file), "%s/cbm-checksums.txt", cbm_tmpdir());
+
+    char cmd[1024];
+    snprintf(cmd, sizeof(cmd),
+             "curl -fsSL -o '%s' "
+             "'https://github.com/DeusData/codebase-memory-mcp/releases/latest/download/"
+             "checksums.txt' 2>/dev/null",
+             checksum_file);
+    // NOLINTNEXTLINE(cert-env33-c) — intentional CLI subprocess for download
+    int rc = system(cmd);
+    if (rc != 0) {
+        fprintf(stderr, "warning: could not download checksums.txt — skipping verification\n");
+        cbm_unlink(checksum_file);
+        return -1;
+    }
+
+    FILE *fp = fopen(checksum_file, "r");
+    cbm_unlink(checksum_file);
+    if (!fp) {
+        return -1;
+    }
+
+    char expected[SHA256_BUF_SIZE] = {0};
+    char line[512];
+    while (fgets(line, sizeof(line), fp)) {
+        /* Format: <64-char sha256>  <filename>\n */
+        if (strlen(line) > CHECKSUM_LINE_MIN && strstr(line, archive_name)) {
+            memcpy(expected, line, SHA256_HEX_LEN);
+            expected[SHA256_HEX_LEN] = '\0';
+            break;
+        }
+    }
+    fclose(fp);
+
+    if (expected[0] == '\0') {
+        fprintf(stderr, "warning: %s not found in checksums.txt\n", archive_name);
+        return -1;
+    }
+
+    char actual[SHA256_BUF_SIZE] = {0};
+    if (sha256_file(archive_path, actual, sizeof(actual)) != 0) {
+        fprintf(stderr, "warning: sha256sum/shasum not available — skipping verification\n");
+        return -1;
+    }
+
+    if (strcmp(expected, actual) != 0) {
+        fprintf(stderr, "error: CHECKSUM MISMATCH — downloaded binary may be compromised!\n");
+        fprintf(stderr, "  expected: %s\n", expected);
+        fprintf(stderr, "  actual:   %s\n", actual);
+        return 1;
+    }
+
+    printf("Checksum verified: %s\n", actual);
+    return 0;
+}
+
 /* ── Detect OS/arch for download URL ──────────────────────────── */
 
 static const char *detect_os(void) {
@@ -2532,6 +2632,26 @@ int cbm_cmd_update(int argc, char **argv) {
         fprintf(stderr, "error: download failed (exit %d)\n", rc);
         cbm_unlink(tmp_archive);
         return 1;
+    }
+
+    /* Step 4b: Verify checksum */
+    {
+        /* Build the expected archive filename (matches checksums.txt format) */
+        char archive_name[256];
+        if (want_ui) {
+            snprintf(archive_name, sizeof(archive_name), "codebase-memory-mcp-ui-%s-%s.%s", os,
+                     arch, ext);
+        } else {
+            snprintf(archive_name, sizeof(archive_name), "codebase-memory-mcp-%s-%s.%s", os, arch,
+                     ext);
+        }
+        int crc = verify_download_checksum(tmp_archive, archive_name);
+        if (crc == 1) {
+            /* Hard fail: checksum mismatch */
+            cbm_unlink(tmp_archive);
+            return 1;
+        }
+        /* crc == -1: could not verify (warning only), crc == 0: verified OK */
     }
 
     /* Step 5: Extract binary */

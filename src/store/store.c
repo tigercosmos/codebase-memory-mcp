@@ -293,6 +293,24 @@ static void sqlite_iregexp(sqlite3_context *ctx, int argc, sqlite3_value **argv)
 
 /* ── Lifecycle ──────────────────────────────────────────────────── */
 
+/* SQLite authorizer: deny dangerous operations that could be exploited via
+ * SQL injection through the Cypher→SQL translation layer. */
+static int store_authorizer(void *user_data, int action, const char *p3, const char *p4,
+                            const char *p5, const char *p6) {
+    (void)user_data;
+    (void)p3;
+    (void)p4;
+    (void)p5;
+    (void)p6;
+    switch (action) {
+    case SQLITE_ATTACH: /* ATTACH DATABASE — could create/read arbitrary files */
+    case SQLITE_DETACH: /* DETACH DATABASE */
+        return SQLITE_DENY;
+    default:
+        return SQLITE_OK;
+    }
+}
+
 static cbm_store_t *store_open_internal(const char *path, bool in_memory) {
     cbm_store_t *s = calloc(1, sizeof(cbm_store_t));
     if (!s) {
@@ -313,6 +331,10 @@ static cbm_store_t *store_open_internal(const char *path, bool in_memory) {
     if (path && !in_memory) {
         s->db_path = heap_strdup(path);
     }
+
+    /* Security: block ATTACH/DETACH to prevent file creation via SQL injection.
+     * The authorizer runs inside SQLite's query planner — no string-level bypass. */
+    sqlite3_set_authorizer(s->db, store_authorizer, NULL);
 
     /* Register REGEXP function (SQLite doesn't have one built-in) */
     sqlite3_create_function(s->db, "regexp", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL,

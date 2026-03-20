@@ -310,7 +310,7 @@ PP_OBJ_TEST = $(BUILD_DIR)/preprocessor.o
 
 # ── Targets ──────────────────────────────────────────────────────
 
-.PHONY: test test-foundation test-tsan cbm cbm-with-ui frontend embed clean-c lint lint-tidy lint-cppcheck lint-format
+.PHONY: test test-foundation test-tsan cbm cbm-with-ui frontend embed clean-c lint lint-tidy lint-cppcheck lint-format security
 
 $(BUILD_DIR):
 	mkdir -p $(BUILD_DIR)
@@ -519,3 +519,18 @@ lint: lint-tidy lint-cppcheck lint-format
 # CI linters (no clang-tidy — platform-dependent, enforced locally via pre-commit)
 lint-ci: lint-cppcheck lint-format
 	@echo "=== CI linters passed ==="
+
+# ── Security audit (6 layers) ────────────────────────────────────
+
+# Run all security checks: static audit, binary strings, UI, install, network
+# Requires: production binary already built (make cbm)
+security: cbm
+	@echo "=== Running security audit suite ==="
+	scripts/security-audit.sh
+	scripts/security-strings.sh $(BUILD_DIR)/codebase-memory-mcp
+	scripts/security-ui.sh
+	scripts/security-install.sh $(BUILD_DIR)/codebase-memory-mcp
+	scripts/security-network.sh $(BUILD_DIR)/codebase-memory-mcp
+	scripts/security-fuzz.sh $(BUILD_DIR)/codebase-memory-mcp
+	scripts/security-vendored.sh
+	@echo "=== All security checks passed ==="

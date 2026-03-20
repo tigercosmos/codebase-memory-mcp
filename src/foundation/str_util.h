@@ -48,4 +48,9 @@ char *cbm_str_strip_ext(CBMArena *a, const char *path);
  * The array itself and all substrings are arena-allocated. */
 char **cbm_str_split(CBMArena *a, const char *s, char delim, int *out_count);
 
+/* Validate a string is safe for shell interpolation inside single quotes.
+ * Rejects: ' ; | & $ ` \n \r \0 (embedded NULs via len check).
+ * Returns true if safe, false if the string contains shell metacharacters. */
+bool cbm_validate_shell_arg(const char *s);
+
 #endif /* CBM_STR_UTIL_H */

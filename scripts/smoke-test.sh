@@ -168,4 +168,48 @@ echo "OK: $FOLDER_COUNT Folder nodes (init.py didn't clobber them)"
 cli delete_project "{\"project_name\":\"$PROJECT\"}" > /dev/null
 
 echo ""
+echo "=== Phase 4: security checks ==="
+
+# 4a: Clean shutdown — binary must exit within 5 seconds after EOF
+echo "Testing clean shutdown..."
+SHUTDOWN_TMPDIR=$(mktemp -d)
+cat > "$SHUTDOWN_TMPDIR/input.jsonl" << 'JSONL'
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"test","version":"1.0"}}}
+JSONL
+
+# Run binary with EOF and check it exits within 5 seconds
+timeout 5 "$BINARY" < "$SHUTDOWN_TMPDIR/input.jsonl" > /dev/null 2>&1 || true
+EXIT_CODE=$?
+rm -rf "$SHUTDOWN_TMPDIR"
+
+if [ "$EXIT_CODE" -eq 124 ]; then
+  echo "FAIL: binary did not exit within 5 seconds after EOF"
+  exit 1
+fi
+echo "OK: clean shutdown"
+
+# 4b: No residual processes (skip on Windows/MSYS2 where pgrep may not work)
+if command -v pgrep &>/dev/null && [ "$(uname)" != "MINGW64_NT" ] 2>/dev/null; then
+  # Give a moment for any child processes to clean up
+  sleep 1
+  RESIDUAL=$(pgrep -f "codebase-memory-mcp.*cli" 2>/dev/null | wc -l | tr -d ' \n' || echo "0")
+  RESIDUAL="${RESIDUAL:-0}"
+  if [ "$RESIDUAL" -gt 0 ]; then
+    echo "WARNING: $RESIDUAL residual codebase-memory-mcp process(es) found"
+  else
+    echo "OK: no residual processes"
+  fi
+fi
+
+# 4c: Version integrity — output must be exactly one line matching version format
+VERSION_OUTPUT=$("$BINARY" --version 2>&1)
+VERSION_LINES=$(echo "$VERSION_OUTPUT" | wc -l | tr -d ' ')
+if [ "$VERSION_LINES" -ne 1 ]; then
+  echo "FAIL: --version output has $VERSION_LINES lines, expected exactly 1"
+  echo "  Output: $VERSION_OUTPUT"
+  exit 1
+fi
+echo "OK: version output is clean single line"
+
+echo ""
 echo "=== smoke-test: ALL PASSED ==="

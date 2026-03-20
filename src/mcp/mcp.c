@@ -304,7 +304,8 @@ static const tool_def_t TOOLS[] = {
      "\"sections\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}"},
 
     {"ingest_traces", "Ingest runtime traces to enhance the knowledge graph",
-     "{\"type\":\"object\",\"properties\":{\"traces\":{\"type\":\"array\"},\"project\":{\"type\":"
+     "{\"type\":\"object\",\"properties\":{\"traces\":{\"type\":\"array\",\"items\":{\"type\":"
+     "\"object\"}},\"project\":{\"type\":"
      "\"string\"}},\"required\":[\"traces\"]}"},
 };
 

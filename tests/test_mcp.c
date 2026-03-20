@@ -129,6 +129,35 @@ TEST(mcp_tools_list) {
     PASS();
 }
 
+TEST(mcp_tools_array_schemas_have_items) {
+    /* VS Code 1.112+ rejects array schemas without "items" (see
+     * https://github.com/microsoft/vscode/issues/248810).
+     * Walk every tool's inputSchema and verify that every "type":"array"
+     * property also contains "items". */
+    char *json = cbm_mcp_tools_list();
+    ASSERT_NOT_NULL(json);
+
+    /* Scan for all occurrences of "type":"array" — each must be followed
+     * by "items" before the next closing brace of that property. */
+    const char *p = json;
+    while ((p = strstr(p, "\"type\":\"array\"")) != NULL) {
+        /* Find the enclosing '}' for this property object */
+        const char *end = strchr(p, '}');
+        ASSERT_NOT_NULL(end);
+        /* "items" must appear between p and end */
+        size_t span = (size_t)(end - p);
+        char *segment = malloc(span + 1);
+        memcpy(segment, p, span);
+        segment[span] = '\0';
+        ASSERT_NOT_NULL(strstr(segment, "\"items\"")); /* array missing items */
+        free(segment);
+        p = end;
+    }
+
+    free(json);
+    PASS();
+}
+
 TEST(mcp_text_result) {
     char *json = cbm_mcp_text_result("{\"total\":5}", false);
     ASSERT_NOT_NULL(json);
@@ -1198,6 +1227,7 @@ SUITE(mcp) {
     /* MCP protocol helpers */
     RUN_TEST(mcp_initialize_response);
     RUN_TEST(mcp_tools_list);
+    RUN_TEST(mcp_tools_array_schemas_have_items);
     RUN_TEST(mcp_text_result);
     RUN_TEST(mcp_text_result_error);
 

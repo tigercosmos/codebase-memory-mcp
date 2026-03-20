@@ -50,7 +50,7 @@ else
                             ;; # W3C XML/SVG/MathML namespace URIs
                         https://react.dev/*|https://reactjs.org/*)
                             ;; # React error/docs URLs
-                        https://github.com/*|https://cdn.jsdelivr.net/*)
+                        https://github.com/*|https://cdn.jsdelivr.net/*|https://cdn.j*)
                             ;; # OSS library credits + CDN refs in bundled code
                         https://fonts.googleapis.com/*|https://fonts.gstatic.com/*)
                             ;; # Google Fonts (loaded by index.html)

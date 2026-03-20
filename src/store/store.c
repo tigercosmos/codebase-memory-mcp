@@ -453,11 +453,13 @@ int cbm_store_rollback(cbm_store_t *s) {
 /* ── Bulk write ─────────────────────────────────────────────────── */
 
 int cbm_store_begin_bulk(cbm_store_t *s) {
-    int rc = exec_sql(s, "PRAGMA journal_mode = MEMORY;");
-    if (rc != CBM_STORE_OK) {
-        return rc;
-    }
-    rc = exec_sql(s, "PRAGMA synchronous = OFF;");
+    /* Stay in WAL mode throughout. Switching to MEMORY journal mode would
+     * make the database unrecoverable if the process crashes mid-write,
+     * because the in-memory rollback journal is lost on crash.
+     * WAL mode is crash-safe: uncommitted WAL entries are simply discarded
+     * on the next open. Performance is preserved via synchronous=OFF and a
+     * larger cache, which are safe with WAL. */
+    int rc = exec_sql(s, "PRAGMA synchronous = OFF;");
     if (rc != CBM_STORE_OK) {
         return rc;
     }
@@ -465,11 +467,7 @@ int cbm_store_begin_bulk(cbm_store_t *s) {
 }
 
 int cbm_store_end_bulk(cbm_store_t *s) {
-    int rc = exec_sql(s, "PRAGMA journal_mode = WAL;");
-    if (rc != CBM_STORE_OK) {
-        return rc;
-    }
-    rc = exec_sql(s, "PRAGMA synchronous = NORMAL;");
+    int rc = exec_sql(s, "PRAGMA synchronous = NORMAL;");
     if (rc != CBM_STORE_OK) {
         return rc;
     }

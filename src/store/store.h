@@ -212,10 +212,11 @@ int cbm_store_rollback(cbm_store_t *s);
 
 /* ── Bulk write optimization ────────────────────────────────────── */
 
-/* Switch to MEMORY journal for maximum write throughput. */
+/* Tune pragmas for bulk write throughput (synchronous=OFF, large cache).
+ * WAL journal mode is preserved throughout for crash safety. */
 int cbm_store_begin_bulk(cbm_store_t *s);
 
-/* Restore WAL journal mode after bulk writes. */
+/* Restore normal pragmas (synchronous=NORMAL, default cache) after bulk writes. */
 int cbm_store_end_bulk(cbm_store_t *s);
 
 /* Drop user indexes for faster bulk inserts. */

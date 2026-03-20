@@ -37,6 +37,7 @@ extern void suite_sqlite_writer(void);
 extern void suite_go_lsp(void);
 extern void suite_c_lsp(void);
 extern void suite_store_arch(void);
+extern void suite_store_bulk(void);
 extern void suite_httplink(void);
 extern void suite_traces(void);
 extern void suite_configlink(void);
@@ -69,6 +70,7 @@ int main(void) {
     RUN_SUITE(store_nodes);
     RUN_SUITE(store_edges);
     RUN_SUITE(store_search);
+    RUN_SUITE(store_bulk);
 
     /* Cypher (M6) */
     RUN_SUITE(cypher);

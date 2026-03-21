@@ -482,6 +482,80 @@ jobs:
             assets/*.tar.gz
             assets/*.zip
 
+      # ── Wait for VirusTotal results and check for detections ──
+      - name: Check VirusTotal scan results
+        env:
+          VT_API_KEY: ${{ secrets.VIRUS_TOTAL_SCANNER_API_KEY }}
+          VT_ANALYSIS: ${{ steps.virustotal.outputs.analysis }}
+        run: |
+          echo "=== Waiting for VirusTotal scan results ==="
+          DETECTIONS=0
+
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            URL=$(echo "$line" | cut -d'=' -f2-)
+
+            # Extract analysis ID from URL (last path segment)
+            ANALYSIS_ID=$(echo "$URL" | grep -oE '[a-zA-Z0-9_-]+$')
+            if [ -z "$ANALYSIS_ID" ]; then
+              echo "WARNING: Could not extract analysis ID from $URL"
+              continue
+            fi
+
+            FILE=$(echo "$line" | cut -d'=' -f1)
+            BASENAME=$(basename "$FILE")
+
+            # Poll until analysis completes (max 5 minutes per file)
+            for attempt in $(seq 1 30); do
+              RESULT=$(curl -sf --max-time 10 \
+                -H "x-apikey: $VT_API_KEY" \
+                "https://www.virustotal.com/api/v3/analyses/$ANALYSIS_ID" 2>/dev/null || echo "{}")
+
+              STATUS=$(echo "$RESULT" | python3 -c "
+          import json, sys
+          d = json.loads(sys.stdin.read())
+          print(d.get('data', {}).get('attributes', {}).get('status', 'queued'))
+          " 2>/dev/null || echo "queued")
+
+              if [ "$STATUS" = "completed" ]; then
+                MALICIOUS=$(echo "$RESULT" | python3 -c "
+          import json, sys
+          d = json.loads(sys.stdin.read())
+          stats = d.get('data', {}).get('attributes', {}).get('stats', {})
+          print(stats.get('malicious', 0))
+          " 2>/dev/null || echo "0")
+
+                SUSPICIOUS=$(echo "$RESULT" | python3 -c "
+          import json, sys
+          d = json.loads(sys.stdin.read())
+          stats = d.get('data', {}).get('attributes', {}).get('stats', {})
+          print(stats.get('suspicious', 0))
+          " 2>/dev/null || echo "0")
+
+                echo "$BASENAME: malicious=$MALICIOUS suspicious=$SUSPICIOUS"
+
+                if [ "$MALICIOUS" -gt 0 ] || [ "$SUSPICIOUS" -gt 0 ]; then
+                  echo "BLOCKED: $BASENAME flagged by $MALICIOUS malicious + $SUSPICIOUS suspicious engine(s)!"
+                  DETECTIONS=$((DETECTIONS + 1))
+                fi
+                break
+              fi
+
+              echo "  $BASENAME: scan $STATUS (attempt $attempt/30)..."
+              sleep 10
+            done
+          done <<< "$VT_ANALYSIS"
+
+          if [ "$DETECTIONS" -gt 0 ]; then
+            echo ""
+            echo "=== VIRUSTOTAL GATE FAILED ==="
+            echo "$DETECTIONS binary(ies) flagged as malicious or suspicious."
+            echo "Draft release will NOT be published. Investigate before retrying."
+            exit 1
+          fi
+
+          echo "=== All binaries clean ==="
+
       # ── OpenSSF Scorecard ────────────────────────────────────
       - name: Run OpenSSF Scorecard
         uses: ossf/scorecard-action@v2

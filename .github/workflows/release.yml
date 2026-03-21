@@ -513,23 +513,44 @@ jobs:
           persist-credentials: false
 
       # ── VirusTotal scan ──────────────────────────────────────
-      - name: Download draft release binaries
+      # Extract raw binaries from archives before scanning.
+      # VirusTotal may not unpack archives >3MB, so we scan the
+      # actual executables that users will run.
+      - name: Download and extract release binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
         run: |
-          mkdir -p assets
+          mkdir -p assets binaries
           gh release download "$VERSION" --dir assets --repo "$GITHUB_REPOSITORY" --pattern '*.tar.gz' --pattern '*.zip'
           ls -la assets/
 
-      - name: Scan all binaries with VirusTotal
+          # Extract binaries from archives for scanning
+          for f in assets/*.tar.gz; do
+            NAME=$(basename "$f" .tar.gz)
+            tar -xzf "$f" -C binaries/ 2>/dev/null || true
+            # Rename to include platform for identification
+            if [ -f binaries/codebase-memory-mcp ]; then
+              mv binaries/codebase-memory-mcp "binaries/${NAME}"
+            fi
+          done
+          for f in assets/*.zip; do
+            NAME=$(basename "$f" .zip)
+            unzip -o "$f" -d binaries/ 2>/dev/null || true
+            if [ -f binaries/codebase-memory-mcp.exe ]; then
+              mv binaries/codebase-memory-mcp.exe "binaries/${NAME}.exe"
+            fi
+          done
+          echo "=== Extracted binaries for scanning ==="
+          ls -la binaries/
+
+      - name: Scan extracted binaries with VirusTotal
         uses: crazy-max/ghaction-virustotal@d34968c958ae283fe976efed637081b9f9dcf74f # v4
         id: virustotal
         with:
           vt_api_key: ${{ secrets.VIRUS_TOTAL_SCANNER_API_KEY }}
           files: |
-            assets/*.tar.gz
-            assets/*.zip
+            binaries/*
 
       # ── Wait for ALL VirusTotal engines to complete, then check ──
       # The action outputs comma-separated "file=URL" pairs.

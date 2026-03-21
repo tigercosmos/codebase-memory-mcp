@@ -358,8 +358,6 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
 /* Sub-passes called from pass_calls: pattern-based edge extraction */
 void cbm_pipeline_pass_fastapi_depends(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                                        int file_count);
-void cbm_pipeline_pass_dll_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
-                                   int file_count);
 
 int cbm_pipeline_pass_usages(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count);
 

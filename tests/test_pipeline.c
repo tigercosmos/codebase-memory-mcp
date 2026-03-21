@@ -4795,73 +4795,8 @@ TEST(pipeline_fastapi_depends_edges) {
     PASS();
 }
 
-/* ═══════════════════════════════════════════════════════════════════
- *  DLL resolve edge tracking (PR #66, fix #29)
- * ═══════════════════════════════════════════════════════════════════ */
-
-TEST(pipeline_dll_resolve_edges) {
-    /* GetProcAddress(handle, "Func") should produce a CALLS edge to a
-     * synthetic DLL stub node. */
-    const char *files[] = {"loader.c"};
-    const char *contents[] = {
-        "#include <windows.h>\n\n"
-        "void load_plugin(HMODULE hDll) {\n"
-        "    void *fn = GetProcAddress(hDll, \"PluginInit\");\n"
-        "    if (fn) ((void(*)())fn)();\n"
-        "}\n"};
-    if (setup_lang_repo(files, contents, 1) != 0) {
-        SKIP("tmpdir");
-    }
-    char db[512];
-    snprintf(db, sizeof(db), "%s/test.db", g_lang_tmpdir);
-    cbm_pipeline_t *p = cbm_pipeline_new(g_lang_tmpdir, db, CBM_MODE_FULL);
-    ASSERT_NOT_NULL(p);
-    ASSERT_EQ(cbm_pipeline_run(p), 0);
-
-    cbm_store_t *s = cbm_store_open_path(db);
-    ASSERT_NOT_NULL(s);
-    const char *proj = cbm_pipeline_project_name(p);
-
-    /* Check for dll_resolve CALLS edge */
-    cbm_edge_t *edges = NULL;
-    int edge_count = 0;
-    cbm_store_find_edges_by_type(s, proj, "CALLS", &edges, &edge_count);
-
-    bool found_dll_edge = false;
-    for (int i = 0; i < edge_count; i++) {
-        if (edges[i].properties_json && strstr(edges[i].properties_json, "dll_resolve")) {
-            found_dll_edge = true;
-            break;
-        }
-    }
-    if (edges) {
-        cbm_store_free_edges(edges, edge_count);
-    }
-    ASSERT_TRUE(found_dll_edge);
-
-    /* Check for stub node with dll_function property */
-    cbm_node_t *nodes = NULL;
-    int node_count = 0;
-    cbm_store_find_nodes_by_label(s, proj, "Function", &nodes, &node_count);
-
-    bool found_stub = false;
-    for (int i = 0; i < node_count; i++) {
-        if (nodes[i].properties_json && strstr(nodes[i].properties_json, "PluginInit") &&
-            strstr(nodes[i].properties_json, "dll_resolve")) {
-            found_stub = true;
-            break;
-        }
-    }
-    if (nodes) {
-        cbm_store_free_nodes(nodes, node_count);
-    }
-    ASSERT_TRUE(found_stub);
-
-    cbm_store_close(s);
-    cbm_pipeline_free(p);
-    teardown_lang_repo();
-    PASS();
-}
+/* DLL resolve test removed — feature removed due to Windows Defender
+ * false positive (Wacatac.B!ml). See issue #89. */
 
 /* ═══════════════════════════════════════════════════════════════════
  *  Incremental reindex
@@ -5188,9 +5123,8 @@ SUITE(pipeline) {
     RUN_TEST(githistory_coupling_skips_large_commits);
     RUN_TEST(githistory_coupling_limits_output);
     /* Incremental reindex */
-    /* FastAPI Depends + DLL resolve edge tracking (PR #66 port) */
+    /* FastAPI Depends edge tracking (PR #66 port) */
     RUN_TEST(pipeline_fastapi_depends_edges);
-    RUN_TEST(pipeline_dll_resolve_edges);
     /* Incremental */
     RUN_TEST(incremental_full_then_noop);
     RUN_TEST(incremental_detects_changed_file);

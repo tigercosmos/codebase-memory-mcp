@@ -1272,11 +1272,16 @@ TEST(mcp_server_run_rapid_messages) {
 
     ASSERT_EQ(rc, 0);
 
-    /* Verify that tools/list response is present in output */
+    /* Verify both responses are present:
+     *   id:1 — initialize response
+     *   id:2 — tools/list response (notifications/initialized produces none)
+     * and that the tools list payload is included. */
     rewind(out_fp);
     char buf[4096] = {0};
     size_t nread = fread(buf, 1, sizeof(buf) - 1, out_fp);
     ASSERT_TRUE(nread > 0);
+    ASSERT_NOT_NULL(strstr(buf, "\"id\":1"));
+    ASSERT_NOT_NULL(strstr(buf, "\"id\":2"));
     ASSERT_NOT_NULL(strstr(buf, "tools"));
 
     cbm_mcp_server_free(srv);

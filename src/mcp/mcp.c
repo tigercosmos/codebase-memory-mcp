@@ -2425,20 +2425,10 @@ int cbm_mcp_server_run(cbm_mcp_server_t *srv, FILE *in, FILE *out) {
              * would block indefinitely, preventing the Phase 3 idle eviction
              * timeout from ever firing. */
             int saved_flags = fcntl(fd, F_GETFL);
-            if (saved_flags >= 0) {
-                (void)fcntl(fd, F_SETFL, saved_flags | O_NONBLOCK);
-            }
-            int c = fgetc(in);
-            if (saved_flags >= 0) {
-                (void)fcntl(fd, F_SETFL, saved_flags); /* restore blocking */
-            }
-            if (c == EOF) {
-                if (feof(in)) {
-                    break; /* true EOF */
-                }
-                /* No buffered data (EAGAIN from non-blocking read) — clear the
-                 * ferror indicator set by EAGAIN, then do the blocking poll. */
-                clearerr(in);
+            if (saved_flags < 0) {
+                /* fcntl failed (should not happen on a valid fd) — skip the
+                 * FILE* peek and fall straight through to the blocking poll so
+                 * idle eviction still fires on timeout. */
                 pr = poll(&pfd, 1, STORE_IDLE_TIMEOUT_S * 1000);
                 if (pr < 0) {
                     break;
@@ -2448,8 +2438,28 @@ int cbm_mcp_server_run(cbm_mcp_server_t *srv, FILE *in, FILE *out) {
                     continue;
                 }
             } else {
-                /* Buffered data found — push back and fall through to getline */
-                (void)ungetc(c, in);
+                (void)fcntl(fd, F_SETFL, saved_flags | O_NONBLOCK);
+                int c = fgetc(in);
+                (void)fcntl(fd, F_SETFL, saved_flags); /* restore blocking */
+                if (c == EOF) {
+                    if (feof(in)) {
+                        break; /* true EOF */
+                    }
+                    /* No buffered data (EAGAIN from non-blocking read) — clear
+                     * the ferror indicator set by EAGAIN, then blocking poll. */
+                    clearerr(in);
+                    pr = poll(&pfd, 1, STORE_IDLE_TIMEOUT_S * 1000);
+                    if (pr < 0) {
+                        break;
+                    }
+                    if (pr == 0) {
+                        cbm_mcp_server_evict_idle(srv, STORE_IDLE_TIMEOUT_S);
+                        continue;
+                    }
+                } else {
+                    /* Buffered data found — push back and fall through to getline */
+                    (void)ungetc(c, in);
+                }
             }
         }
 #endif

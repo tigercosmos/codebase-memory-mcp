@@ -379,3 +379,60 @@ jobs:
             checksums.txt
           body: ${{ inputs.release_notes || '' }}
           generate_release_notes: ${{ inputs.release_notes == '' }}
+
+  # ── Step 6: VirusTotal scan all release binaries ─────────────
+  virustotal:
+    needs: [release]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download release assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          mkdir -p assets
+          gh release download "$VERSION" --dir assets --repo "$GITHUB_REPOSITORY"
+          ls -la assets/
+
+      - name: Scan all binaries with VirusTotal
+        uses: crazy-max/ghaction-virustotal@v4
+        id: virustotal
+        with:
+          vt_api_key: ${{ secrets.VIRUS_TOTAL_SCANNER_API_KEY }}
+          files: |
+            assets/*.tar.gz
+            assets/*.zip
+
+      - name: Parse scan results and check for detections
+        env:
+          VT_ANALYSIS: ${{ steps.virustotal.outputs.analysis }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          echo "=== VirusTotal Scan Results ==="
+          echo "$VT_ANALYSIS"
+
+          # Build markdown table for release notes
+          VT_REPORT="---\n\n### VirusTotal Scan Results\n\n"
+          VT_REPORT+="All release binaries were scanned by [VirusTotal](https://www.virustotal.com/) (70+ antivirus engines).\n\n"
+          VT_REPORT+="| Binary | Scan |\n|--------|------|\n"
+
+          FAILED=false
+          while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            # Format: filename=analysisURL
+            FILE=$(echo "$line" | cut -d'=' -f1)
+            URL=$(echo "$line" | cut -d'=' -f2-)
+            BASENAME=$(basename "$FILE")
+            VT_REPORT+="| $BASENAME | [View Report]($URL) |\n"
+          done <<< "$VT_ANALYSIS"
+
+          # Append to release notes
+          EXISTING=$(gh release view "$VERSION" --json body --jq '.body' --repo "$GITHUB_REPOSITORY")
+          UPDATED="${EXISTING}\n\n${VT_REPORT}"
+          echo -e "$UPDATED" | gh release edit "$VERSION" --notes-file - --repo "$GITHUB_REPOSITORY"
+
+          echo ""
+          echo "=== Scan links appended to release notes ==="

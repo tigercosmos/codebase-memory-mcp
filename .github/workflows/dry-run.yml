@@ -324,7 +324,7 @@ jobs:
             sed -i '' 's/^Example/#Example/' "$CLAMAV_ETC/freshclam.conf" 2>/dev/null || true
             echo "DatabaseMirror database.clamav.net" >> "$CLAMAV_ETC/freshclam.conf"
           fi
-          freshclam --quiet
+          freshclam --quiet --no-warnings 2>/dev/null || freshclam --quiet 2>/dev/null || echo "WARNING: freshclam update failed, using bundled signatures"
           echo "=== ClamAV scan (macOS) ==="
           clamscan --no-summary ./codebase-memory-mcp
           echo "=== ClamAV: clean ==="

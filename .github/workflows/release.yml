@@ -424,33 +424,39 @@ jobs:
         with:
           subject-path: 'checksums.txt'
 
-      # ── SBOM generation ──────────────────────────────────────
+      # ── SBOM generation (SPDX format) ──────────────────────────
       - name: Generate SBOM
         run: |
           python3 -c "
-          import json
+          import json, uuid
           sbom = {
-            'bomFormat': 'CycloneDX',
-            'specVersion': '1.4',
-            'version': 1,
-            'metadata': {'component': {'type': 'application', 'name': 'codebase-memory-mcp', 'version': '${{ inputs.version }}'}},
-            'components': [
-              {'type': 'library', 'name': 'sqlite3', 'version': '3.49.1', 'description': 'Vendored SQLite amalgamation'},
-              {'type': 'library', 'name': 'yyjson', 'version': '0.10.0', 'description': 'Fast JSON parser'},
-              {'type': 'library', 'name': 'mongoose', 'version': '7.16', 'description': 'Embedded HTTP server'},
-              {'type': 'library', 'name': 'mimalloc', 'version': '2.1.7', 'description': 'Memory allocator'},
-              {'type': 'library', 'name': 'xxhash', 'version': '0.8.2', 'description': 'Fast hash function'},
-              {'type': 'library', 'name': 'tre', 'version': '0.8.0', 'description': 'POSIX regex (Windows)'},
-              {'type': 'library', 'name': 'tree-sitter', 'version': '0.24.4', 'description': 'AST parser runtime (64 grammars)'}
+            'spdxVersion': 'SPDX-2.3',
+            'dataLicense': 'CC0-1.0',
+            'SPDXID': 'SPDXRef-DOCUMENT',
+            'name': 'codebase-memory-mcp-${{ inputs.version }}',
+            'documentNamespace': 'https://github.com/DeusData/codebase-memory-mcp/releases/${{ inputs.version }}',
+            'creationInfo': {
+              'created': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
+              'creators': ['Tool: codebase-memory-mcp-release-pipeline']
+            },
+            'packages': [
+              {'SPDXID': 'SPDXRef-Package-sqlite3', 'name': 'sqlite3', 'versionInfo': '3.49.1', 'downloadLocation': 'https://sqlite.org', 'filesAnalyzed': False},
+              {'SPDXID': 'SPDXRef-Package-yyjson', 'name': 'yyjson', 'versionInfo': '0.10.0', 'downloadLocation': 'https://github.com/ibireme/yyjson', 'filesAnalyzed': False},
+              {'SPDXID': 'SPDXRef-Package-mongoose', 'name': 'mongoose', 'versionInfo': '7.16', 'downloadLocation': 'https://github.com/cesanta/mongoose', 'filesAnalyzed': False},
+              {'SPDXID': 'SPDXRef-Package-mimalloc', 'name': 'mimalloc', 'versionInfo': '2.1.7', 'downloadLocation': 'https://github.com/microsoft/mimalloc', 'filesAnalyzed': False},
+              {'SPDXID': 'SPDXRef-Package-xxhash', 'name': 'xxhash', 'versionInfo': '0.8.2', 'downloadLocation': 'https://github.com/Cyan4973/xxHash', 'filesAnalyzed': False},
+              {'SPDXID': 'SPDXRef-Package-tre', 'name': 'tre', 'versionInfo': '0.8.0', 'downloadLocation': 'https://github.com/laurikari/tre', 'filesAnalyzed': False},
+              {'SPDXID': 'SPDXRef-Package-tree-sitter', 'name': 'tree-sitter', 'versionInfo': '0.24.4', 'downloadLocation': 'https://github.com/tree-sitter/tree-sitter', 'filesAnalyzed': False}
             ]
           }
           json.dump(sbom, open('sbom.json', 'w'), indent=2)
           "
 
-      # Note: SBOM is included as a release asset (sbom.json) but not
-      # attested via attest-sbom — our minimal CycloneDX doesn't pass
-      # the strict schema validation. Build provenance attestation
-      # covers binary integrity; SBOM provides dependency transparency.
+      - name: Attest SBOM
+        uses: actions/attest-sbom@10926c72720ffc3f7b666661c8e55b1344e2a365 # v2
+        with:
+          subject-path: '*.tar.gz'
+          sbom-path: 'sbom.json'
 
       # ── Sigstore cosign signing ──────────────────────────────
       - name: Install cosign

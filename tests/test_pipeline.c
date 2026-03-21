@@ -5197,8 +5197,7 @@ TEST(incremental_kustomize_module_indexed) {
     cbm_store_find_nodes_by_label(s, project, "Module", &nodes, &count);
     bool found_kust = false;
     for (int i = 0; i < count; i++) {
-        if (nodes[i].properties_json &&
-            strstr(nodes[i].properties_json, "kustomize")) {
+        if (nodes[i].properties_json && strstr(nodes[i].properties_json, "kustomize")) {
             found_kust = true;
             break;
         }

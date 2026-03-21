@@ -530,90 +530,98 @@ jobs:
             assets/*.tar.gz
             assets/*.zip
 
-      # ── Wait for VirusTotal results and check for detections ──
+      # ── Wait for ALL VirusTotal engines to complete, then check ──
       # The action outputs comma-separated "file=URL" pairs.
-      # URLs are https://www.virustotal.com/gui/file/<sha256> permalinks.
-      # We extract the SHA256, query the API for scan stats, and gate on detections.
-      - name: Check VirusTotal scan results
+      # We wait until every engine has reported (not just the first few),
+      # then check for any malicious or suspicious detection.
+      # Minimum 60 engines required — below that we consider the scan incomplete.
+      - name: Check VirusTotal scan results (wait for 100% completion)
         env:
           VT_API_KEY: ${{ secrets.VIRUS_TOTAL_SCANNER_API_KEY }}
           VT_ANALYSIS: ${{ steps.virustotal.outputs.analysis }}
         run: |
-          echo "=== Checking VirusTotal scan results ==="
-          DETECTIONS=0
+          echo "=== Waiting for VirusTotal scans to fully complete ==="
+          MIN_ENGINES=60
 
-          # Split comma-separated output into newlines
           echo "$VT_ANALYSIS" | tr ',' '\n' | while IFS= read -r entry; do
             [ -z "$entry" ] && continue
             FILE=$(echo "$entry" | cut -d'=' -f1)
             URL=$(echo "$entry" | cut -d'=' -f2-)
             BASENAME=$(basename "$FILE")
 
-            # Extract SHA256 hash from URL (last path segment of /gui/file/<hash>)
             SHA256=$(echo "$URL" | grep -oE '[a-f0-9]{64}')
             if [ -z "$SHA256" ]; then
               echo "WARNING: Could not extract SHA256 from $URL — skipping"
               continue
             fi
 
-            # Poll the file report until last_analysis_results are available
-            for attempt in $(seq 1 30); do
+            # Poll until ALL engines have completed (max 20 minutes per binary)
+            SCAN_COMPLETE=false
+            for attempt in $(seq 1 120); do
               RESULT=$(curl -sf --max-time 10 \
                 -H "x-apikey: $VT_API_KEY" \
                 "https://www.virustotal.com/api/v3/files/$SHA256" 2>/dev/null || echo "")
 
               if [ -z "$RESULT" ]; then
-                echo "  $BASENAME: waiting for scan (attempt $attempt/30)..."
+                echo "  $BASENAME: waiting for file to be processed (attempt $attempt)..."
                 sleep 10
                 continue
               fi
 
-              MALICIOUS=$(echo "$RESULT" | python3 -c "
+              # Parse all stats in one python call
+              STATS=$(echo "$RESULT" | python3 -c "
           import json, sys
           d = json.loads(sys.stdin.read())
           stats = d.get('data', {}).get('attributes', {}).get('last_analysis_stats', {})
-          print(stats.get('malicious', 0))
-          " 2>/dev/null || echo "0")
+          malicious = stats.get('malicious', 0)
+          suspicious = stats.get('suspicious', 0)
+          undetected = stats.get('undetected', 0)
+          harmless = stats.get('harmless', 0)
+          failure = stats.get('failure', 0)
+          timeout = stats.get('timeout', 0)
+          unsupported = stats.get('type-unsupported', 0)
+          total = sum(stats.values())
+          # 'confirmed-timeout' may also exist
+          completed = malicious + suspicious + undetected + harmless
+          print(f'{malicious},{suspicious},{completed},{total}')
+          " 2>/dev/null || echo "0,0,0,0")
 
-              SUSPICIOUS=$(echo "$RESULT" | python3 -c "
-          import json, sys
-          d = json.loads(sys.stdin.read())
-          stats = d.get('data', {}).get('attributes', {}).get('last_analysis_stats', {})
-          print(stats.get('suspicious', 0))
-          " 2>/dev/null || echo "0")
+              MALICIOUS=$(echo "$STATS" | cut -d',' -f1)
+              SUSPICIOUS=$(echo "$STATS" | cut -d',' -f2)
+              COMPLETED=$(echo "$STATS" | cut -d',' -f3)
+              TOTAL=$(echo "$STATS" | cut -d',' -f4)
 
-              TOTAL=$(echo "$RESULT" | python3 -c "
-          import json, sys
-          d = json.loads(sys.stdin.read())
-          stats = d.get('data', {}).get('attributes', {}).get('last_analysis_stats', {})
-          print(sum(stats.values()))
-          " 2>/dev/null || echo "0")
-
-              if [ "$TOTAL" -gt 0 ]; then
-                echo "$BASENAME: $MALICIOUS malicious, $SUSPICIOUS suspicious (of $TOTAL engines)"
+              if [ "$TOTAL" -ge "$MIN_ENGINES" ] && [ "$COMPLETED" -ge "$MIN_ENGINES" ]; then
+                echo "$BASENAME: $MALICIOUS malicious, $SUSPICIOUS suspicious ($COMPLETED completed, $TOTAL total engines)"
 
                 if [ "$MALICIOUS" -gt 0 ] || [ "$SUSPICIOUS" -gt 0 ]; then
                   echo "BLOCKED: $BASENAME flagged! See $URL"
                   echo "FAIL" >> /tmp/vt_gate_fail
                 fi
+                SCAN_COMPLETE=true
                 break
               fi
 
-              echo "  $BASENAME: waiting for scan results (attempt $attempt/30)..."
+              echo "  $BASENAME: $COMPLETED/$TOTAL engines completed (attempt $attempt, need $MIN_ENGINES)..."
               sleep 10
             done
+
+            if [ "$SCAN_COMPLETE" != "true" ]; then
+              echo "BLOCKED: $BASENAME scan did not complete within 20 minutes!"
+              echo "FAIL" >> /tmp/vt_gate_fail
+            fi
           done
 
           if [ -f /tmp/vt_gate_fail ]; then
             FAIL_COUNT=$(wc -l < /tmp/vt_gate_fail | tr -d ' ')
             echo ""
             echo "=== VIRUSTOTAL GATE FAILED ==="
-            echo "$FAIL_COUNT binary(ies) flagged as malicious or suspicious."
+            echo "$FAIL_COUNT binary(ies) flagged or scan incomplete."
             echo "Draft release will NOT be published. Investigate before retrying."
             exit 1
           fi
 
-          echo "=== All binaries clean ==="
+          echo "=== All binaries clean (all engines completed) ==="
 
       # ── OpenSSF Scorecard ────────────────────────────────────
       - name: Run OpenSSF Scorecard

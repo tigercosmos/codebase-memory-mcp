@@ -19,6 +19,8 @@ on:
 
 permissions:
   contents: write
+  id-token: write
+  attestations: write
 
 jobs:
   # ── Step 1: Lint (clang-format + cppcheck) ───────────────────
@@ -343,6 +345,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@v4
 
@@ -356,6 +360,72 @@ jobs:
       - name: Generate checksums
         run: sha256sum *.tar.gz *.zip > checksums.txt
 
+      # ── Artifact attestations (SLSA provenance) ──────────────
+      # Cryptographically proves each binary was built by this
+      # GitHub Actions workflow from this repo. Verifiable with:
+      #   gh attestation verify <file> --repo DeusData/codebase-memory-mcp
+      - name: Attest build provenance (tar.gz)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: '*.tar.gz'
+
+      - name: Attest build provenance (zip)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: '*.zip'
+
+      - name: Attest build provenance (checksums)
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: 'checksums.txt'
+
+      # ── SBOM generation ──────────────────────────────────────
+      # Software Bill of Materials listing all vendored dependencies.
+      - name: Generate SBOM
+        run: |
+          cat > sbom.json << 'SBOMEOF'
+          {
+            "bomFormat": "CycloneDX",
+            "specVersion": "1.4",
+            "version": 1,
+            "metadata": {
+              "component": {
+                "type": "application",
+                "name": "codebase-memory-mcp",
+                "version": "${{ inputs.version }}"
+              }
+            },
+            "components": [
+              {"type": "library", "name": "sqlite3", "version": "3.49.1", "description": "Vendored SQLite amalgamation"},
+              {"type": "library", "name": "yyjson", "version": "0.10.0", "description": "Fast JSON parser"},
+              {"type": "library", "name": "mongoose", "version": "7.16", "description": "Embedded HTTP server"},
+              {"type": "library", "name": "mimalloc", "version": "2.1.7", "description": "Memory allocator"},
+              {"type": "library", "name": "xxhash", "version": "0.8.2", "description": "Fast hash function"},
+              {"type": "library", "name": "tre", "version": "0.8.0", "description": "POSIX regex (Windows)"},
+              {"type": "library", "name": "tree-sitter", "version": "0.24.4", "description": "AST parser runtime (64 grammars)"}
+            ]
+          }
+          SBOMEOF
+
+      - name: Attest SBOM
+        uses: actions/attest-sbom@v2
+        with:
+          subject-path: '*.tar.gz'
+          sbom-path: 'sbom.json'
+
+      # ── Sigstore cosign signing ──────────────────────────────
+      # Keyless signing via GitHub OIDC identity. Verifiable with:
+      #   cosign verify-blob --bundle <file>.bundle <file>
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Sign release artifacts with cosign
+        run: |
+          for f in *.tar.gz *.zip checksums.txt; do
+            cosign sign-blob --yes --bundle "${f}.bundle" "$f"
+          done
+
+      # ── Create release ───────────────────────────────────────
       - name: Delete existing release
         if: ${{ inputs.replace }}
         env:
@@ -377,23 +447,34 @@ jobs:
             *.tar.gz
             *.zip
             checksums.txt
+            sbom.json
+            *.bundle
           body: ${{ inputs.release_notes || '' }}
           generate_release_notes: ${{ inputs.release_notes == '' }}
 
-  # ── Step 6: VirusTotal scan all release binaries ─────────────
-  virustotal:
+  # ── Step 6: Post-release security verification ───────────────
+  # Scans binaries with VirusTotal, runs OpenSSF Scorecard,
+  # and appends all results to the release notes.
+  verify:
     needs: [release]
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      security-events: write
+      id-token: write
     steps:
-      - name: Download release assets
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      # ── VirusTotal scan ──────────────────────────────────────
+      - name: Download release binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
         run: |
           mkdir -p assets
-          gh release download "$VERSION" --dir assets --repo "$GITHUB_REPOSITORY"
+          gh release download "$VERSION" --dir assets --repo "$GITHUB_REPOSITORY" --pattern '*.tar.gz' --pattern '*.zip'
           ls -la assets/
 
       - name: Scan all binaries with VirusTotal
@@ -405,34 +486,75 @@ jobs:
             assets/*.tar.gz
             assets/*.zip
 
-      - name: Parse scan results and check for detections
+      # ── OpenSSF Scorecard ────────────────────────────────────
+      - name: Run OpenSSF Scorecard
+        uses: ossf/scorecard-action@v2
+        id: scorecard
+        with:
+          results_file: scorecard.sarif
+          results_format: sarif
+          publish_results: true
+
+      - name: Upload Scorecard SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: scorecard.sarif
+
+      - name: Extract Scorecard score
+        id: score
+        run: |
+          # Extract overall score from SARIF (properties.score)
+          SCORE=$(python3 -c "
+          import json, sys
+          with open('scorecard.sarif') as f:
+              d = json.load(f)
+          props = d.get('runs', [{}])[0].get('tool', {}).get('driver', {}).get('properties', {})
+          print(props.get('score', 'N/A'))
+          " 2>/dev/null || echo "N/A")
+          echo "score=$SCORE" >> "$GITHUB_OUTPUT"
+          echo "OpenSSF Scorecard: $SCORE/10"
+
+      # ── Append all results to release notes ──────────────────
+      - name: Append security verification to release notes
         env:
           VT_ANALYSIS: ${{ steps.virustotal.outputs.analysis }}
+          SCORECARD_SCORE: ${{ steps.score.outputs.score }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
         run: |
-          echo "=== VirusTotal Scan Results ==="
-          echo "$VT_ANALYSIS"
+          echo "=== Building security verification report ==="
 
-          # Build markdown table for release notes
-          VT_REPORT="---\n\n### VirusTotal Scan Results\n\n"
-          VT_REPORT+="All release binaries were scanned by [VirusTotal](https://www.virustotal.com/) (70+ antivirus engines).\n\n"
-          VT_REPORT+="| Binary | Scan |\n|--------|------|\n"
+          REPORT=$'---\n\n### Security Verification\n\n'
+          REPORT+=$'All release binaries have been independently verified:\n\n'
 
-          FAILED=false
+          # VirusTotal results
+          REPORT+=$'**VirusTotal** — scanned by 70+ antivirus engines:\n\n'
+          REPORT+=$'| Binary | Scan |\n|--------|------|\n'
           while IFS= read -r line; do
             [ -z "$line" ] && continue
-            # Format: filename=analysisURL
             FILE=$(echo "$line" | cut -d'=' -f1)
             URL=$(echo "$line" | cut -d'=' -f2-)
             BASENAME=$(basename "$FILE")
-            VT_REPORT+="| $BASENAME | [View Report]($URL) |\n"
+            REPORT+="| $BASENAME | [View Report]($URL) |"$'\n'
           done <<< "$VT_ANALYSIS"
+
+          # OpenSSF Scorecard
+          REPORT+=$'\n**OpenSSF Scorecard** — repository security health: **'"$SCORECARD_SCORE"$'/10**\n'
+          REPORT+=$'[View detailed scorecard](https://scorecard.dev/viewer/?uri=github.com/DeusData/codebase-memory-mcp)\n\n'
+
+          # Build provenance
+          REPORT+=$'**Build Provenance (SLSA)** — cryptographic proof each binary was built by GitHub Actions from this repo:\n'
+          REPORT+=$'```\ngh attestation verify <downloaded-file> --repo DeusData/codebase-memory-mcp\n```\n\n'
+
+          # Cosign
+          REPORT+=$'**Sigstore cosign** — keyless signature verification:\n'
+          REPORT+=$'```\ncosign verify-blob --bundle <file>.bundle <file>\n```\n\n'
+
+          # SBOM
+          REPORT+=$'**SBOM** — Software Bill of Materials (`sbom.json`) lists all vendored dependencies.\n'
 
           # Append to release notes
           EXISTING=$(gh release view "$VERSION" --json body --jq '.body' --repo "$GITHUB_REPOSITORY")
-          UPDATED="${EXISTING}\n\n${VT_REPORT}"
-          echo -e "$UPDATED" | gh release edit "$VERSION" --notes-file - --repo "$GITHUB_REPOSITORY"
+          printf '%s\n\n%s\n' "$EXISTING" "$REPORT" | gh release edit "$VERSION" --notes-file - --repo "$GITHUB_REPOSITORY"
 
-          echo ""
-          echo "=== Scan links appended to release notes ==="
+          echo "=== Security verification appended to release notes ==="

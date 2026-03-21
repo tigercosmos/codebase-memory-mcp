@@ -438,6 +438,5 @@ void cbm_pipeline_pass_fastapi_depends(cbm_pipeline_ctx_t *ctx, const cbm_file_i
     }
 }
 
-/* DLL resolve tracking removed — the string literals (GetProcAddress, dlsym,
- * LoadLibrary) triggered Windows Defender Wacatac.B!ml false positive.
- * See: https://github.com/DeusData/codebase-memory-mcp/issues/89 */
+/* DLL resolve tracking removed — triggered Windows Defender false positive.
+ * See issue #89. */

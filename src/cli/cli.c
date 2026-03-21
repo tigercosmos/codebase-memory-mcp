@@ -813,7 +813,8 @@ int cbm_remove_zed_mcp(const char *config_path) {
 /* ── Agent detection ──────────────────────────────────────────── */
 
 cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
-    cbm_detected_agents_t agents = {false, false, false, false, false, false, false, false, false};
+    cbm_detected_agents_t agents;
+    memset(&agents, 0, sizeof(agents));
     if (!home_dir || !home_dir[0]) {
         return agents;
     }
@@ -882,6 +883,12 @@ cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
 #endif
     if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
         agents.vscode = true;
+    }
+
+    /* OpenClaw: ~/.openclaw/ dir */
+    snprintf(path, sizeof(path), "%s/.openclaw", home_dir);
+    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+        agents.openclaw = true;
     }
 
     return agents;
@@ -2169,8 +2176,12 @@ int cbm_cmd_install(int argc, char **argv) {
     if (agents.vscode) {
         printf(" VS-Code");
     }
+    if (agents.openclaw) {
+        printf(" OpenClaw");
+    }
     if (!agents.claude_code && !agents.codex && !agents.gemini && !agents.zed && !agents.opencode &&
-        !agents.antigravity && !agents.aider && !agents.kilocode && !agents.vscode) {
+        !agents.antigravity && !agents.aider && !agents.kilocode && !agents.vscode &&
+        !agents.openclaw) {
         printf(" (none)");
     }
     printf("\n\n");
@@ -2356,7 +2367,18 @@ int cbm_cmd_install(int argc, char **argv) {
         printf("  mcp: %s\n", config_path);
     }
 
-    /* Step 13: Ensure PATH */
+    /* Step 13: Install OpenClaw */
+    if (agents.openclaw) {
+        printf("OpenClaw:\n");
+        char config_path[1024];
+        snprintf(config_path, sizeof(config_path), "%s/.openclaw/openclaw.json", home);
+        if (!dry_run) {
+            cbm_install_editor_mcp(self_path, config_path);
+        }
+        printf("  mcp: %s\n", config_path);
+    }
+
+    /* Step 14: Ensure PATH */
     char bin_dir[1024];
     snprintf(bin_dir, sizeof(bin_dir), "%s/.local/bin", home);
     const char *rc = cbm_detect_shell_rc(home);
@@ -2549,6 +2571,15 @@ int cbm_cmd_uninstall(int argc, char **argv) {
             cbm_remove_vscode_mcp(config_path);
         }
         printf("VS Code: removed MCP config entry\n");
+    }
+
+    if (agents.openclaw) {
+        char config_path[1024];
+        snprintf(config_path, sizeof(config_path), "%s/.openclaw/openclaw.json", home);
+        if (!dry_run) {
+            cbm_remove_editor_mcp(config_path);
+        }
+        printf("OpenClaw: removed MCP config entry\n");
     }
 
     /* Step 2: Remove indexes */

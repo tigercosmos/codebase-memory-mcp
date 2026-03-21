@@ -2,7 +2,7 @@
 
 **The fastest and most efficient code intelligence engine for AI coding agents.** Full-indexes an average repository in milliseconds, the Linux kernel (28M LOC, 75K files) in 3 minutes. Answers structural queries in under 1ms. Ships as a single static binary for macOS, Linux, and Windows — download, run `install`, done.
 
-High-quality parsing through [tree-sitter](https://tree-sitter.github.io/tree-sitter/) AST analysis across all 64 languages, enhanced with LSP-style hybrid type resolution for Go, C, and C++ (more languages coming soon) — producing a persistent knowledge graph of functions, classes, call chains, HTTP routes, and cross-service links. 14 MCP tools. Zero dependencies. Plug and play across 8 coding agents.
+High-quality parsing through [tree-sitter](https://tree-sitter.github.io/tree-sitter/) AST analysis across all 64 languages, enhanced with LSP-style hybrid type resolution for Go, C, and C++ (more languages coming soon) — producing a persistent knowledge graph of functions, classes, call chains, HTTP routes, and cross-service links. 14 MCP tools. Zero dependencies. Plug and play across 10 coding agents.
 
 <p align="center">
   <img src="docs/graph-ui-screenshot.png" alt="Graph visualization UI showing the codebase-memory-mcp knowledge graph" width="800">
@@ -16,7 +16,7 @@ High-quality parsing through [tree-sitter](https://tree-sitter.github.io/tree-si
 - **Plug and play** — single static binary for macOS (arm64/amd64), Linux (arm64/amd64), and Windows (amd64). No Docker, no runtime dependencies, no API keys. Download → `install` → restart agent → done.
 - **64 languages** — vendored tree-sitter grammars compiled into the binary. Nothing to install, nothing that breaks.
 - **120x fewer tokens** — 5 structural queries: ~3,400 tokens vs ~412,000 via file-by-file search. One graph query replaces dozens of grep/read cycles.
-- **8 agents, one command** — `install` auto-detects Claude Code, Codex CLI, Gemini CLI, Zed, OpenCode, Antigravity, Aider, KiloCode and configures MCP entries, instruction files, and pre-tool hooks for each.
+- **10 agents, one command** — `install` auto-detects Claude Code, Codex CLI, Gemini CLI, Zed, OpenCode, Antigravity, Aider, KiloCode, VS Code, and OpenClaw — configures MCP entries, instruction files, and pre-tool hooks for each.
 - **Built-in graph visualization** — 3D interactive UI at `localhost:9749` (optional UI binary variant).
 - **14 MCP tools** — search, trace, architecture, impact analysis, Cypher queries, dead code detection, cross-service HTTP linking, ADR management, and more.
 
@@ -221,6 +221,8 @@ Restart your agent. Verify with `/mcp` — you should see `codebase-memory-mcp` 
 | Antigravity | `mcp_config.json` | `AGENTS.md` | — |
 | Aider | — | `CONVENTIONS.md` | — |
 | KiloCode | `mcp_settings.json` | `~/.kilocode/rules/` | — |
+| VS Code | `Code/User/mcp.json` | — | — |
+| OpenClaw | `openclaw.json` | — | — |
 
 **Hooks** are advisory (exit code 0) — they remind agents to prefer MCP graph tools when they reach for grep/glob/read, without blocking the tool call.
 
@@ -327,7 +329,7 @@ Plus: Clojure, F#, Julia, Vim Script, Nix, Common Lisp, Elm, Fortran, CUDA, COBO
 src/
   main.c              Entry point (MCP stdio server + CLI + install/update/config)
   mcp/                MCP server (14 tools, JSON-RPC 2.0, session detection, auto-index)
-  cli/                Install/uninstall/update/config (8 agents, hooks, instructions)
+  cli/                Install/uninstall/update/config (10 agents, hooks, instructions)
   store/              SQLite graph storage (nodes, edges, traversal, search, Louvain)
   pipeline/           Multi-pass indexing (structure → definitions → calls → HTTP links → config → tests)
   cypher/             Cypher query lexer, parser, planner, executor

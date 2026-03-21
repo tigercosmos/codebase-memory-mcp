@@ -50,4 +50,3 @@ graph-ui/dist/
 BENCHMARK_REPORT.md
 TEST_PLAN.md
 CHANGELOG.md
-.github/workflows/scorecard.yml

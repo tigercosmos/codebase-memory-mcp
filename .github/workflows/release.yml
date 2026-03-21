@@ -505,8 +505,6 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-      security-events: write
-      id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
@@ -650,38 +648,26 @@ jobs:
 
           echo "=== All binaries clean (all engines completed) ==="
 
-      # ── OpenSSF Scorecard ────────────────────────────────────
-      - name: Run OpenSSF Scorecard
-        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # v2.4.3
-        id: scorecard
-        with:
-          results_file: scorecard.sarif
-          results_format: sarif
-          publish_results: true
-
-      - name: Upload Scorecard SARIF
-        uses: github/codeql-action/upload-sarif@38697555549f1db7851b81482ff19f1fa5c4fedc # v4
-        with:
-          sarif_file: scorecard.sarif
-
-      - name: Extract Scorecard score
-        id: score
+      # ── OpenSSF Scorecard gate ──────────────────────────────────
+      # Fetch public score and block release if repo health degrades below threshold.
+      - name: OpenSSF Scorecard gate (minimum 4.0)
         run: |
-          SCORE=$(python3 -c "
-          import json, sys
-          with open('scorecard.sarif') as f:
-              d = json.load(f)
-          props = d.get('runs', [{}])[0].get('tool', {}).get('driver', {}).get('properties', {})
-          print(props.get('score', 'N/A'))
-          " 2>/dev/null || echo "N/A")
-          echo "score=$SCORE" >> "$GITHUB_OUTPUT"
+          SCORE=$(curl -sf "https://api.scorecard.dev/projects/github.com/DeusData/codebase-memory-mcp" 2>/dev/null \
+            | python3 -c "import json,sys; print(json.loads(sys.stdin.read()).get('score',0))" 2>/dev/null \
+            || echo "0")
           echo "OpenSSF Scorecard: $SCORE/10"
+          if python3 -c "exit(0 if float('$SCORE') >= 4.0 else 1)" 2>/dev/null; then
+            echo "=== Scorecard gate passed (>= 4.0) ==="
+          else
+            echo "BLOCKED: Scorecard $SCORE/10 is below minimum 4.0"
+            echo "Check https://scorecard.dev/viewer/?uri=github.com/DeusData/codebase-memory-mcp"
+            exit 1
+          fi
 
       # ── Append results + publish ─────────────────────────────
       - name: Append security verification and publish release
         env:
           VT_ANALYSIS: ${{ steps.virustotal.outputs.analysis }}
-          SCORECARD_SCORE: ${{ steps.score.outputs.score }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
         run: |
@@ -704,10 +690,6 @@ jobs:
             REPORT+=$(cat /tmp/vt_table)$'\n'
             rm -f /tmp/vt_table
           fi
-
-          # OpenSSF Scorecard
-          REPORT+=$'\n**OpenSSF Scorecard** — repository security health: **'"$SCORECARD_SCORE"$'/10**\n'
-          REPORT+=$'[View detailed scorecard](https://scorecard.dev/viewer/?uri=github.com/DeusData/codebase-memory-mcp)\n\n'
 
           # Build provenance
           REPORT+=$'**Build Provenance (SLSA)** — cryptographic proof each binary was built by GitHub Actions from this repo:\n'

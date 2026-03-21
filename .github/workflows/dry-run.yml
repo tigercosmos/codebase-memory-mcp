@@ -302,6 +302,24 @@ jobs:
         if: matrix.variant == 'standard' && matrix.goos == 'linux' && matrix.goarch == 'amd64'
         run: scripts/security-fuzz.sh ./codebase-memory-mcp
 
+      - name: ClamAV scan (Linux)
+        if: matrix.variant == 'standard' && startsWith(matrix.os, 'ubuntu')
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq clamav > /dev/null 2>&1
+          sudo freshclam --quiet 2>/dev/null || true
+          echo "=== ClamAV scan ==="
+          clamscan --no-summary ./codebase-memory-mcp
+          echo "=== ClamAV: clean ==="
+
+      - name: ClamAV scan (macOS)
+        if: matrix.variant == 'standard' && startsWith(matrix.os, 'macos')
+        run: |
+          brew install clamav > /dev/null 2>&1
+          freshclam --quiet 2>/dev/null || true
+          echo "=== ClamAV scan (macOS) ==="
+          clamscan --no-summary ./codebase-memory-mcp
+          echo "=== ClamAV: clean ==="
+
   smoke-windows:
     if: ${{ !inputs.skip_builds }}
     needs: [build-windows]
@@ -345,3 +363,17 @@ jobs:
         if: matrix.variant == 'standard'
         shell: msys2 {0}
         run: scripts/security-install.sh ./codebase-memory-mcp.exe
+
+      - name: Windows Defender scan
+        if: matrix.variant == 'standard'
+        shell: pwsh
+        run: |
+          Write-Host "=== Windows Defender scan (with ML heuristics) ==="
+          & "C:\Program Files\Windows Defender\MpCmdRun.exe" -SignatureUpdate 2>$null
+          $result = & "C:\Program Files\Windows Defender\MpCmdRun.exe" -Scan -ScanType 3 -File "$PWD\codebase-memory-mcp.exe" -DisableRemediation
+          Write-Host $result
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "BLOCKED: Windows Defender flagged the binary!"
+            exit 1
+          }
+          Write-Host "=== Windows Defender: clean ==="

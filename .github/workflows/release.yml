@@ -176,8 +176,9 @@ jobs:
 
       - name: Archive standard binary
         run: |
+          cp LICENSE build/c/
           tar -czf codebase-memory-mcp-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
-            -C build/c codebase-memory-mcp
+            -C build/c codebase-memory-mcp LICENSE
 
       - name: Build UI binary
         run: scripts/build.sh --with-ui --version ${{ inputs.version }} CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
@@ -188,8 +189,9 @@ jobs:
 
       - name: Archive UI binary
         run: |
+          cp LICENSE build/c/
           tar -czf codebase-memory-mcp-ui-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
-            -C build/c codebase-memory-mcp
+            -C build/c codebase-memory-mcp LICENSE
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -226,7 +228,7 @@ jobs:
           BIN=build/c/codebase-memory-mcp
           [ -f "${BIN}.exe" ] && BIN="${BIN}.exe"
           cp "$BIN" codebase-memory-mcp.exe
-          zip codebase-memory-mcp-windows-amd64.zip codebase-memory-mcp.exe
+          zip codebase-memory-mcp-windows-amd64.zip codebase-memory-mcp.exe LICENSE
 
       - name: Build UI binary
         shell: msys2 {0}
@@ -238,7 +240,7 @@ jobs:
           BIN=build/c/codebase-memory-mcp
           [ -f "${BIN}.exe" ] && BIN="${BIN}.exe"
           cp "$BIN" codebase-memory-mcp-ui.exe
-          zip codebase-memory-mcp-ui-windows-amd64.zip codebase-memory-mcp-ui.exe
+          zip codebase-memory-mcp-ui-windows-amd64.zip codebase-memory-mcp-ui.exe LICENSE
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:

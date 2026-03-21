@@ -533,9 +533,8 @@ jobs:
 
       # ── Wait for ALL VirusTotal engines to complete, then check ──
       # The action outputs comma-separated "file=URL" pairs.
-      # We wait until every engine has reported (not just the first few),
-      # then check for any malicious or suspicious detection.
-      # Minimum 60 engines required — below that we consider the scan incomplete.
+      # URLs are /gui/file-analysis/<base64_id>/detection — we extract the
+      # base64 analysis ID and poll /api/v3/analyses/<id> until completed.
       - name: Check VirusTotal scan results (wait for 100% completion)
         env:
           VT_API_KEY: ${{ secrets.VIRUS_TOTAL_SCANNER_API_KEY }}
@@ -543,6 +542,7 @@ jobs:
         run: |
           echo "=== Waiting for VirusTotal scans to fully complete ==="
           MIN_ENGINES=60
+          rm -f /tmp/vt_gate_fail
 
           echo "$VT_ANALYSIS" | tr ',' '\n' | while IFS= read -r entry; do
             [ -z "$entry" ] && continue
@@ -550,49 +550,54 @@ jobs:
             URL=$(echo "$entry" | cut -d'=' -f2-)
             BASENAME=$(basename "$FILE")
 
-            SHA256=$(echo "$URL" | grep -oE '[a-f0-9]{64}')
-            if [ -z "$SHA256" ]; then
-              echo "WARNING: Could not extract SHA256 from $URL — skipping"
-              continue
+            # Extract base64 analysis ID from URL: /gui/file-analysis/<ID>/detection
+            ANALYSIS_ID=$(echo "$URL" | sed -n 's|.*/file-analysis/\([^/]*\)/.*|\1|p')
+            if [ -z "$ANALYSIS_ID" ]; then
+              echo "WARNING: Could not extract analysis ID from $URL"
+              # Try SHA256 fallback (older action versions use /gui/file/<sha256>)
+              ANALYSIS_ID=$(echo "$URL" | grep -oE '[a-f0-9]{64}')
+              if [ -z "$ANALYSIS_ID" ]; then
+                echo "BLOCKED: Cannot parse VirusTotal URL: $URL"
+                echo "FAIL" >> /tmp/vt_gate_fail
+                continue
+              fi
             fi
 
-            # Poll until ALL engines have completed (max 20 minutes per binary)
+            # Poll /api/v3/analyses/<id> until status=completed (max 20 min)
             SCAN_COMPLETE=false
             for attempt in $(seq 1 120); do
               RESULT=$(curl -sf --max-time 10 \
                 -H "x-apikey: $VT_API_KEY" \
-                "https://www.virustotal.com/api/v3/files/$SHA256" 2>/dev/null || echo "")
+                "https://www.virustotal.com/api/v3/analyses/$ANALYSIS_ID" 2>/dev/null || echo "")
 
               if [ -z "$RESULT" ]; then
-                echo "  $BASENAME: waiting for file to be processed (attempt $attempt)..."
+                echo "  $BASENAME: waiting (attempt $attempt)..."
                 sleep 10
                 continue
               fi
 
-              # Parse all stats in one python call
               STATS=$(echo "$RESULT" | python3 -c "
           import json, sys
           d = json.loads(sys.stdin.read())
-          stats = d.get('data', {}).get('attributes', {}).get('last_analysis_stats', {})
+          attrs = d.get('data', {}).get('attributes', {})
+          status = attrs.get('status', 'queued')
+          stats = attrs.get('stats', {})
           malicious = stats.get('malicious', 0)
           suspicious = stats.get('suspicious', 0)
           undetected = stats.get('undetected', 0)
           harmless = stats.get('harmless', 0)
-          failure = stats.get('failure', 0)
-          timeout = stats.get('timeout', 0)
-          unsupported = stats.get('type-unsupported', 0)
           total = sum(stats.values())
-          # 'confirmed-timeout' may also exist
           completed = malicious + suspicious + undetected + harmless
-          print(f'{malicious},{suspicious},{completed},{total}')
-          " 2>/dev/null || echo "0,0,0,0")
+          print(f'{status},{malicious},{suspicious},{completed},{total}')
+          " 2>/dev/null || echo "queued,0,0,0,0")
 
-              MALICIOUS=$(echo "$STATS" | cut -d',' -f1)
-              SUSPICIOUS=$(echo "$STATS" | cut -d',' -f2)
-              COMPLETED=$(echo "$STATS" | cut -d',' -f3)
-              TOTAL=$(echo "$STATS" | cut -d',' -f4)
+              STATUS=$(echo "$STATS" | cut -d',' -f1)
+              MALICIOUS=$(echo "$STATS" | cut -d',' -f2)
+              SUSPICIOUS=$(echo "$STATS" | cut -d',' -f3)
+              COMPLETED=$(echo "$STATS" | cut -d',' -f4)
+              TOTAL=$(echo "$STATS" | cut -d',' -f5)
 
-              if [ "$TOTAL" -ge "$MIN_ENGINES" ] && [ "$COMPLETED" -ge "$MIN_ENGINES" ]; then
+              if [ "$STATUS" = "completed" ]; then
                 echo "$BASENAME: $MALICIOUS malicious, $SUSPICIOUS suspicious ($COMPLETED completed, $TOTAL total engines)"
 
                 if [ "$MALICIOUS" -gt 0 ] || [ "$SUSPICIOUS" -gt 0 ]; then
@@ -603,7 +608,7 @@ jobs:
                 break
               fi
 
-              echo "  $BASENAME: $COMPLETED/$TOTAL engines completed (attempt $attempt, need $MIN_ENGINES)..."
+              echo "  $BASENAME: $STATUS (attempt $attempt)..."
               sleep 10
             done
 

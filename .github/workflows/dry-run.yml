@@ -75,13 +75,47 @@ jobs:
       - name: "Layer 8: Vendored dependency integrity"
         run: scripts/security-vendored.sh
 
-  # ── Step 1c: CodeQL SAST gate (checks for open alerts) ──────
-  # CodeQL runs on push/PR via codeql.yml. This gate checks if
-  # there are any open critical/high code scanning alerts.
+  # ── Step 1c: CodeQL SAST gate ────────────────────────────────
   codeql-gate:
     if: ${{ !inputs.skip_lint }}
     runs-on: ubuntu-latest
     steps:
+      - name: Wait for CodeQL on current commit (max 30 min)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          CURRENT_SHA="${{ github.sha }}"
+          echo "Current commit: $CURRENT_SHA"
+          echo "Waiting for CodeQL to complete on this commit..."
+
+          for attempt in $(seq 1 60); do
+            LATEST=$(gh api repos/${{ github.repository }}/actions/workflows/codeql.yml/runs?per_page=5 \
+              --jq '.workflow_runs[] | select(.head_sha == "'"$CURRENT_SHA"'") | "\(.conclusion) \(.status)"' 2>/dev/null | head -1 || echo "")
+
+            if [ -z "$LATEST" ]; then
+              echo "  Attempt $attempt/60: No CodeQL run found for $CURRENT_SHA yet..."
+              sleep 30
+              continue
+            fi
+
+            CONCLUSION=$(echo "$LATEST" | cut -d' ' -f1)
+            STATUS=$(echo "$LATEST" | cut -d' ' -f2)
+
+            if [ "$STATUS" = "completed" ] && [ "$CONCLUSION" = "success" ]; then
+              echo "=== CodeQL completed successfully on current commit ==="
+              exit 0
+            elif [ "$STATUS" = "completed" ]; then
+              echo "BLOCKED: CodeQL completed with conclusion: $CONCLUSION"
+              exit 1
+            fi
+
+            echo "  Attempt $attempt/60: CodeQL status=$STATUS (waiting 30s)..."
+            sleep 30
+          done
+
+          echo "BLOCKED: CodeQL did not complete within 30 minutes"
+          exit 1
+
       - name: Check for open code scanning alerts
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

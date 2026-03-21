@@ -231,8 +231,10 @@ TEST(cypher_rejects_union_injection) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
- *  PATH CONTAINMENT
+ *  PATH CONTAINMENT (POSIX only — realpath() not available on Windows)
  * ══════════════════════════════════════════════════════════════════ */
+
+#ifndef _WIN32
 
 TEST(path_traversal_blocked) {
     /* The get_code_snippet handler uses realpath() to verify that the
@@ -281,6 +283,8 @@ TEST(path_within_root_allowed) {
     }
     PASS();
 }
+
+#endif /* _WIN32 — path containment */
 
 /* ══════════════════════════════════════════════════════════════════
  *  SHELL-FREE SUBPROCESS EXECUTION (cbm_exec_no_shell)
@@ -374,9 +378,11 @@ SUITE(security) {
     RUN_TEST(cypher_rejects_sql_injection_in_string);
     RUN_TEST(cypher_rejects_union_injection);
 
-    /* Path containment */
+    /* Path containment (POSIX only) */
+#ifndef _WIN32
     RUN_TEST(path_traversal_blocked);
     RUN_TEST(path_within_root_allowed);
+#endif
 
 #ifndef _WIN32
     /* Shell-free subprocess execution */

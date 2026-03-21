@@ -65,8 +65,28 @@ def main():
 
     output = stdout_data.decode("utf-8", errors="replace")
 
+    # Expect exactly 2 JSON responses: id:1 (initialize) and id:2 (tools/list).
+    # notifications/initialized has no id and produces no response.
+    lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
+    import json as _json
+    json_lines = []
+    for ln in lines:
+        try:
+            json_lines.append(_json.loads(ln))
+        except _json.JSONDecodeError:
+            pass
+
+    ids = {obj.get("id") for obj in json_lines if "id" in obj}
+    if 1 not in ids:
+        print("FAIL: missing initialize response (id:1) in server output")
+        print(f"Server output was:\n{output!r}")
+        sys.exit(1)
+    if 2 not in ids:
+        print("FAIL: missing tools/list response (id:2) in server output")
+        print(f"Server output was:\n{output!r}")
+        sys.exit(1)
     if "tools" not in output:
-        print("FAIL: tools/list response not found in server output")
+        print("FAIL: tools/list response body missing 'tools' key")
         print(f"Server output was:\n{output!r}")
         sys.exit(1)
 

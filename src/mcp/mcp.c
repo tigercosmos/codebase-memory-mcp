@@ -28,6 +28,7 @@
 #include <sys/unistd.h>
 #include <sys/poll.h>
 #include <poll.h>
+#include <fcntl.h>
 #endif
 #include <yyjson/yyjson.h>
 #include <stdint.h> // int64_t
@@ -2383,10 +2384,14 @@ int cbm_mcp_server_run(cbm_mcp_server_t *srv, FILE *in, FILE *out) {
          * empty kernel fd and block for STORE_IDLE_TIMEOUT_S seconds even
          * though the next messages are already in the FILE* buffer.
          *
-         * Fix (Unix): use a two-phase approach —
+         * Fix (Unix): use a three-phase approach —
          *   Phase 1: non-blocking poll (timeout=0) to check the kernel fd.
          *   Phase 2: if Phase 1 returns 0, peek the FILE* buffer via fgetc/
          *            ungetc to detect data buffered by a prior getline() call.
+         *            The fd is temporarily set O_NONBLOCK so fgetc() returns
+         *            immediately (EAGAIN → EOF + ferror) instead of blocking
+         *            when the FILE* buffer is empty, which would otherwise
+         *            bypass the Phase 3 idle eviction timeout.
          *   Phase 3: only if both phases confirm no data, do blocking poll. */
 #ifdef _WIN32
         /* Windows: WaitForSingleObject on stdin handle */
@@ -2414,14 +2419,26 @@ int cbm_mcp_server_run(cbm_mcp_server_t *srv, FILE *in, FILE *out) {
         if (pr == 0) {
             /* Raw fd appears empty. Check whether libc has already buffered
              * data from a previous over-read by peeking one byte via fgetc.
-             * If successful, push it back and proceed to getline without
-             * blocking. If not (EOF or EAGAIN), do the blocking poll. */
+             * IMPORTANT: temporarily set O_NONBLOCK so fgetc() returns
+             * immediately when the FILE* buffer AND kernel fd are both empty
+             * (EAGAIN → EOF + ferror). Without this, fgetc() on a blocking fd
+             * would block indefinitely, preventing the Phase 3 idle eviction
+             * timeout from ever firing. */
+            int saved_flags = fcntl(fd, F_GETFL);
+            if (saved_flags >= 0) {
+                (void)fcntl(fd, F_SETFL, saved_flags | O_NONBLOCK);
+            }
             int c = fgetc(in);
+            if (saved_flags >= 0) {
+                (void)fcntl(fd, F_SETFL, saved_flags); /* restore blocking */
+            }
             if (c == EOF) {
                 if (feof(in)) {
                     break; /* true EOF */
                 }
-                /* No buffered data and fd is empty — do blocking poll */
+                /* No buffered data (EAGAIN from non-blocking read) — clear the
+                 * ferror indicator set by EAGAIN, then do the blocking poll. */
+                clearerr(in);
                 pr = poll(&pfd, 1, STORE_IDLE_TIMEOUT_S * 1000);
                 if (pr < 0) {
                     break;

@@ -76,6 +76,23 @@ jobs:
       - name: "Layer 8: Vendored dependency integrity"
         run: scripts/security-vendored.sh
 
+  # ── Step 1c: CodeQL SAST gate (checks for open alerts) ──────
+  codeql-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check for open code scanning alerts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          ALERTS=$(gh api repos/${{ github.repository }}/code-scanning/alerts?state=open --jq 'length' 2>/dev/null || echo "0")
+          echo "Open code scanning alerts: $ALERTS"
+          if [ "$ALERTS" -gt 0 ]; then
+            echo "BLOCKED: $ALERTS open code scanning alert(s) found."
+            echo "Fix them before releasing: https://github.com/${{ github.repository }}/security/code-scanning"
+            exit 1
+          fi
+          echo "=== CodeQL gate passed (0 open alerts) ==="
+
   # ── Step 2: Unit tests (ASan + UBSan) ───────────────────────
   # macOS: use cc (Apple Clang) — GCC on macOS doesn't ship ASan runtime
   # Linux: use system gcc — full ASan/UBSan support
@@ -391,7 +408,7 @@ jobs:
 
   # ── Step 5: Create DRAFT release (not public yet) ─────────────
   release-draft:
-    needs: [smoke-unix, smoke-windows, security-static]
+    needs: [smoke-unix, smoke-windows, security-static, codeql-gate]
     runs-on: ubuntu-latest
     permissions:
       contents: write

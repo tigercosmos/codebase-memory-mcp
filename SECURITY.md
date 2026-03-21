@@ -28,6 +28,7 @@ This project implements multiple layers of security verification. Every release 
 - **All dangerous function calls** require a reviewed entry in `scripts/security-allowlist.txt`
 - **Time-bomb pattern detection** — scans for `time()`/`sleep()` near dangerous calls (could indicate delayed activation)
 - **MCP tool handler file read audit** — tracks file read count in `mcp.c` against an expected maximum (detects added file reads that could exfiltrate data through tool responses)
+- **CodeQL SAST** — static application security testing on every push (taint analysis, CWE detection, data flow tracking). Any open alert blocks the release.
 - **Native antivirus scanning** on every platform (any detection fails the build):
   - **Windows**: Windows Defender with ML heuristics — the same engine end users run
   - **Linux**: ClamAV with daily signature updates

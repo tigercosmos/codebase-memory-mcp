@@ -427,11 +427,25 @@ jobs:
       # ── SBOM generation ──────────────────────────────────────
       - name: Generate SBOM
         run: |
-          cat > sbom.json <<SBOMEOF
-          {"bomFormat":"CycloneDX","specVersion":"1.4","version":1,"metadata":{"component":{"type":"application","name":"codebase-memory-mcp","version":"${{ inputs.version }}"}},"components":[{"type":"library","name":"sqlite3","version":"3.49.1","description":"Vendored SQLite amalgamation"},{"type":"library","name":"yyjson","version":"0.10.0","description":"Fast JSON parser"},{"type":"library","name":"mongoose","version":"7.16","description":"Embedded HTTP server"},{"type":"library","name":"mimalloc","version":"2.1.7","description":"Memory allocator"},{"type":"library","name":"xxhash","version":"0.8.2","description":"Fast hash function"},{"type":"library","name":"tre","version":"0.8.0","description":"POSIX regex (Windows)"},{"type":"library","name":"tree-sitter","version":"0.24.4","description":"AST parser runtime (64 grammars)"}]}
-          SBOMEOF
-          # Trim leading whitespace from heredoc
-          python3 -c "import json; d=json.load(open('sbom.json')); json.dump(d,open('sbom.json','w'),indent=2)"
+          python3 -c "
+          import json
+          sbom = {
+            'bomFormat': 'CycloneDX',
+            'specVersion': '1.4',
+            'version': 1,
+            'metadata': {'component': {'type': 'application', 'name': 'codebase-memory-mcp', 'version': '${{ inputs.version }}'}},
+            'components': [
+              {'type': 'library', 'name': 'sqlite3', 'version': '3.49.1', 'description': 'Vendored SQLite amalgamation'},
+              {'type': 'library', 'name': 'yyjson', 'version': '0.10.0', 'description': 'Fast JSON parser'},
+              {'type': 'library', 'name': 'mongoose', 'version': '7.16', 'description': 'Embedded HTTP server'},
+              {'type': 'library', 'name': 'mimalloc', 'version': '2.1.7', 'description': 'Memory allocator'},
+              {'type': 'library', 'name': 'xxhash', 'version': '0.8.2', 'description': 'Fast hash function'},
+              {'type': 'library', 'name': 'tre', 'version': '0.8.0', 'description': 'POSIX regex (Windows)'},
+              {'type': 'library', 'name': 'tree-sitter', 'version': '0.24.4', 'description': 'AST parser runtime (64 grammars)'}
+            ]
+          }
+          json.dump(sbom, open('sbom.json', 'w'), indent=2)
+          "
 
       - name: Attest SBOM
         uses: actions/attest-sbom@10926c72720ffc3f7b666661c8e55b1344e2a365 # v2

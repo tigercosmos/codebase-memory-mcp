@@ -7,6 +7,7 @@
 #include "cli/cli.h"
 #include "foundation/compat.h"
 #include "foundation/str_util.h"
+#include "foundation/platform.h"
 
 // the correct standard headers are included below but clang-tidy doesn't map them.
 #include <ctype.h>
@@ -1685,7 +1686,7 @@ unsigned char *cbm_extract_binary_from_targz(const unsigned char *data, int data
 static const char *get_cache_dir(const char *home_dir) {
     static char buf[1024];
     if (!home_dir) {
-        home_dir = getenv("HOME");
+        home_dir = cbm_get_home_dir();
     }
     if (!home_dir) {
         return NULL;
@@ -1909,10 +1910,9 @@ int cbm_cmd_config(int argc, char **argv) {
         return 0;
     }
 
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
-    const char *home = getenv("HOME");
+    const char *home = cbm_get_home_dir();
     if (!home) {
-        fprintf(stderr, "error: HOME not set\n");
+        fprintf(stderr, "error: HOME not set (use USERPROFILE on Windows)\n");
         return 1;
     }
 
@@ -2140,9 +2140,9 @@ int cbm_cmd_install(int argc, char **argv) {
         }
     }
 
-    const char *home = getenv("HOME");
+    const char *home = cbm_get_home_dir();
     if (!home) {
-        fprintf(stderr, "error: HOME not set\n");
+        fprintf(stderr, "error: HOME not set (use USERPROFILE on Windows)\n");
         return 1;
     }
 
@@ -2448,9 +2448,9 @@ int cbm_cmd_uninstall(int argc, char **argv) {
         }
     }
 
-    const char *home = getenv("HOME");
+    const char *home = cbm_get_home_dir();
     if (!home) {
-        fprintf(stderr, "error: HOME not set\n");
+        fprintf(stderr, "error: HOME not set (use USERPROFILE on Windows)\n");
         return 1;
     }
 
@@ -2671,9 +2671,9 @@ int cbm_cmd_uninstall(int argc, char **argv) {
 int cbm_cmd_update(int argc, char **argv) {
     parse_auto_answer(argc, argv);
 
-    const char *home = getenv("HOME");
+    const char *home = cbm_get_home_dir();
     if (!home) {
-        fprintf(stderr, "error: HOME not set\n");
+        fprintf(stderr, "error: HOME not set (use USERPROFILE on Windows)\n");
         return 1;
     }
 

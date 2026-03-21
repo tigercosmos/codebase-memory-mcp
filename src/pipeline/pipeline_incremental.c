@@ -265,6 +265,10 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
     cbm_log_info("pass.timing", "pass", "incr_semantic", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(t)));
 
+    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+    cbm_pipeline_pass_k8s(&ctx, changed_files, ci);
+    cbm_log_info("pass.timing", "pass", "incr_k8s", "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
+
     /* Merge new nodes/edges from gbuf into disk DB */
     int new_nodes = cbm_gbuf_node_count(gbuf);
     int new_edges = cbm_gbuf_edge_count(gbuf);

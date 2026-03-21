@@ -5079,6 +5079,141 @@ TEST(incremental_new_file_added) {
     PASS();
 }
 
+TEST(incremental_k8s_manifest_indexed) {
+    /* Full index with a k8s manifest, then add a new manifest via incremental.
+     * Verifies that cbm_pipeline_pass_k8s() runs during incremental re-index. */
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_k8s_incr_XXXXXX");
+    if (!cbm_mkdtemp(tmpdir)) {
+        SKIP("tmpdir");
+    }
+    char dbpath[512];
+    snprintf(dbpath, sizeof(dbpath), "%s/test.db", tmpdir);
+    char path[512];
+    FILE *f;
+
+    /* Initial manifest */
+    snprintf(path, sizeof(path), "%s/deploy.yaml", tmpdir);
+    f = fopen(path, "w");
+    ASSERT_NOT_NULL(f);
+    fprintf(f, "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: my-app\n");
+    fclose(f);
+
+    /* Full index */
+    cbm_pipeline_t *p = cbm_pipeline_new(tmpdir, dbpath, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    char *project = strdup(cbm_pipeline_project_name(p));
+    cbm_pipeline_free(p);
+
+    /* Verify Resource node created by full index */
+    cbm_store_t *s = cbm_store_open_path(dbpath);
+    ASSERT_NOT_NULL(s);
+    cbm_node_t *nodes = NULL;
+    int count = 0;
+    cbm_store_find_nodes_by_label(s, project, "Resource", &nodes, &count);
+    ASSERT_GT(count, 0);
+    cbm_store_free_nodes(nodes, count);
+    cbm_store_close(s);
+
+    /* Add a second manifest — incremental should pick it up */
+    snprintf(path, sizeof(path), "%s/svc.yaml", tmpdir);
+    f = fopen(path, "w");
+    ASSERT_NOT_NULL(f);
+    fprintf(f, "apiVersion: v1\nkind: Service\nmetadata:\n  name: my-svc\n");
+    fclose(f);
+
+    /* Incremental re-index */
+    p = cbm_pipeline_new(tmpdir, dbpath, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    cbm_pipeline_free(p);
+
+    /* Verify both Resource nodes now present */
+    s = cbm_store_open_path(dbpath);
+    ASSERT_NOT_NULL(s);
+    nodes = NULL;
+    count = 0;
+    cbm_store_find_nodes_by_label(s, project, "Resource", &nodes, &count);
+    ASSERT_GTE(count, 2);
+    cbm_store_free_nodes(nodes, count);
+    cbm_store_close(s);
+
+    free(project);
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmpdir);
+    (void)system(cmd);
+    PASS();
+}
+
+TEST(incremental_kustomize_module_indexed) {
+    /* Verifies that a kustomization.yaml added after the initial full index
+     * gets a Module node via the incremental k8s pass. */
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_kust_incr_XXXXXX");
+    if (!cbm_mkdtemp(tmpdir)) {
+        SKIP("tmpdir");
+    }
+    char dbpath[512];
+    snprintf(dbpath, sizeof(dbpath), "%s/test.db", tmpdir);
+    char path[512];
+    FILE *f;
+
+    /* Initial resource manifest (gives full index something to find) */
+    snprintf(path, sizeof(path), "%s/deploy.yaml", tmpdir);
+    f = fopen(path, "w");
+    ASSERT_NOT_NULL(f);
+    fprintf(f, "apiVersion: apps/v1\nkind: Deployment\nmetadata:\n  name: my-app\n");
+    fclose(f);
+
+    /* Full index */
+    cbm_pipeline_t *p = cbm_pipeline_new(tmpdir, dbpath, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    char *project = strdup(cbm_pipeline_project_name(p));
+    cbm_pipeline_free(p);
+
+    /* Add kustomization.yaml */
+    snprintf(path, sizeof(path), "%s/kustomization.yaml", tmpdir);
+    f = fopen(path, "w");
+    ASSERT_NOT_NULL(f);
+    fprintf(f, "apiVersion: kustomize.config.k8s.io/v1beta1\n"
+               "kind: Kustomization\n"
+               "resources:\n"
+               "  - deploy.yaml\n");
+    fclose(f);
+
+    /* Incremental re-index */
+    p = cbm_pipeline_new(tmpdir, dbpath, CBM_MODE_FULL);
+    ASSERT_NOT_NULL(p);
+    ASSERT_EQ(cbm_pipeline_run(p), 0);
+    cbm_pipeline_free(p);
+
+    /* Verify Module node created for the kustomization overlay */
+    cbm_store_t *s = cbm_store_open_path(dbpath);
+    ASSERT_NOT_NULL(s);
+    cbm_node_t *nodes = NULL;
+    int count = 0;
+    cbm_store_find_nodes_by_label(s, project, "Module", &nodes, &count);
+    bool found_kust = false;
+    for (int i = 0; i < count; i++) {
+        if (nodes[i].properties_json &&
+            strstr(nodes[i].properties_json, "kustomize")) {
+            found_kust = true;
+            break;
+        }
+    }
+    cbm_store_free_nodes(nodes, count);
+    cbm_store_close(s);
+    ASSERT_TRUE(found_kust);
+
+    free(project);
+    char cmd[512];
+    snprintf(cmd, sizeof(cmd), "rm -rf '%s'", tmpdir);
+    (void)system(cmd);
+    PASS();
+}
+
 SUITE(pipeline) {
     /* Lifecycle */
     RUN_TEST(pipeline_create_free);
@@ -5269,4 +5404,6 @@ SUITE(pipeline) {
     RUN_TEST(incremental_detects_changed_file);
     RUN_TEST(incremental_detects_deleted_file);
     RUN_TEST(incremental_new_file_added);
+    RUN_TEST(incremental_k8s_manifest_indexed);
+    RUN_TEST(incremental_kustomize_module_indexed);
 }

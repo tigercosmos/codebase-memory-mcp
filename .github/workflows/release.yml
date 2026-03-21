@@ -683,7 +683,7 @@ jobs:
           REPORT+=$'```\ncosign verify-blob --bundle <file>.bundle <file>\n```\n\n'
 
           # Native AV scans
-          REPORT+=$'**Native antivirus scans** — every binary scanned during CI build:\n'
+          REPORT+=$'**Native antivirus scans** — all binaries passed these scans before this release was created (any detection would have blocked the release):\n'
           REPORT+=$'- Windows: Windows Defender with ML heuristics (the same engine end users run)\n'
           REPORT+=$'- Linux: ClamAV with daily signature updates\n'
           REPORT+=$'- macOS: ClamAV with daily signature updates\n\n'

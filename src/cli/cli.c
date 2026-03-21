@@ -6,6 +6,7 @@
  */
 #include "cli/cli.h"
 #include "foundation/compat.h"
+#include "foundation/str_util.h"
 
 // the correct standard headers are included below but clang-tidy doesn't map them.
 #include <ctype.h>
@@ -15,6 +16,7 @@
 #define CBM_VERSION "dev"
 #endif
 #include <errno.h>  // EEXIST
+#include <fcntl.h>  // open, O_WRONLY, O_CREAT, O_TRUNC
 #include <stdint.h> // uintptr_t
 #include <stdio.h>
 #include <stdlib.h>
@@ -2784,22 +2786,36 @@ int cbm_cmd_update(int argc, char **argv) {
             return 1;
         }
 
+        /* Open with final permissions atomically (no TOCTOU between write and chmod) */
+#ifndef _WIN32
+        int fd = open(bin_dest, O_WRONLY | O_CREAT | O_TRUNC, 0755);
+        if (fd < 0) {
+            fprintf(stderr, "error: cannot write to %s\n", bin_dest);
+            free(bin_data);
+            return 1;
+        }
+        FILE *out = fdopen(fd, "wb");
+#else
         FILE *out = fopen(bin_dest, "wb");
+#endif
         if (!out) {
             fprintf(stderr, "error: cannot write to %s\n", bin_dest);
             free(bin_data);
+#ifndef _WIN32
+            close(fd);
+#endif
             return 1;
         }
         fwrite(bin_data, 1, (size_t)bin_len, out);
         fclose(out);
         free(bin_data);
-
-        /* Make executable */
-#ifndef _WIN32
-        chmod(bin_dest, 0755);
-#endif
     } else {
-        /* Windows: unzip */
+        /* Windows: unzip — validate paths before shell interpolation */
+        if (!cbm_validate_shell_arg(bin_dir) || !cbm_validate_shell_arg(tmp_archive)) {
+            fprintf(stderr, "error: path contains unsafe characters\n");
+            cbm_unlink(tmp_archive);
+            return 1;
+        }
         snprintf(cmd, sizeof(cmd), "unzip -o -d '%s' '%s' 2>/dev/null", bin_dir, tmp_archive);
         // NOLINTNEXTLINE(cert-env33-c) — intentional CLI subprocess for extraction
         rc = system(cmd);
@@ -2825,9 +2841,11 @@ int cbm_cmd_update(int argc, char **argv) {
 
     /* Step 7: Verify new version */
     printf("\nUpdate complete. Verifying:\n");
-    snprintf(cmd, sizeof(cmd), "'%s' --version", bin_dest);
-    // NOLINTNEXTLINE(cert-env33-c,clang-analyzer-optin.taint.GenericTaint)
-    (void)system(cmd);
+    if (cbm_validate_shell_arg(bin_dest)) {
+        snprintf(cmd, sizeof(cmd), "'%s' --version", bin_dest);
+        // NOLINTNEXTLINE(cert-env33-c,clang-analyzer-optin.taint.GenericTaint)
+        (void)system(cmd);
+    }
 
     printf("\nAll project indexes were cleared. They will be rebuilt\n");
     printf("automatically when you next use the MCP server.\n");

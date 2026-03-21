@@ -306,7 +306,10 @@ jobs:
         if: matrix.variant == 'standard' && startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq clamav > /dev/null 2>&1
-          sudo freshclam --quiet 2>/dev/null || true
+          sudo sed -i 's/^Example/#Example/' /etc/clamav/freshclam.conf 2>/dev/null || true
+          grep -q "DatabaseMirror" /etc/clamav/freshclam.conf 2>/dev/null || \
+            echo "DatabaseMirror database.clamav.net" | sudo tee -a /etc/clamav/freshclam.conf > /dev/null
+          sudo freshclam --quiet
           echo "=== ClamAV scan ==="
           clamscan --no-summary ./codebase-memory-mcp
           echo "=== ClamAV: clean ==="
@@ -315,7 +318,13 @@ jobs:
         if: matrix.variant == 'standard' && startsWith(matrix.os, 'macos')
         run: |
           brew install clamav > /dev/null 2>&1
-          freshclam --quiet 2>/dev/null || true
+          CLAMAV_ETC=$(brew --prefix)/etc/clamav
+          if [ ! -f "$CLAMAV_ETC/freshclam.conf" ]; then
+            cp "$CLAMAV_ETC/freshclam.conf.sample" "$CLAMAV_ETC/freshclam.conf" 2>/dev/null || true
+            sed -i '' 's/^Example/#Example/' "$CLAMAV_ETC/freshclam.conf" 2>/dev/null || true
+            echo "DatabaseMirror database.clamav.net" >> "$CLAMAV_ETC/freshclam.conf"
+          fi
+          freshclam --quiet
           echo "=== ClamAV scan (macOS) ==="
           clamscan --no-summary ./codebase-memory-mcp
           echo "=== ClamAV: clean ==="

@@ -2810,15 +2810,9 @@ int cbm_cmd_update(int argc, char **argv) {
         fclose(out);
         free(bin_data);
     } else {
-        /* Windows: unzip — validate paths before shell interpolation */
-        if (!cbm_validate_shell_arg(bin_dir) || !cbm_validate_shell_arg(tmp_archive)) {
-            fprintf(stderr, "error: path contains unsafe characters\n");
-            cbm_unlink(tmp_archive);
-            return 1;
-        }
-        snprintf(cmd, sizeof(cmd), "unzip -o -d '%s' '%s' 2>/dev/null", bin_dir, tmp_archive);
-        // NOLINTNEXTLINE(cert-env33-c) — intentional CLI subprocess for extraction
-        rc = system(cmd);
+        /* Zip extraction: exec unzip directly without shell interpretation */
+        const char *unzip_argv[] = {"unzip", "-o", "-d", bin_dir, tmp_archive, NULL};
+        rc = cbm_exec_no_shell(unzip_argv);
         cbm_unlink(tmp_archive);
         if (rc != 0) {
             fprintf(stderr, "error: extraction failed\n");
@@ -2839,12 +2833,11 @@ int cbm_cmd_update(int argc, char **argv) {
     int skill_count = cbm_install_skills(skills_dir, true, false);
     printf("Updated %d skill(s).\n", skill_count);
 
-    /* Step 7: Verify new version */
+    /* Step 7: Verify new version (exec directly, no shell interpretation) */
     printf("\nUpdate complete. Verifying:\n");
-    if (cbm_validate_shell_arg(bin_dest)) {
-        snprintf(cmd, sizeof(cmd), "'%s' --version", bin_dest);
-        // NOLINTNEXTLINE(cert-env33-c,clang-analyzer-optin.taint.GenericTaint)
-        (void)system(cmd);
+    {
+        const char *ver_argv[] = {bin_dest, "--version", NULL};
+        (void)cbm_exec_no_shell(ver_argv);
     }
 
     printf("\nAll project indexes were cleared. They will be rebuilt\n");

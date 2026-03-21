@@ -120,11 +120,30 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          ALERTS=$(gh api repos/${{ github.repository }}/code-scanning/alerts?state=open --jq 'length' 2>/dev/null || echo "0")
-          echo "Open code scanning alerts: $ALERTS"
+          # Wait for GitHub to finish processing alert state changes.
+          # There is a race between CodeQL marking the workflow as "completed"
+          # and the alerts API reflecting new/closed alerts from that scan.
+          echo "Waiting 60s for alert API to settle after CodeQL completion..."
+          sleep 60
+
+          # Poll alerts twice with a gap to confirm the count is stable
+          ALERTS1=$(gh api 'repos/${{ github.repository }}/code-scanning/alerts?state=open' --jq 'length' 2>/dev/null || echo "0")
+          echo "Open alerts (check 1): $ALERTS1"
+          sleep 15
+          ALERTS2=$(gh api 'repos/${{ github.repository }}/code-scanning/alerts?state=open' --jq 'length' 2>/dev/null || echo "0")
+          echo "Open alerts (check 2): $ALERTS2"
+
+          # Use the higher count (conservative — if either check sees alerts, block)
+          ALERTS=$ALERTS2
+          if [ "$ALERTS1" -gt "$ALERTS2" ]; then
+            ALERTS=$ALERTS1
+          fi
+
           if [ "$ALERTS" -gt 0 ]; then
             echo "BLOCKED: $ALERTS open code scanning alert(s) found."
-            echo "Fix them before releasing: https://github.com/${{ github.repository }}/security/code-scanning"
+            gh api 'repos/${{ github.repository }}/code-scanning/alerts?state=open' \
+              --jq '.[] | "  #\(.number) [\(.rule.security_severity_level // .rule.severity)] \(.rule.id) — \(.most_recent_instance.location.path):\(.most_recent_instance.location.start_line)"' 2>/dev/null || true
+            echo "Fix them: https://github.com/${{ github.repository }}/security/code-scanning"
             exit 1
           fi
           echo "=== CodeQL gate passed (0 open alerts) ==="

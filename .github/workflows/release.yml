@@ -339,8 +339,8 @@ jobs:
         shell: msys2 {0}
         run: scripts/security-install.sh ./codebase-memory-mcp.exe
 
-  # ── Step 5: Create GitHub release ───────────────────────────
-  release:
+  # ── Step 5: Create DRAFT release (not public yet) ─────────────
+  release-draft:
     needs: [smoke-unix, smoke-windows, security-static]
     runs-on: ubuntu-latest
     permissions:
@@ -361,9 +361,6 @@ jobs:
         run: sha256sum *.tar.gz *.zip > checksums.txt
 
       # ── Artifact attestations (SLSA provenance) ──────────────
-      # Cryptographically proves each binary was built by this
-      # GitHub Actions workflow from this repo. Verifiable with:
-      #   gh attestation verify <file> --repo DeusData/codebase-memory-mcp
       - name: Attest build provenance (tar.gz)
         uses: actions/attest-build-provenance@v2
         with:
@@ -380,7 +377,6 @@ jobs:
           subject-path: 'checksums.txt'
 
       # ── SBOM generation ──────────────────────────────────────
-      # Software Bill of Materials listing all vendored dependencies.
       - name: Generate SBOM
         run: |
           cat > sbom.json << 'SBOMEOF'
@@ -414,8 +410,6 @@ jobs:
           sbom-path: 'sbom.json'
 
       # ── Sigstore cosign signing ──────────────────────────────
-      # Keyless signing via GitHub OIDC identity. Verifiable with:
-      #   cosign verify-blob --bundle <file>.bundle <file>
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
 
@@ -425,7 +419,7 @@ jobs:
             cosign sign-blob --yes --bundle "${f}.bundle" "$f"
           done
 
-      # ── Create release ───────────────────────────────────────
+      # ── Create DRAFT release (not visible to users yet) ──────
       - name: Delete existing release
         if: ${{ inputs.replace }}
         env:
@@ -443,6 +437,7 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ inputs.version }}
+          draft: true
           files: |
             *.tar.gz
             *.zip
@@ -452,11 +447,12 @@ jobs:
           body: ${{ inputs.release_notes || '' }}
           generate_release_notes: ${{ inputs.release_notes == '' }}
 
-  # ── Step 6: Post-release security verification ───────────────
-  # Scans binaries with VirusTotal, runs OpenSSF Scorecard,
-  # and appends all results to the release notes.
+  # ── Step 6: Verify draft release ─────────────────────────────
+  # Scans binaries with VirusTotal, runs OpenSSF Scorecard.
+  # If verification passes, appends results and publishes.
+  # If it fails, the draft stays unpublished.
   verify:
-    needs: [release]
+    needs: [release-draft]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -468,7 +464,7 @@ jobs:
           persist-credentials: false
 
       # ── VirusTotal scan ──────────────────────────────────────
-      - name: Download release binaries
+      - name: Download draft release binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
@@ -503,7 +499,6 @@ jobs:
       - name: Extract Scorecard score
         id: score
         run: |
-          # Extract overall score from SARIF (properties.score)
           SCORE=$(python3 -c "
           import json, sys
           with open('scorecard.sarif') as f:
@@ -514,8 +509,8 @@ jobs:
           echo "score=$SCORE" >> "$GITHUB_OUTPUT"
           echo "OpenSSF Scorecard: $SCORE/10"
 
-      # ── Append all results to release notes ──────────────────
-      - name: Append security verification to release notes
+      # ── Append results + publish ─────────────────────────────
+      - name: Append security verification and publish release
         env:
           VT_ANALYSIS: ${{ steps.virustotal.outputs.analysis }}
           SCORECARD_SCORE: ${{ steps.score.outputs.score }}
@@ -557,4 +552,7 @@ jobs:
           EXISTING=$(gh release view "$VERSION" --json body --jq '.body' --repo "$GITHUB_REPOSITORY")
           printf '%s\n\n%s\n' "$EXISTING" "$REPORT" | gh release edit "$VERSION" --notes-file - --repo "$GITHUB_REPOSITORY"
 
-          echo "=== Security verification appended to release notes ==="
+          # ── Publish: promote draft to public release ─────────
+          gh release edit "$VERSION" --draft=false --repo "$GITHUB_REPOSITORY"
+
+          echo "=== Release verified and published ==="

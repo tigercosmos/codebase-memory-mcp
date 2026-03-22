@@ -63,7 +63,7 @@ check_handler() {
 
 # ── Step 3: Test all 5 guarded handlers ───────────────────────────
 check_handler "search_graph" "{\"project\":\"$FAKE_PROJECT\",\"name_pattern\":\".*\"}"
-check_handler "query_graph"  "{\"project\":\"$FAKE_PROJECT\",\"cypher\":\"MATCH (n) RETURN n LIMIT 1\"}"
+check_handler "query_graph"  "{\"project\":\"$FAKE_PROJECT\",\"query\":\"MATCH (n) RETURN n LIMIT 1\"}"
 check_handler "get_graph_schema" "{\"project\":\"$FAKE_PROJECT\"}"
 check_handler "trace_call_path" "{\"project\":\"$FAKE_PROJECT\",\"function_name\":\"main\",\"direction\":\"both\",\"depth\":1}"
 check_handler "get_code_snippet" "{\"project\":\"$FAKE_PROJECT\",\"qualified_name\":\"main\"}"

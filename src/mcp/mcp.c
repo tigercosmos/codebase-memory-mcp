@@ -1065,7 +1065,6 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
         return not_indexed;
     }
 
-
     cbm_schema_info_t schema = {0};
     cbm_store_get_schema(store, project, &schema);
 
@@ -1635,7 +1634,7 @@ static char *handle_get_code_snippet(cbm_mcp_server_t *srv, const char *args) {
     if (!store) {
         free(qn);
         free(project);
-        return cbm_mcp_text_result("no project loaded — run index_repository first", true);
+        return cbm_mcp_text_result("{\"error\":\"no project loaded\"}", true);
     }
 
     char *not_indexed = verify_project_indexed(store, project);

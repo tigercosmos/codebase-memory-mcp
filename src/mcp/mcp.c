@@ -745,10 +745,35 @@ static char *handle_list_projects(cbm_mcp_server_t *srv, const char *args) {
     return result;
 }
 
+/* verify_project_indexed — returns a heap-allocated error JSON string when the
+ * named project has not been indexed yet, or NULL when the project exists.
+ * resolve_store uses SQLITE_OPEN_CREATE so store is always non-NULL even for
+ * unindexed projects; this check catches that silent-empty case.
+ * Callers that receive a non-NULL return value must free(project) themselves
+ * before returning the error string. */
+static char *verify_project_indexed(cbm_store_t *store, const char *project) {
+    if (!project) {
+        return NULL; /* default project — always exists */
+    }
+    cbm_project_t proj_check = {0};
+    if (cbm_store_get_project(store, project, &proj_check) != CBM_STORE_OK) {
+        return cbm_mcp_text_result(
+            "{\"error\":\"project not indexed — run index_repository first\"}", true);
+    }
+    cbm_project_free_fields(&proj_check);
+    return NULL;
+}
+
 static char *handle_get_graph_schema(cbm_mcp_server_t *srv, const char *args) {
     char *project = cbm_mcp_get_string_arg(args, "project");
     cbm_store_t *store = resolve_store(srv, project);
     REQUIRE_STORE(store, project);
+
+    char *not_indexed = verify_project_indexed(store, project);
+    if (not_indexed) {
+        free(project);
+        return not_indexed;
+    }
 
     cbm_schema_info_t schema = {0};
     cbm_store_get_schema(store, project, &schema);
@@ -807,6 +832,13 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
     char *project = cbm_mcp_get_string_arg(args, "project");
     cbm_store_t *store = resolve_store(srv, project);
     REQUIRE_STORE(store, project);
+
+    char *not_indexed = verify_project_indexed(store, project);
+    if (not_indexed) {
+        free(project);
+        return not_indexed;
+    }
+
     char *label = cbm_mcp_get_string_arg(args, "label");
     char *name_pattern = cbm_mcp_get_string_arg(args, "name_pattern");
     char *file_pattern = cbm_mcp_get_string_arg(args, "file_pattern");
@@ -880,6 +912,13 @@ static char *handle_query_graph(cbm_mcp_server_t *srv, const char *args) {
         free(project);
         free(query);
         return cbm_mcp_text_result("{\"error\":\"no project loaded\"}", true);
+    }
+
+    char *not_indexed = verify_project_indexed(store, project);
+    if (not_indexed) {
+        free(project);
+        free(query);
+        return not_indexed;
     }
 
     cbm_cypher_result_t result = {0};
@@ -1012,6 +1051,13 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
     cbm_store_t *store = resolve_store(srv, project);
     REQUIRE_STORE(store, project);
 
+    char *not_indexed = verify_project_indexed(store, project);
+    if (not_indexed) {
+        free(project);
+        return not_indexed;
+    }
+
+
     cbm_schema_info_t schema = {0};
     cbm_store_get_schema(store, project, &schema);
 
@@ -1085,6 +1131,15 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
         free(direction);
         return cbm_mcp_text_result("{\"error\":\"no project loaded\"}", true);
     }
+
+    char *not_indexed = verify_project_indexed(store, project);
+    if (not_indexed) {
+        free(func_name);
+        free(project);
+        free(direction);
+        return not_indexed;
+    }
+
     if (!direction) {
         direction = heap_strdup("both");
     }
@@ -1573,6 +1628,13 @@ static char *handle_get_code_snippet(cbm_mcp_server_t *srv, const char *args) {
         free(qn);
         free(project);
         return cbm_mcp_text_result("no project loaded — run index_repository first", true);
+    }
+
+    char *not_indexed = verify_project_indexed(store, project);
+    if (not_indexed) {
+        free(qn);
+        free(project);
+        return not_indexed;
     }
 
     /* Default to current project (same as all other tools) */

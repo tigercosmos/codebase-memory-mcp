@@ -642,9 +642,14 @@ static cbm_store_t *resolve_store(cbm_mcp_server_t *srv, const char *project) {
     char path[1024];
     project_db_path(project, path, sizeof(path));
     srv->store = cbm_store_open_path_query(path);
-    srv->owns_store = true;
-    free(srv->current_project);
-    srv->current_project = heap_strdup(project);
+    if (srv->store) {
+        /* Only update ownership and cached project name on successful open.
+         * When the file is absent, store is NULL and current_project retains
+         * its previous value so the next call correctly retries the open. */
+        srv->owns_store = true;
+        free(srv->current_project);
+        srv->current_project = heap_strdup(project);
+    }
 
     return srv->store;
 }
@@ -748,8 +753,10 @@ static char *handle_list_projects(cbm_mcp_server_t *srv, const char *args) {
 
 /* verify_project_indexed — returns a heap-allocated error JSON string when the
  * named project has not been indexed yet, or NULL when the project exists.
- * resolve_store uses SQLITE_OPEN_CREATE so store is always non-NULL even for
- * unindexed projects; this check catches that silent-empty case.
+ * resolve_store uses cbm_store_open_path_query (no SQLITE_OPEN_CREATE), so
+ * store is NULL for missing .db files (REQUIRE_STORE fires first). This
+ * function catches the remaining case: a .db file exists but has no indexed
+ * nodes (e.g., an empty or half-initialised project).
  * Callers that receive a non-NULL return value must free(project) themselves
  * before returning the error string. */
 static char *verify_project_indexed(cbm_store_t *store, const char *project) {

@@ -85,14 +85,30 @@ Language support is split between two layers:
 4. Add a test case in `tests/test_pipeline.c` for integration-level fixes
 5. Verify with a real open-source repo
 
+## Commit Format
+
+Use conventional commits: `type(scope): description`
+
+| Type | When to use |
+|------|-------------|
+| `feat` | New feature or capability |
+| `fix` | Bug fix |
+| `test` | Adding or updating tests |
+| `refactor` | Code change that neither fixes a bug nor adds a feature |
+| `perf` | Performance improvement |
+| `docs` | Documentation only |
+| `chore` | Build scripts, CI, dependency updates |
+
+Examples: `fix(store): set busy_timeout before WAL`, `feat(cli): add --progress flag`
+
 ## Pull Request Guidelines
 
+- **One issue per PR.** Each PR must address exactly one bug, one feature, or one refactor. Do not bundle multiple fixes or feature additions into a single PR. If your change touches multiple areas, split it into separate PRs.
+- **Open an issue first.** Every PR should reference a tracking issue (`Fixes #N` or `Closes #N`). This ensures the change is discussed before code is written.
 - **C code only** — this project was rewritten from Go to pure C in v0.5.0. Go PRs will be acknowledged and potentially ported, but cannot be merged directly.
-- One logical change per PR — don't bundle unrelated features
 - Include tests for new functionality
 - Run `scripts/test.sh` and `scripts/lint.sh` before submitting
 - Keep PRs focused — avoid unrelated reformatting or refactoring
-- Reference the issue number in your PR description
 
 ## Security
 

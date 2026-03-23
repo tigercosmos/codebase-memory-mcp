@@ -17,6 +17,7 @@
 #include "graph_buffer/graph_buffer.h"
 #include "store/store.h"
 #include "discover/discover.h"
+#include "discover/userconfig.h"
 #include "foundation/platform.h"
 #include "foundation/compat_fs.h"
 #include "foundation/log.h"
@@ -44,6 +45,9 @@ struct cbm_pipeline {
     /* Indexing state (set during run) */
     cbm_gbuf_t *gbuf;
     cbm_registry_t *registry;
+
+    /* User-defined extension overrides (loaded once per run) */
+    cbm_userconfig_t *userconfig;
 };
 
 /* ── Timing helper ──────────────────────────────────────────────── */
@@ -97,6 +101,12 @@ void cbm_pipeline_free(cbm_pipeline_t *p) {
     free(p->db_path);
     free(p->project_name);
     /* gbuf, store, registry freed during/after run */
+    /* Defensively free userconfig in case run() was never called or panicked */
+    if (p->userconfig) {
+        cbm_set_user_lang_config(NULL);
+        cbm_userconfig_free(p->userconfig);
+        p->userconfig = NULL;
+    }
     free(p);
 }
 
@@ -303,6 +313,10 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
     struct timespec t0;
     cbm_clock_gettime(CLOCK_MONOTONIC, &t0);
 
+    /* Load user-defined extension overrides (fail-open: NULL on error) */
+    p->userconfig = cbm_userconfig_load(p->repo_path);
+    cbm_set_user_lang_config(p->userconfig);
+
     /* Phase 1: Discover files */
     cbm_discover_opts_t opts = {
         .mode = p->mode,
@@ -314,6 +328,10 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
     int rc = cbm_discover(p->repo_path, &opts, &files, &file_count);
     if (rc != 0) {
         cbm_log_error("pipeline.err", "phase", "discover", "rc", itoa_buf(rc));
+        cbm_discover_free(files, file_count);
+        cbm_set_user_lang_config(NULL);
+        cbm_userconfig_free(p->userconfig);
+        p->userconfig = NULL;
         return -1;
     }
     cbm_log_info("pipeline.discover", "files", itoa_buf(file_count), "elapsed_ms",
@@ -321,6 +339,9 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
 
     if (check_cancel(p)) {
         cbm_discover_free(files, file_count);
+        cbm_set_user_lang_config(NULL);
+        cbm_userconfig_free(p->userconfig);
+        p->userconfig = NULL;
         return -1;
     }
 
@@ -494,6 +515,16 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
             rc = -1;
             goto cleanup;
         }
+
+        cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+        rc = cbm_pipeline_pass_k8s(&ctx, files, file_count);
+        if (rc != 0) { /* log warning, continue */
+        }
+        cbm_log_info("pass.timing", "pass", "k8s", "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
+        if (check_cancel(p)) {
+            rc = -1;
+            goto cleanup;
+        }
     } else {
         cbm_log_info("pipeline.mode", "mode", "sequential", "files", itoa_buf(file_count));
 
@@ -513,6 +544,16 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
         }
         cbm_log_info("pass.timing", "pass", "definitions", "elapsed_ms",
                      itoa_buf((int)elapsed_ms(t)));
+        if (check_cancel(p)) {
+            rc = -1;
+            goto seq_cleanup;
+        }
+
+        cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+        rc = cbm_pipeline_pass_k8s(&ctx, files, file_count);
+        if (rc != 0) { /* log warning, continue */
+        }
+        cbm_log_info("pass.timing", "pass", "k8s", "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
         if (check_cancel(p)) {
             rc = -1;
             goto seq_cleanup;
@@ -759,5 +800,9 @@ cleanup:
     p->gbuf = NULL;
     cbm_registry_free(p->registry);
     p->registry = NULL;
+    /* Clear and free user extension config */
+    cbm_set_user_lang_config(NULL);
+    cbm_userconfig_free(p->userconfig);
+    p->userconfig = NULL;
     return rc;
 }

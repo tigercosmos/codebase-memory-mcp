@@ -14,6 +14,7 @@
  */
 #include "test_framework.h"
 #include <store/store.h>
+#include <foundation/compat.h>
 #include <sqlite3.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -43,7 +44,7 @@ static char *get_journal_mode(const char *db_path) {
 }
 
 static void make_temp_path(char *buf, size_t n) {
-    snprintf(buf, n, "/tmp/cmm_bulk_test_%d.db", (int)getpid());
+    snprintf(buf, n, "%s/cmm_bulk_test_%d.db", cbm_tmpdir(), (int)getpid());
 }
 
 static void cleanup_db(const char *path) {

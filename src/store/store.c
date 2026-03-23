@@ -370,10 +370,9 @@ cbm_store_t *cbm_store_open(const char *project) {
         return NULL;
     }
     /* Build path: ~/.cache/codebase-memory-mcp/<project>.db */
-    const char *home = getenv("HOME"); // NOLINT(concurrency-mt-unsafe) — called once during
-                                       // single-threaded store open, never concurrently
+    const char *home = cbm_get_home_dir();
     if (!home) {
-        home = "/tmp";
+        home = cbm_tmpdir();
     }
     char path[1024];
     snprintf(path, sizeof(path), "%s/.cache/codebase-memory-mcp/%s.db", home, project);
@@ -1429,6 +1428,43 @@ void cbm_store_node_degree(cbm_store_t *s, int64_t node_id, int *in_deg, int *ou
         }
         sqlite3_finalize(stmt);
     }
+}
+
+/* ── List distinct file paths ────────────────────────────────── */
+
+int cbm_store_list_files(cbm_store_t *s, const char *project, char ***out, int *count) {
+    *out = NULL;
+    *count = 0;
+    if (!s || !s->db || !project) {
+        return CBM_STORE_ERR;
+    }
+
+    const char *sql = "SELECT DISTINCT file_path FROM nodes "
+                      "WHERE project = ?1 AND file_path IS NOT NULL AND file_path != ''";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return CBM_STORE_ERR;
+    }
+    sqlite3_bind_text(stmt, 1, project, -1, SQLITE_STATIC);
+
+    int cap = 64;
+    int n = 0;
+    char **files = malloc(cap * sizeof(char *));
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *fp = (const char *)sqlite3_column_text(stmt, 0);
+        if (!fp) {
+            continue;
+        }
+        if (n >= cap) {
+            cap *= 2;
+            files = safe_realloc(files, cap * sizeof(char *));
+        }
+        files[n++] = heap_strdup(fp);
+    }
+    sqlite3_finalize(stmt);
+    *out = files;
+    *count = n;
+    return CBM_STORE_OK;
 }
 
 /* ── Node neighbor names ──────────────────────────────────────── */

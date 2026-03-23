@@ -229,15 +229,15 @@ static int configure_pragmas(cbm_store_t *s, bool in_memory) {
     if (in_memory) {
         rc = exec_sql(s, "PRAGMA synchronous = OFF;");
     } else {
+        rc = exec_sql(s, "PRAGMA busy_timeout = 10000;");
+        if (rc != CBM_STORE_OK) {
+            return rc;
+        }
         rc = exec_sql(s, "PRAGMA journal_mode = WAL;");
         if (rc != CBM_STORE_OK) {
             return rc;
         }
         rc = exec_sql(s, "PRAGMA synchronous = NORMAL;");
-        if (rc != CBM_STORE_OK) {
-            return rc;
-        }
-        rc = exec_sql(s, "PRAGMA busy_timeout = 10000;");
         if (rc != CBM_STORE_OK) {
             return rc;
         }
@@ -365,15 +365,53 @@ cbm_store_t *cbm_store_open_path(const char *db_path) {
     return store_open_internal(db_path, false);
 }
 
+cbm_store_t *cbm_store_open_path_query(const char *db_path) {
+    if (!db_path) {
+        return NULL;
+    }
+
+    cbm_store_t *s = calloc(1, sizeof(cbm_store_t));
+    if (!s) {
+        return NULL;
+    }
+
+    /* Open read-write but do NOT create — returns SQLITE_CANTOPEN if absent. */
+    int rc = sqlite3_open_v2(db_path, &s->db, SQLITE_OPEN_READWRITE, NULL);
+    if (rc != SQLITE_OK) {
+        /* File does not exist or cannot be opened — return NULL without creating. */
+        free(s);
+        return NULL;
+    }
+
+    s->db_path = heap_strdup(db_path);
+
+    /* Security: block ATTACH/DETACH to prevent file creation via SQL injection. */
+    sqlite3_set_authorizer(s->db, store_authorizer, NULL);
+
+    /* Register REGEXP functions. */
+    sqlite3_create_function(s->db, "regexp", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL,
+                            sqlite_regexp, NULL, NULL);
+    sqlite3_create_function(s->db, "iregexp", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL,
+                            sqlite_iregexp, NULL, NULL);
+
+    if (configure_pragmas(s, false) != CBM_STORE_OK) {
+        sqlite3_close(s->db);
+        free((void *)s->db_path);
+        free(s);
+        return NULL;
+    }
+
+    return s;
+}
+
 cbm_store_t *cbm_store_open(const char *project) {
     if (!project) {
         return NULL;
     }
     /* Build path: ~/.cache/codebase-memory-mcp/<project>.db */
-    const char *home = getenv("HOME"); // NOLINT(concurrency-mt-unsafe) — called once during
-                                       // single-threaded store open, never concurrently
+    const char *home = cbm_get_home_dir();
     if (!home) {
-        home = "/tmp";
+        home = cbm_tmpdir();
     }
     char path[1024];
     snprintf(path, sizeof(path), "%s/.cache/codebase-memory-mcp/%s.db", home, project);
@@ -1431,6 +1469,43 @@ void cbm_store_node_degree(cbm_store_t *s, int64_t node_id, int *in_deg, int *ou
     }
 }
 
+/* ── List distinct file paths ────────────────────────────────── */
+
+int cbm_store_list_files(cbm_store_t *s, const char *project, char ***out, int *count) {
+    *out = NULL;
+    *count = 0;
+    if (!s || !s->db || !project) {
+        return CBM_STORE_ERR;
+    }
+
+    const char *sql = "SELECT DISTINCT file_path FROM nodes "
+                      "WHERE project = ?1 AND file_path IS NOT NULL AND file_path != ''";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return CBM_STORE_ERR;
+    }
+    sqlite3_bind_text(stmt, 1, project, -1, SQLITE_STATIC);
+
+    int cap = 64;
+    int n = 0;
+    char **files = malloc(cap * sizeof(char *));
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *fp = (const char *)sqlite3_column_text(stmt, 0);
+        if (!fp) {
+            continue;
+        }
+        if (n >= cap) {
+            cap *= 2;
+            files = safe_realloc(files, cap * sizeof(char *));
+        }
+        files[n++] = heap_strdup(fp);
+    }
+    sqlite3_finalize(stmt);
+    *out = files;
+    *count = n;
+    return CBM_STORE_OK;
+}
+
 /* ── Node neighbor names ──────────────────────────────────────── */
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
@@ -1889,16 +1964,23 @@ int cbm_store_search(cbm_store_t *s, const cbm_search_params_t *params, cbm_sear
         BIND_TEXT(like_pattern);
     }
 
-    /* Exclude labels: add NOT IN clause directly (no bind params — values are code-provided) */
+    /* Exclude labels: use parameterized placeholders to prevent SQL injection */
     if (params->exclude_labels) {
         char excl_clause[512] = "n.label NOT IN (";
         int elen = (int)strlen(excl_clause);
         for (int i = 0; params->exclude_labels[i]; i++) {
             if (i > 0) {
-                elen += snprintf(excl_clause + elen, sizeof(excl_clause) - elen, ",");
+                elen += snprintf(excl_clause + elen, sizeof(excl_clause) - (size_t)elen, ",");
+                if (elen >= (int)sizeof(excl_clause)) {
+                    elen = (int)sizeof(excl_clause) - 1;
+                }
             }
-            elen += snprintf(excl_clause + elen, sizeof(excl_clause) - elen, "'%s'",
-                             params->exclude_labels[i]);
+            elen += snprintf(excl_clause + elen, sizeof(excl_clause) - (size_t)elen, "?%d",
+                             bind_idx + 1);
+            if (elen >= (int)sizeof(excl_clause)) {
+                elen = (int)sizeof(excl_clause) - 1;
+            }
+            BIND_TEXT(params->exclude_labels[i]);
         }
         snprintf(excl_clause + elen, sizeof(excl_clause) - (size_t)elen, ")");
         ADD_WHERE(excl_clause);
@@ -2034,16 +2116,23 @@ int cbm_store_bfs(cbm_store_t *s, int64_t start_id, const char *direction, const
     }
     out->root = root;
 
-    /* Build edge type IN clause */
-    char types_clause[512] = "'CALLS'";
+    /* Build edge type IN clause with parameterized placeholders */
+    char types_clause[512] = "?1";
+    const char *default_edge_type = "CALLS";
     if (edge_type_count > 0) {
         int tlen = 0;
         for (int i = 0; i < edge_type_count; i++) {
             if (i > 0) {
-                tlen += snprintf(types_clause + tlen, sizeof(types_clause) - tlen, ",");
+                tlen += snprintf(types_clause + tlen, sizeof(types_clause) - (size_t)tlen, ",");
+                if (tlen >= (int)sizeof(types_clause)) {
+                    tlen = (int)sizeof(types_clause) - 1;
+                }
             }
-            tlen +=
-                snprintf(types_clause + tlen, sizeof(types_clause) - tlen, "'%s'", edge_types[i]);
+            tlen += snprintf(types_clause + tlen, sizeof(types_clause) - (size_t)tlen, "?%d",
+                             i + 1);
+            if (tlen >= (int)sizeof(types_clause)) {
+                tlen = (int)sizeof(types_clause) - 1;
+            }
         }
     }
 
@@ -2087,6 +2176,15 @@ int cbm_store_bfs(cbm_store_t *s, int64_t start_id, const char *direction, const
         return CBM_STORE_ERR;
     }
 
+    /* Bind edge type parameters */
+    if (edge_type_count > 0) {
+        for (int i = 0; i < edge_type_count; i++) {
+            bind_text(stmt, i + 1, edge_types[i]);
+        }
+    } else {
+        bind_text(stmt, 1, default_edge_type);
+    }
+
     int cap = 16;
     int n = 0;
     cbm_node_hop_t *visited = malloc(cap * sizeof(cbm_node_hop_t));
@@ -2111,9 +2209,15 @@ int cbm_store_bfs(cbm_store_t *s, int64_t start_id, const char *direction, const
         /* Build ID set: root + all visited */
         char id_set[4096];
         int ilen = snprintf(id_set, sizeof(id_set), "%lld", (long long)start_id);
+        if (ilen >= (int)sizeof(id_set)) {
+            ilen = (int)sizeof(id_set) - 1;
+        }
         for (int i = 0; i < n; i++) {
-            ilen += snprintf(id_set + ilen, sizeof(id_set) - ilen, ",%lld",
+            ilen += snprintf(id_set + ilen, sizeof(id_set) - (size_t)ilen, ",%lld",
                              (long long)out->visited[i].node.id);
+            if (ilen >= (int)sizeof(id_set)) {
+                ilen = (int)sizeof(id_set) - 1;
+            }
         }
 
         char edge_sql[8192];
@@ -2129,6 +2233,15 @@ int cbm_store_bfs(cbm_store_t *s, int64_t start_id, const char *direction, const
         sqlite3_stmt *estmt = NULL;
         rc = sqlite3_prepare_v2(s->db, edge_sql, -1, &estmt, NULL);
         if (rc == SQLITE_OK) {
+            /* Bind edge type parameters for the edge query */
+            if (edge_type_count > 0) {
+                for (int i = 0; i < edge_type_count; i++) {
+                    bind_text(estmt, i + 1, edge_types[i]);
+                }
+            } else {
+                bind_text(estmt, 1, default_edge_type);
+            }
+
             int ecap = 8;
             int en = 0;
             cbm_edge_info_t *edges = malloc(ecap * sizeof(cbm_edge_info_t));

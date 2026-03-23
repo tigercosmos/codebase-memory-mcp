@@ -1273,6 +1273,83 @@ TEST(snippet_include_neighbors_enabled) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ *  POLL/GETLINE FILE* BUFFERING FIX
+ * ══════════════════════════════════════════════════════════════════ */
+
+#ifndef _WIN32
+#include <unistd.h>
+#include <signal.h>
+
+/* Signal handler used by alarm() to abort the test if it hangs */
+static void alarm_handler(int sig) {
+    (void)sig;
+    /* Writing to stderr is async-signal-safe */
+    const char msg[] = "FAIL: mcp_server_run_rapid_messages timed out (>5s)\n";
+    write(STDERR_FILENO, msg, sizeof(msg) - 1);
+    _exit(1);
+}
+
+TEST(mcp_server_run_rapid_messages) {
+    /* Simulate a client sending initialize + notifications/initialized +
+     * tools/list all at once (no delays), which exercises the FILE*
+     * buffering fix: the first getline() over-reads kernel data into the
+     * libc buffer; without the fix, subsequent poll() calls block for 60s.
+     *
+     * We use alarm(5) to abort the test process if the server hangs. */
+    int fds[2];
+    ASSERT_EQ(pipe(fds), 0);
+
+    /* Write all 3 messages to the write end in one shot */
+    const char *msgs =
+        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+        "\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{}}}\n"
+        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"
+        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n";
+    ssize_t written = write(fds[1], msgs, strlen(msgs));
+    ASSERT_TRUE(written > 0);
+    close(fds[1]); /* EOF signals end of input to the server */
+
+    FILE *in_fp = fdopen(fds[0], "r");
+    ASSERT_NOT_NULL(in_fp);
+
+    FILE *out_fp = tmpfile();
+    ASSERT_NOT_NULL(out_fp);
+
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+
+    /* Install alarm to fail the test if cbm_mcp_server_run blocks */
+    signal(SIGALRM, alarm_handler);
+    alarm(5);
+
+    int rc = cbm_mcp_server_run(srv, in_fp, out_fp);
+
+    alarm(0); /* cancel alarm */
+    signal(SIGALRM, SIG_DFL);
+
+    ASSERT_EQ(rc, 0);
+
+    /* Verify both responses are present:
+     *   id:1 — initialize response
+     *   id:2 — tools/list response (notifications/initialized produces none)
+     * and that the tools list payload is included. */
+    rewind(out_fp);
+    char buf[4096] = {0};
+    size_t nread = fread(buf, 1, sizeof(buf) - 1, out_fp);
+    ASSERT_TRUE(nread > 0);
+    ASSERT_NOT_NULL(strstr(buf, "\"id\":1"));
+    ASSERT_NOT_NULL(strstr(buf, "\"id\":2"));
+    ASSERT_NOT_NULL(strstr(buf, "tools"));
+
+    cbm_mcp_server_free(srv);
+    fclose(out_fp);
+    /* in_fp already EOF; fclose cleans up */
+    fclose(in_fp);
+    PASS();
+}
+#endif /* !_WIN32 */
+
+/* ══════════════════════════════════════════════════════════════════
  *  SUITE
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -1344,6 +1421,11 @@ SUITE(mcp) {
     RUN_TEST(parse_file_uri_unix);
     RUN_TEST(parse_file_uri_windows);
     RUN_TEST(parse_file_uri_invalid);
+
+    /* Poll/getline FILE* buffering fix */
+#ifndef _WIN32
+    RUN_TEST(mcp_server_run_rapid_messages);
+#endif
 
     /* Snippet resolution (port of snippet_test.go) */
     RUN_TEST(snippet_exact_qn);

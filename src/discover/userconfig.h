@@ -22,8 +22,8 @@
 /* ── Types ──────────────────────────────────────────────────────── */
 
 typedef struct {
-    char *ext;         /* file extension including dot, e.g. ".blade.php" */
-    CBMLanguage lang;  /* resolved language enum */
+    char *ext;        /* file extension including dot, e.g. ".blade.php" */
+    CBMLanguage lang; /* resolved language enum */
 } cbm_userext_t;
 
 typedef struct {

@@ -219,8 +219,7 @@ static int parse_extra_extensions(yyjson_val *root, cbm_userext_t **entries, int
         }
 
         /* Grow the array */
-        cbm_userext_t *tmp =
-            realloc(*entries, (size_t)(*count + 1) * sizeof(cbm_userext_t));
+        cbm_userext_t *tmp = realloc(*entries, (size_t)(*count + 1) * sizeof(cbm_userext_t));
         if (!tmp) {
             return -1;
         }
@@ -297,10 +296,11 @@ cbm_userconfig_t *cbm_userconfig_load(const char *repo_path) {
     int count = 0;
 
     /* ── Step 1: Load global config ── */
+    enum { PATH_BUF_SZ = 1280 };
     char global_dir[1024];
     cbm_app_config_dir(global_dir, sizeof(global_dir));
 
-    char global_path[1280];
+    char global_path[PATH_BUF_SZ];
     snprintf(global_path, sizeof(global_path), "%s/config.json", global_dir);
 
     if (load_config_file(global_path, &entries, &count) != 0) {
@@ -316,7 +316,7 @@ cbm_userconfig_t *cbm_userconfig_load(const char *repo_path) {
 
     /* ── Step 2: Load project config ── */
     if (repo_path && repo_path[0]) {
-        char project_path[1280];
+        char project_path[PATH_BUF_SZ];
         snprintf(project_path, sizeof(project_path), "%s/.codebase-memory.json", repo_path);
 
         if (load_config_file(project_path, &entries, &count) != 0) {
@@ -345,7 +345,6 @@ cbm_userconfig_t *cbm_userconfig_load(const char *repo_path) {
                 entries[g] = entries[global_count - 1];
                 entries[global_count - 1].ext = NULL; /* mark as consumed */
                 global_count--;
-                g--; /* re-check this index */
                 break;
             }
         }

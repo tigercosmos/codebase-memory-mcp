@@ -306,6 +306,24 @@ codebase-memory-mcp config set auto_index_limit 50000    # max files for auto-in
 codebase-memory-mcp config reset auto_index              # reset to default
 ```
 
+## Custom File Extensions
+
+Map additional file extensions to supported languages via JSON config files. Useful for framework-specific extensions like `.blade.php` (Laravel) or `.mjs` (ES modules).
+
+**Per-project** (in your repo root):
+```json
+// .codebase-memory.json
+{"extra_extensions": {".blade.php": "php", ".mjs": "javascript"}}
+```
+
+**Global** (applies to all projects):
+```json
+// ~/.config/codebase-memory-mcp/config.json  (or $XDG_CONFIG_HOME/...)
+{"extra_extensions": {".twig": "html", ".phtml": "php"}}
+```
+
+Project config overrides global for conflicting extensions. Unknown language values are silently skipped. Missing config files are ignored.
+
 ## Persistence
 
 SQLite databases stored at `~/.cache/codebase-memory-mcp/`. Persists across restarts (WAL mode, ACID-safe). To reset: `rm -rf ~/.cache/codebase-memory-mcp/`.

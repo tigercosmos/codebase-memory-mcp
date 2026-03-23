@@ -212,4 +212,130 @@ fi
 echo "OK: version output is clean single line"
 
 echo ""
+echo "=== Phase 5: MCP stdio transport (agent handshake) ==="
+
+# Test the actual MCP protocol as an agent (Claude Code, OpenCode, etc.) would use it.
+# Uses background process + kill instead of timeout (portable across macOS/Linux).
+
+# Helper: run binary in background with input, wait up to N seconds, collect output
+mcp_run() {
+  local input_file="$1" output_file="$2" max_wait="${3:-10}"
+  "$BINARY" < "$input_file" > "$output_file" 2>/dev/null &
+  local pid=$!
+  local waited=0
+  while kill -0 "$pid" 2>/dev/null && [ "$waited" -lt "$max_wait" ]; do
+    sleep 1
+    waited=$((waited + 1))
+  done
+  kill "$pid" 2>/dev/null || true
+  wait "$pid" 2>/dev/null || true
+}
+
+MCP_INPUT=$(mktemp)
+MCP_OUTPUT=$(mktemp)
+cat > "$MCP_INPUT" << 'MCPEOF'
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke-test","version":"1.0"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+MCPEOF
+
+mcp_run "$MCP_INPUT" "$MCP_OUTPUT" 10
+
+# 5a: Verify initialize response (id:1)
+if ! grep -q '"id":1' "$MCP_OUTPUT"; then
+  echo "FAIL: no initialize response (id:1) in MCP output"
+  echo "Output was:"
+  cat "$MCP_OUTPUT"
+  rm -f "$MCP_INPUT" "$MCP_OUTPUT"
+  exit 1
+fi
+echo "OK: initialize response received (id:1)"
+
+# 5b: Verify tools/list response (id:2) with tool names
+if ! grep -q '"id":2' "$MCP_OUTPUT"; then
+  echo "FAIL: no tools/list response (id:2) in MCP output"
+  echo "Output was:"
+  cat "$MCP_OUTPUT"
+  rm -f "$MCP_INPUT" "$MCP_OUTPUT"
+  exit 1
+fi
+echo "OK: tools/list response received (id:2)"
+
+# 5c: Verify expected tools are present
+for TOOL in index_repository search_graph trace_call_path get_code_snippet search_code; do
+  if ! grep -q "\"$TOOL\"" "$MCP_OUTPUT"; then
+    echo "FAIL: tool '$TOOL' not found in tools/list response"
+    rm -f "$MCP_INPUT" "$MCP_OUTPUT"
+    exit 1
+  fi
+done
+echo "OK: all 5 core MCP tools present in tools/list"
+
+# 5d: Verify protocol version in initialize response
+if ! grep -q '"protocolVersion"' "$MCP_OUTPUT"; then
+  echo "FAIL: protocolVersion missing from initialize response"
+  rm -f "$MCP_INPUT" "$MCP_OUTPUT"
+  exit 1
+fi
+echo "OK: protocolVersion present in initialize response"
+
+rm -f "$MCP_INPUT" "$MCP_OUTPUT"
+
+# 5e: MCP tool call via JSON-RPC (index + search round-trip)
+echo ""
+echo "--- Phase 5e: MCP tool call round-trip ---"
+MCP_TOOL_INPUT=$(mktemp)
+MCP_TOOL_OUTPUT=$(mktemp)
+
+cat > "$MCP_TOOL_INPUT" << TOOLEOF
+{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"smoke-test","version":"1.0"}}}
+{"jsonrpc":"2.0","method":"notifications/initialized"}
+{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"index_repository","arguments":{"repo_path":"$TMPDIR","mode":"fast"}}}
+{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"search_graph","arguments":{"name_pattern":"compute"}}}
+TOOLEOF
+
+mcp_run "$MCP_TOOL_INPUT" "$MCP_TOOL_OUTPUT" 30
+
+if ! grep -q '"id":2' "$MCP_TOOL_OUTPUT"; then
+  echo "FAIL: no index_repository response (id:2)"
+  cat "$MCP_TOOL_OUTPUT"
+  rm -f "$MCP_TOOL_INPUT" "$MCP_TOOL_OUTPUT"
+  exit 1
+fi
+
+if ! grep -q '"id":3' "$MCP_TOOL_OUTPUT"; then
+  echo "FAIL: no search_graph response (id:3)"
+  cat "$MCP_TOOL_OUTPUT"
+  rm -f "$MCP_TOOL_INPUT" "$MCP_TOOL_OUTPUT"
+  exit 1
+fi
+echo "OK: MCP tool call round-trip (index + search) succeeded"
+
+# 5f: Content-Length framing (OpenCode compatibility)
+echo ""
+echo "--- Phase 5f: Content-Length framing ---"
+MCP_CL_INPUT=$(mktemp)
+MCP_CL_OUTPUT=$(mktemp)
+
+INIT_MSG='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"cl-test","version":"1.0"}}}'
+INIT_LEN=${#INIT_MSG}
+printf "Content-Length: %d\r\n\r\n%s" "$INIT_LEN" "$INIT_MSG" > "$MCP_CL_INPUT"
+
+TOOLS_MSG='{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+TOOLS_LEN=${#TOOLS_MSG}
+printf "Content-Length: %d\r\n\r\n%s" "$TOOLS_LEN" "$TOOLS_MSG" >> "$MCP_CL_INPUT"
+
+mcp_run "$MCP_CL_INPUT" "$MCP_CL_OUTPUT" 10
+
+if ! grep -q '"id":1' "$MCP_CL_OUTPUT" || ! grep -q '"id":2' "$MCP_CL_OUTPUT"; then
+  echo "FAIL: Content-Length framed handshake did not produce both responses"
+  cat "$MCP_CL_OUTPUT"
+  rm -f "$MCP_CL_INPUT" "$MCP_CL_OUTPUT"
+  exit 1
+fi
+echo "OK: Content-Length framing works (OpenCode compatible)"
+
+rm -f "$MCP_CL_INPUT" "$MCP_CL_OUTPUT" "$MCP_TOOL_INPUT" "$MCP_TOOL_OUTPUT"
+
+echo ""
 echo "=== smoke-test: ALL PASSED ==="

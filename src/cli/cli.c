@@ -1310,11 +1310,7 @@ int cbm_remove_antigravity_mcp(const char *config_path) {
 /* ── Claude Code pre-tool hooks ───────────────────────────────── */
 
 #define CMM_HOOK_MATCHER "Grep|Glob|Read|Search"
-#define CMM_HOOK_COMMAND                                                        \
-    "echo 'Reminder: prefer codebase-memory-mcp search_graph/trace_call_path/"  \
-    "get_code_snippet over Grep/Glob/Read/Search for code discovery. "          \
-    "Use get_code_snippet(qualified_name) instead of Read to view a function. " \
-    "Fall back only if MCP returns insufficient results.' >&2"
+#define CMM_HOOK_COMMAND "~/.claude/hooks/cbm-code-discovery-gate"
 
 /* Old matcher values from previous versions — recognized during upgrade so
  * upsert_hooks_json can remove them before inserting the current matcher. */
@@ -1468,6 +1464,45 @@ int cbm_upsert_claude_hooks(const char *settings_path) {
 
 int cbm_remove_claude_hooks(const char *settings_path) {
     return remove_hooks_json(settings_path, "PreToolUse", CMM_HOOK_MATCHER);
+}
+
+/* Install the code discovery gate script to ~/.claude/hooks/.
+ * Blocks the first Grep/Glob/Read/Search call per session (exit 2 + stderr),
+ * nudging Claude toward codebase-memory-mcp. All subsequent calls in the same
+ * session pass through (gate file keyed on PPID). */
+static void cbm_install_hook_gate_script(const char *home) {
+    if (!home) {
+        return;
+    }
+    char hooks_dir[1024];
+    snprintf(hooks_dir, sizeof(hooks_dir), "%s/.claude/hooks", home);
+    cbm_mkdir_p(hooks_dir, 0755);
+
+    char script_path[1024];
+    snprintf(script_path, sizeof(script_path), "%s/cbm-code-discovery-gate", hooks_dir);
+
+    FILE *f = fopen(script_path, "w");
+    if (!f) {
+        return;
+    }
+    fprintf(f, "#!/bin/bash\n"
+               "# Gate hook: nudges Claude toward codebase-memory-mcp for code discovery.\n"
+               "# First Grep/Glob/Read/Search per session -> block. Subsequent -> allow.\n"
+               "# PPID = Claude Code process PID, unique per session.\n"
+               "GATE=/tmp/cbm-code-discovery-gate-$PPID\n"
+               "find /tmp -name 'cbm-code-discovery-gate-*' -mtime +1 -delete 2>/dev/null\n"
+               "if [ -f \"$GATE\" ]; then\n"
+               "    exit 0\n"
+               "fi\n"
+               "touch \"$GATE\"\n"
+               "echo 'BLOCKED: For code discovery, use codebase-memory-mcp tools first: "
+               "search_graph(name_pattern) to find functions/classes, trace_call_path() for "
+               "call chains, get_code_snippet(qualified_name) to read source. If the graph "
+               "is not indexed yet, call index_repository first. Fall back to Grep/Glob/Read "
+               "only for text content search. If you need Grep, retry.' >&2\n"
+               "exit 2\n");
+    fclose(f);
+    chmod(script_path, 0755);
 }
 
 #define GEMINI_HOOK_MATCHER "google_search|read_file|grep_search"
@@ -2218,13 +2253,14 @@ int cbm_cmd_install(int argc, char **argv) {
         }
         printf("  mcp: %s\n", mcp_path2);
 
-        /* PreToolUse hook */
+        /* PreToolUse hook + gate script */
         char settings_path[1024];
         snprintf(settings_path, sizeof(settings_path), "%s/.claude/settings.json", home);
         if (!dry_run) {
             cbm_upsert_claude_hooks(settings_path);
+            cbm_install_hook_gate_script(home);
         }
-        printf("  hooks: PreToolUse (Grep|Glob reminder)\n");
+        printf("  hooks: PreToolUse (code discovery gate)\n");
     }
 
     /* Step 5: Install Codex CLI */

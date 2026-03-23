@@ -2128,8 +2128,8 @@ int cbm_store_bfs(cbm_store_t *s, int64_t start_id, const char *direction, const
                     tlen = (int)sizeof(types_clause) - 1;
                 }
             }
-            tlen += snprintf(types_clause + tlen, sizeof(types_clause) - (size_t)tlen, "?%d",
-                             i + 1);
+            tlen +=
+                snprintf(types_clause + tlen, sizeof(types_clause) - (size_t)tlen, "?%d", i + 1);
             if (tlen >= (int)sizeof(types_clause)) {
                 tlen = (int)sizeof(types_clause) - 1;
             }

@@ -653,9 +653,17 @@ static cbm_store_t *resolve_store(cbm_mcp_server_t *srv, const char *project) {
     project_db_path(project, path, sizeof(path));
     srv->store = cbm_store_open_path_query(path);
     if (srv->store) {
-        /* Only update ownership and cached project name on successful open.
-         * When the file is absent, store is NULL and current_project retains
-         * its previous value so the next call correctly retries the open. */
+        /* Verify the project actually exists in this database.
+         * A .db file may exist but be empty (e.g., after delete_project on
+         * Linux where unlink defers actual removal). Opening an empty/deleted
+         * store without closing it leaks the SQLite connection. */
+        cbm_project_t proj_verify = {0};
+        if (cbm_store_get_project(srv->store, project, &proj_verify) != CBM_STORE_OK) {
+            cbm_store_close(srv->store);
+            srv->store = NULL;
+            return NULL;
+        }
+        cbm_project_free_fields(&proj_verify);
         srv->owns_store = true;
         free(srv->current_project);
         srv->current_project = heap_strdup(project);

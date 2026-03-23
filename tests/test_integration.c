@@ -410,7 +410,6 @@ TEST(integ_mcp_delete_project) {
     snprintf(args, sizeof(args), "{\"label\":\"Function\",\"project\":\"%s\"}", g_project);
     resp = call_tool("search_graph", args);
     ASSERT_NOT_NULL(resp);
-    /* Guard returns "not indexed" error or "no project loaded"; either is correct */
     ASSERT_TRUE(strstr(resp, "total") != NULL || strstr(resp, "not indexed") != NULL ||
                 strstr(resp, "no project loaded") != NULL);
     free(resp);

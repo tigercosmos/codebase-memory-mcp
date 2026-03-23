@@ -71,9 +71,9 @@ TEST(userconfig_global_via_env) {
         0);
 
     /* Set env var, load, restore */
-    setenv("XDG_CONFIG_HOME", xdg_dir, 1);
+    cbm_setenv("XDG_CONFIG_HOME", xdg_dir, 1);
     cbm_userconfig_t *cfg = cbm_userconfig_load(NULL); /* no project dir */
-    unsetenv("XDG_CONFIG_HOME");
+    cbm_unsetenv("XDG_CONFIG_HOME");
 
     ASSERT_NOT_NULL(cfg);
     ASSERT_EQ(cbm_userconfig_lookup(cfg, ".twig"), CBM_LANG_HTML);
@@ -110,9 +110,9 @@ TEST(userconfig_project_wins_over_global) {
         write_json(proj_path, "{\"extra_extensions\":{\".xyz\":\"rust\"}}"),
         0);
 
-    setenv("XDG_CONFIG_HOME", xdg_dir, 1);
+    cbm_setenv("XDG_CONFIG_HOME", xdg_dir, 1);
     cbm_userconfig_t *cfg = cbm_userconfig_load(proj_dir);
-    unsetenv("XDG_CONFIG_HOME");
+    cbm_unsetenv("XDG_CONFIG_HOME");
 
     ASSERT_NOT_NULL(cfg);
     /* Project definition (rust) must win */

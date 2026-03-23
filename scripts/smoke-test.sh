@@ -397,6 +397,59 @@ fi
 "$BINARY" config reset auto_index 2>/dev/null
 echo "OK: config set/get/reset round-trip"
 
+# 6e: Simulated binary replacement (update flow without network)
+# Simulates the update command's Steps 3-6: extract, replace, verify.
+# Uses a copy of the test binary as the "downloaded" version.
+echo "--- Phase 6e: simulated binary replacement ---"
+REPLACE_DIR=$(mktemp -d)
+INSTALL_DIR="$REPLACE_DIR/install"
+mkdir -p "$INSTALL_DIR"
+
+# 1. Copy binary to "install dir" as the "currently installed" version
+cp "$BINARY" "$INSTALL_DIR/codebase-memory-mcp"
+chmod 755 "$INSTALL_DIR/codebase-memory-mcp"
+
+# Verify installed binary works
+INSTALLED_VER=$("$INSTALL_DIR/codebase-memory-mcp" --version 2>&1)
+if ! echo "$INSTALLED_VER" | grep -qE 'v?[0-9]+\.[0-9]+|dev'; then
+  echo "FAIL: installed binary --version failed: $INSTALLED_VER"
+  rm -rf "$REPLACE_DIR"
+  exit 1
+fi
+
+# 2. Copy binary as the "downloaded" new version
+cp "$BINARY" "$REPLACE_DIR/smoke-codebase-memory-mcp"
+
+# 3. Simulate cbm_replace_binary: unlink old, copy new
+rm -f "$INSTALL_DIR/codebase-memory-mcp"
+cp "$REPLACE_DIR/smoke-codebase-memory-mcp" "$INSTALL_DIR/codebase-memory-mcp"
+chmod 755 "$INSTALL_DIR/codebase-memory-mcp"
+
+# 4. Verify replaced binary works
+REPLACED_VER=$("$INSTALL_DIR/codebase-memory-mcp" --version 2>&1)
+if ! echo "$REPLACED_VER" | grep -qE 'v?[0-9]+\.[0-9]+|dev'; then
+  echo "FAIL: replaced binary --version failed: $REPLACED_VER"
+  rm -rf "$REPLACE_DIR"
+  exit 1
+fi
+echo "OK: binary replacement succeeded (version: $REPLACED_VER)"
+
+# 5. Test replacement of read-only binary (edge case — cbm_replace_binary
+#    handles this via unlink-before-write, which works even on read-only files)
+chmod 444 "$INSTALL_DIR/codebase-memory-mcp"
+rm -f "$INSTALL_DIR/codebase-memory-mcp"
+cp "$REPLACE_DIR/smoke-codebase-memory-mcp" "$INSTALL_DIR/codebase-memory-mcp"
+chmod 755 "$INSTALL_DIR/codebase-memory-mcp"
+READONLY_VER=$("$INSTALL_DIR/codebase-memory-mcp" --version 2>&1)
+if ! echo "$READONLY_VER" | grep -qE 'v?[0-9]+\.[0-9]+|dev'; then
+  echo "FAIL: read-only replacement --version failed: $READONLY_VER"
+  rm -rf "$REPLACE_DIR"
+  exit 1
+fi
+echo "OK: read-only binary replacement succeeded"
+
+rm -rf "$REPLACE_DIR"
+
 echo ""
 echo "=== Phase 7: MCP advanced tool calls ==="
 

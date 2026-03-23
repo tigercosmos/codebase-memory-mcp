@@ -198,7 +198,10 @@ bool cbm_is_kustomize_file(const char *name) {
     }
     char lower[256];
     to_lower(name, lower, sizeof(lower));
-    return (strcmp(lower, "kustomization.yaml") == 0 || strcmp(lower, "kustomization.yml") == 0);
+    if (strcmp(lower, "kustomization.yaml") == 0) {
+        return true;
+    }
+    return strcmp(lower, "kustomization.yml") == 0;
 }
 
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
@@ -206,7 +209,8 @@ bool cbm_is_k8s_manifest(const char *name, const char *content) {
     if (!name || !content || cbm_is_kustomize_file(name)) {
         return false;
     }
-    char buf[4097];
+    enum { K8S_PEEK_SZ = 4097 };
+    char buf[K8S_PEEK_SZ];
     size_t n = strnlen(content, 4096);
     memcpy(buf, content, n);
     buf[n] = '\0';

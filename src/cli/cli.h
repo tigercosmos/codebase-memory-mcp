@@ -45,6 +45,11 @@ const char *cbm_find_cli(const char *name, const char *home_dir);
 /* Copy a file from src to dst. Returns 0 on success, -1 on error. */
 int cbm_copy_file(const char *src, const char *dst);
 
+/* Replace a binary file: unlinks the existing file first (handles read-only),
+ * then creates a new file with the given data and permissions.
+ * Returns 0 on success, -1 on error. */
+int cbm_replace_binary(const char *path, const unsigned char *data, int len, int mode);
+
 /* ── Skill file management ────────────────────────────────────── */
 
 /* Number of skill files. */

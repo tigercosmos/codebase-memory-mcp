@@ -2013,6 +2013,83 @@ TEST(cli_config_persists) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+ *  Group H: cbm_replace_binary (update command helper)
+ * ═══════════════════════════════════════════════════════════════════ */
+
+#ifndef _WIN32
+
+TEST(replace_binary_overwrites_readonly) {
+    /* Simulate #114: existing binary has mode 0500 (no write permission).
+     * cbm_replace_binary must unlink first, then create with 0755. */
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-replace-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir)) {
+        SKIP("cbm_mkdtemp failed");
+    }
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/test-binary", tmpdir);
+
+    /* Create a read-only file (simulating an installed binary with 0500) */
+    FILE *f = fopen(path, "w");
+    ASSERT_NOT_NULL(f);
+    fputs("old-content", f);
+    fclose(f);
+    chmod(path, 0500); /* r-x------ */
+
+    /* Replace it with new content */
+    const unsigned char new_data[] = "new-content-replaced";
+    int rc = cbm_replace_binary(path, new_data, (int)sizeof(new_data) - 1, 0755);
+    ASSERT_EQ(rc, 0);
+
+    /* Verify new content was written */
+    FILE *check = fopen(path, "r");
+    ASSERT_NOT_NULL(check);
+    char buf[64] = {0};
+    fread(buf, 1, sizeof(buf) - 1, check);
+    fclose(check);
+    ASSERT_STR_EQ(buf, "new-content-replaced");
+
+    /* Verify permissions are 0755 */
+    struct stat st;
+    ASSERT_EQ(stat(path, &st), 0);
+    ASSERT_EQ(st.st_mode & 0777, 0755);
+
+    remove(path);
+    rmdir(tmpdir);
+    PASS();
+}
+
+TEST(replace_binary_creates_new_file) {
+    /* If no existing file, cbm_replace_binary should create it. */
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-replace2-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir)) {
+        SKIP("cbm_mkdtemp failed");
+    }
+
+    char path[512];
+    snprintf(path, sizeof(path), "%s/new-binary", tmpdir);
+
+    const unsigned char data[] = "brand-new";
+    int rc = cbm_replace_binary(path, data, (int)sizeof(data) - 1, 0755);
+    ASSERT_EQ(rc, 0);
+
+    FILE *check = fopen(path, "r");
+    ASSERT_NOT_NULL(check);
+    char buf[64] = {0};
+    fread(buf, 1, sizeof(buf) - 1, check);
+    fclose(check);
+    ASSERT_STR_EQ(buf, "brand-new");
+
+    remove(path);
+    rmdir(tmpdir);
+    PASS();
+}
+
+#endif /* _WIN32 */
+
+/* ═══════════════════════════════════════════════════════════════════
  *  Suite definition
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -2148,4 +2225,10 @@ SUITE(cli) {
     RUN_TEST(cli_config_get_int);
     RUN_TEST(cli_config_delete);
     RUN_TEST(cli_config_persists);
+
+    /* Replace binary (update command helper — group H) */
+#ifndef _WIN32
+    RUN_TEST(replace_binary_overwrites_readonly);
+    RUN_TEST(replace_binary_creates_new_file);
+#endif
 }

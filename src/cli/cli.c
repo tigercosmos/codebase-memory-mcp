@@ -258,6 +258,40 @@ int cbm_copy_file(const char *src, const char *dst) {
     return rc == 0 ? 0 : -1;
 }
 
+/* Replace a binary file: unlink first (handles read-only existing files),
+ * then create with the given data and permissions. */
+int cbm_replace_binary(const char *path, const unsigned char *data, int len, int mode) {
+    if (!path || !data || len <= 0) {
+        return -1;
+    }
+
+    /* Remove existing file first — handles the case where the old binary
+     * has no write permission (e.g., 0500). unlink() only requires write
+     * permission on the parent directory, not the file itself. */
+    (void)cbm_unlink(path);
+
+#ifndef _WIN32
+    int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC, (mode_t)mode);
+    if (fd < 0) {
+        return -1;
+    }
+    FILE *f = fdopen(fd, "wb");
+    if (!f) {
+        close(fd);
+        return -1;
+    }
+#else
+    FILE *f = fopen(path, "wb");
+    if (!f) {
+        return -1;
+    }
+#endif
+
+    size_t written = fwrite(data, 1, (size_t)len, f);
+    (void)fclose(f);
+    return written == (size_t)len ? 0 : -1;
+}
+
 /* ── Skill file content (embedded) ────────────────────────────── */
 
 static const char skill_exploring_content[] =
@@ -2822,28 +2856,13 @@ int cbm_cmd_update(int argc, char **argv) {
             return 1;
         }
 
-        /* Open with final permissions atomically (no TOCTOU between write and chmod) */
-#ifndef _WIN32
-        int fd = open(bin_dest, O_WRONLY | O_CREAT | O_TRUNC, 0755);
-        if (fd < 0) {
+        /* Replace binary: unlink first (handles read-only existing file),
+         * then create with 0755 permissions. Fixes #114. */
+        if (cbm_replace_binary(bin_dest, bin_data, bin_len, 0755) != 0) {
             fprintf(stderr, "error: cannot write to %s\n", bin_dest);
             free(bin_data);
             return 1;
         }
-        FILE *out = fdopen(fd, "wb");
-#else
-        FILE *out = fopen(bin_dest, "wb");
-#endif
-        if (!out) {
-            fprintf(stderr, "error: cannot write to %s\n", bin_dest);
-            free(bin_data);
-#ifndef _WIN32
-            close(fd);
-#endif
-            return 1;
-        }
-        fwrite(bin_data, 1, (size_t)bin_len, out);
-        fclose(out);
         free(bin_data);
     } else {
         /* Zip extraction: exec unzip directly without shell interpretation */

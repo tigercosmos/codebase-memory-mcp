@@ -26,6 +26,7 @@ extern void suite_store_search(void);
 extern void suite_cypher(void);
 extern void suite_mcp(void);
 extern void suite_language(void);
+extern void suite_userconfig(void);
 extern void suite_gitignore(void);
 extern void suite_discover(void);
 extern void suite_graph_buffer(void);
@@ -81,6 +82,7 @@ int main(void) {
 
     /* Discover (M2) */
     RUN_SUITE(language);
+    RUN_SUITE(userconfig);
     RUN_SUITE(gitignore);
     RUN_SUITE(discover);
 

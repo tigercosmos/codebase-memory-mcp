@@ -406,12 +406,13 @@ TEST(integ_mcp_delete_project) {
     ASSERT_NOT_NULL(strstr(resp, "deleted"));
     free(resp);
 
-    /* After deletion, search should return empty */
+    /* After deletion, search should return an error (not indexed) or empty results */
     snprintf(args, sizeof(args), "{\"label\":\"Function\",\"project\":\"%s\"}", g_project);
     resp = call_tool("search_graph", args);
     ASSERT_NOT_NULL(resp);
-    /* Should show 0 results or empty */
-    ASSERT_NOT_NULL(strstr(resp, "total"));
+    /* Guard returns "not indexed" error or "no project loaded"; either is correct */
+    ASSERT_TRUE(strstr(resp, "total") != NULL || strstr(resp, "not indexed") != NULL ||
+                strstr(resp, "no project loaded") != NULL);
     free(resp);
     PASS();
 }

@@ -229,15 +229,15 @@ static int configure_pragmas(cbm_store_t *s, bool in_memory) {
     if (in_memory) {
         rc = exec_sql(s, "PRAGMA synchronous = OFF;");
     } else {
+        rc = exec_sql(s, "PRAGMA busy_timeout = 10000;");
+        if (rc != CBM_STORE_OK) {
+            return rc;
+        }
         rc = exec_sql(s, "PRAGMA journal_mode = WAL;");
         if (rc != CBM_STORE_OK) {
             return rc;
         }
         rc = exec_sql(s, "PRAGMA synchronous = NORMAL;");
-        if (rc != CBM_STORE_OK) {
-            return rc;
-        }
-        rc = exec_sql(s, "PRAGMA busy_timeout = 10000;");
         if (rc != CBM_STORE_OK) {
             return rc;
         }
@@ -365,15 +365,53 @@ cbm_store_t *cbm_store_open_path(const char *db_path) {
     return store_open_internal(db_path, false);
 }
 
+cbm_store_t *cbm_store_open_path_query(const char *db_path) {
+    if (!db_path) {
+        return NULL;
+    }
+
+    cbm_store_t *s = calloc(1, sizeof(cbm_store_t));
+    if (!s) {
+        return NULL;
+    }
+
+    /* Open read-write but do NOT create — returns SQLITE_CANTOPEN if absent. */
+    int rc = sqlite3_open_v2(db_path, &s->db, SQLITE_OPEN_READWRITE, NULL);
+    if (rc != SQLITE_OK) {
+        /* File does not exist or cannot be opened — return NULL without creating. */
+        free(s);
+        return NULL;
+    }
+
+    s->db_path = heap_strdup(db_path);
+
+    /* Security: block ATTACH/DETACH to prevent file creation via SQL injection. */
+    sqlite3_set_authorizer(s->db, store_authorizer, NULL);
+
+    /* Register REGEXP functions. */
+    sqlite3_create_function(s->db, "regexp", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL,
+                            sqlite_regexp, NULL, NULL);
+    sqlite3_create_function(s->db, "iregexp", 2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL,
+                            sqlite_iregexp, NULL, NULL);
+
+    if (configure_pragmas(s, false) != CBM_STORE_OK) {
+        sqlite3_close(s->db);
+        free((void *)s->db_path);
+        free(s);
+        return NULL;
+    }
+
+    return s;
+}
+
 cbm_store_t *cbm_store_open(const char *project) {
     if (!project) {
         return NULL;
     }
     /* Build path: ~/.cache/codebase-memory-mcp/<project>.db */
-    const char *home = getenv("HOME"); // NOLINT(concurrency-mt-unsafe) — called once during
-                                       // single-threaded store open, never concurrently
+    const char *home = cbm_get_home_dir();
     if (!home) {
-        home = "/tmp";
+        home = cbm_tmpdir();
     }
     char path[1024];
     snprintf(path, sizeof(path), "%s/.cache/codebase-memory-mcp/%s.db", home, project);
@@ -1429,6 +1467,43 @@ void cbm_store_node_degree(cbm_store_t *s, int64_t node_id, int *in_deg, int *ou
         }
         sqlite3_finalize(stmt);
     }
+}
+
+/* ── List distinct file paths ────────────────────────────────── */
+
+int cbm_store_list_files(cbm_store_t *s, const char *project, char ***out, int *count) {
+    *out = NULL;
+    *count = 0;
+    if (!s || !s->db || !project) {
+        return CBM_STORE_ERR;
+    }
+
+    const char *sql = "SELECT DISTINCT file_path FROM nodes "
+                      "WHERE project = ?1 AND file_path IS NOT NULL AND file_path != ''";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return CBM_STORE_ERR;
+    }
+    sqlite3_bind_text(stmt, 1, project, -1, SQLITE_STATIC);
+
+    int cap = 64;
+    int n = 0;
+    char **files = malloc(cap * sizeof(char *));
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *fp = (const char *)sqlite3_column_text(stmt, 0);
+        if (!fp) {
+            continue;
+        }
+        if (n >= cap) {
+            cap *= 2;
+            files = safe_realloc(files, cap * sizeof(char *));
+        }
+        files[n++] = heap_strdup(fp);
+    }
+    sqlite3_finalize(stmt);
+    *out = files;
+    *count = n;
+    return CBM_STORE_OK;
 }
 
 /* ── Node neighbor names ──────────────────────────────────────── */

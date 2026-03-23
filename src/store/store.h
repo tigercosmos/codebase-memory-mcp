@@ -73,6 +73,10 @@ int cbm_store_find_nodes_by_qn_suffix(cbm_store_t *s, const char *project, const
 /* Get CALLS degree of a node (inbound and outbound). */
 void cbm_store_node_degree(cbm_store_t *s, int64_t node_id, int *in_deg, int *out_deg);
 
+/* Get distinct file paths for a project. Caller must free each out[i] and out itself.
+ * Returns CBM_STORE_OK or CBM_STORE_ERR. */
+int cbm_store_list_files(cbm_store_t *s, const char *project, char ***out, int *count);
+
 /* Get caller/callee names for a node (CALLS/HTTP_CALLS/ASYNC_CALLS edges).
  * Returns 0 on success. Caller must free each out_callers[i]/out_callees[i]
  * and the arrays themselves. */
@@ -189,6 +193,10 @@ cbm_store_t *cbm_store_open_memory(void);
 
 /* Open a file-backed database at the given path. Creates if needed. */
 cbm_store_t *cbm_store_open_path(const char *db_path);
+
+/* Open an existing file-backed database for querying only (no SQLITE_OPEN_CREATE).
+ * Returns NULL if the file does not exist — never creates a new .db file. */
+cbm_store_t *cbm_store_open_path_query(const char *db_path);
 
 /* Open database for a named project in the default cache dir. */
 cbm_store_t *cbm_store_open(const char *project);

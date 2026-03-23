@@ -2629,30 +2629,14 @@ static void detect_session(cbm_mcp_server_t *srv) {
         }
     }
 
-    /* Derive project name from path */
+    /* Derive project name from path — must match cbm_project_name_from_path
+     * used by the pipeline, otherwise session queries look for a .db file
+     * that doesn't match the indexed project name. */
     if (srv->session_root[0]) {
-        /* Use last two path components joined by dash, matching Go's ProjectNameFromPath */
-        const char *p = srv->session_root;
-        const char *last_slash = strrchr(p, '/');
-        if (last_slash && last_slash > p) {
-            const char *prev = last_slash - 1;
-            while (prev > p && *prev != '/') {
-                prev--;
-            }
-            if (*prev == '/') {
-                prev++;
-            }
-            snprintf(srv->session_project, sizeof(srv->session_project), "%.*s",
-                     (int)(strlen(p) - (size_t)(prev - p)), prev);
-            /* Replace / with - */
-            for (char *c = srv->session_project; *c; c++) {
-                if (*c == '/') {
-                    *c = '-';
-                }
-            }
-        } else {
-            snprintf(srv->session_project, sizeof(srv->session_project), "%s",
-                     last_slash ? last_slash + 1 : p);
+        char *pname = cbm_project_name_from_path(srv->session_root);
+        if (pname) {
+            snprintf(srv->session_project, sizeof(srv->session_project), "%s", pname);
+            free(pname);
         }
     }
 }

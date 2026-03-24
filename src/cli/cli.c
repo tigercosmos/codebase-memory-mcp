@@ -2252,8 +2252,8 @@ static int cbm_download_to_file_quiet(const char *url, const char *dest) {
 
 /* ── macOS ad-hoc signing ─────────────────────────────────────── */
 
-static int cbm_macos_adhoc_sign(const char *binary_path) {
 #ifdef __APPLE__
+static int cbm_macos_adhoc_sign(const char *binary_path) {
     /* Remove quarantine xattr (best effort — may not exist) */
     const char *xattr_argv[] = {"xattr", "-d", "com.apple.quarantine", binary_path, NULL};
     (void)cbm_exec_no_shell(xattr_argv);
@@ -2261,11 +2261,8 @@ static int cbm_macos_adhoc_sign(const char *binary_path) {
     /* Ad-hoc sign (required for arm64, harmless for x86_64) */
     const char *sign_argv[] = {"codesign", "--sign", "-", "--force", binary_path, NULL};
     return cbm_exec_no_shell(sign_argv);
-#else
-    (void)binary_path;
-    return 0;
-#endif
 }
+#endif
 
 /* ── Kill other MCP server instances ──────────────────────────── */
 

@@ -254,9 +254,9 @@ jobs:
 
       - name: Archive standard binary
         run: |
-          cp LICENSE build/c/
+          cp LICENSE install.sh build/c/
           tar -czf codebase-memory-mcp-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
-            -C build/c codebase-memory-mcp LICENSE
+            -C build/c codebase-memory-mcp LICENSE install.sh
 
       - name: Build UI binary
         run: scripts/build.sh --with-ui --version ${{ inputs.version }} CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
@@ -271,9 +271,9 @@ jobs:
 
       - name: Archive UI binary
         run: |
-          cp LICENSE build/c/
+          cp LICENSE install.sh build/c/
           tar -czf codebase-memory-mcp-ui-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
-            -C build/c codebase-memory-mcp LICENSE
+            -C build/c codebase-memory-mcp LICENSE install.sh
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -310,7 +310,7 @@ jobs:
           BIN=build/c/codebase-memory-mcp
           [ -f "${BIN}.exe" ] && BIN="${BIN}.exe"
           cp "$BIN" codebase-memory-mcp.exe
-          zip codebase-memory-mcp-windows-amd64.zip codebase-memory-mcp.exe LICENSE
+          zip codebase-memory-mcp-windows-amd64.zip codebase-memory-mcp.exe LICENSE install.ps1
 
       - name: Build UI binary
         shell: msys2 {0}
@@ -322,7 +322,7 @@ jobs:
           BIN=build/c/codebase-memory-mcp
           [ -f "${BIN}.exe" ] && BIN="${BIN}.exe"
           cp "$BIN" codebase-memory-mcp.exe
-          zip codebase-memory-mcp-ui-windows-amd64.zip codebase-memory-mcp.exe LICENSE
+          zip codebase-memory-mcp-ui-windows-amd64.zip codebase-memory-mcp.exe LICENSE install.ps1
 
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
@@ -655,7 +655,11 @@ jobs:
               mv binaries/codebase-memory-mcp.exe "binaries/${NAME}.exe"
             fi
           done
-          echo "=== Extracted binaries for scanning ==="
+          # Also include install scripts (users curl | sh these)
+          cp install.sh binaries/install.sh 2>/dev/null || true
+          cp install.ps1 binaries/install.ps1 2>/dev/null || true
+
+          echo "=== Files for scanning ==="
           ls -la binaries/
 
       - name: Scan extracted binaries with VirusTotal

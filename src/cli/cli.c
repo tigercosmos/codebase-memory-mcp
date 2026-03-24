@@ -11,6 +11,9 @@
 
 // the correct standard headers are included below but clang-tidy doesn't map them.
 #include <ctype.h>
+#ifndef _WIN32
+#include <signal.h>
+#endif
 #include "foundation/compat_fs.h"
 
 #ifndef CBM_VERSION
@@ -2097,20 +2100,72 @@ static int sha256_file(const char *path, char *out, size_t out_size) {
     return -1;
 }
 
+/* ── Download helper (replaces system("curl ...")) ────────────── */
+
+static int cbm_download_to_file(const char *url, const char *dest) {
+    const char *argv[] = {"curl", "-fSL", "--progress-bar", "-o", dest, url, NULL};
+    return cbm_exec_no_shell(argv);
+}
+
+static int cbm_download_to_file_quiet(const char *url, const char *dest) {
+    const char *argv[] = {"curl", "-fsSL", "-o", dest, url, NULL};
+    return cbm_exec_no_shell(argv);
+}
+
+/* ── macOS ad-hoc signing ─────────────────────────────────────── */
+
+static int cbm_macos_adhoc_sign(const char *binary_path) {
+#ifdef __APPLE__
+    /* Remove quarantine xattr (best effort — may not exist) */
+    const char *xattr_argv[] = {"xattr", "-d", "com.apple.quarantine", binary_path, NULL};
+    (void)cbm_exec_no_shell(xattr_argv);
+
+    /* Ad-hoc sign (required for arm64, harmless for x86_64) */
+    const char *sign_argv[] = {"codesign", "--sign", "-", "--force", binary_path, NULL};
+    return cbm_exec_no_shell(sign_argv);
+#else
+    (void)binary_path;
+    return 0;
+#endif
+}
+
+/* ── Kill other MCP server instances ──────────────────────────── */
+
+static int cbm_kill_other_instances(void) {
+#ifdef _WIN32
+    const char *argv[] = {"taskkill", "/IM", "codebase-memory-mcp.exe", "/F", NULL};
+    (void)cbm_exec_no_shell(argv);
+    return 0;
+#else
+    int killed = 0;
+    pid_t self = getpid();
+    FILE *fp = cbm_popen("pgrep -x codebase-memory-mcp", "r");
+    if (!fp) {
+        return 0;
+    }
+    char line[32];
+    while (fgets(line, sizeof(line), fp)) {
+        pid_t pid = (pid_t)strtol(line, NULL, 10);
+        if (pid > 0 && pid != self) {
+            if (kill(pid, SIGTERM) == 0) {
+                killed++;
+            }
+        }
+    }
+    cbm_pclose(fp);
+    return killed;
+#endif
+}
+
 /* Download checksums.txt and verify the archive integrity.
  * Returns: 0 = verified OK, 1 = mismatch (FAIL), -1 = could not verify (warning). */
 static int verify_download_checksum(const char *archive_path, const char *archive_name) {
     char checksum_file[256];
     snprintf(checksum_file, sizeof(checksum_file), "%s/cbm-checksums.txt", cbm_tmpdir());
 
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd),
-             "curl -fsSL -o '%s' "
-             "'https://github.com/DeusData/codebase-memory-mcp/releases/latest/download/"
-             "checksums.txt' 2>/dev/null",
-             checksum_file);
-    // NOLINTNEXTLINE(cert-env33-c) — intentional CLI subprocess for download
-    int rc = system(cmd);
+    int rc = cbm_download_to_file_quiet(
+        "https://github.com/DeusData/codebase-memory-mcp/releases/latest/download/checksums.txt",
+        checksum_file);
     if (rc != 0) {
         fprintf(stderr, "warning: could not download checksums.txt — skipping verification\n");
         cbm_unlink(checksum_file);
@@ -2840,10 +2895,7 @@ int cbm_cmd_update(int argc, char **argv) {
     char tmp_archive[256];
     snprintf(tmp_archive, sizeof(tmp_archive), "%s/cbm-update.%s", cbm_tmpdir(), ext);
 
-    char cmd[1024];
-    snprintf(cmd, sizeof(cmd), "curl -fSL --progress-bar -o '%s' '%s'", tmp_archive, url);
-    // NOLINTNEXTLINE(cert-env33-c) — intentional CLI subprocess for download
-    int rc = system(cmd);
+    int rc = cbm_download_to_file(url, tmp_archive);
     if (rc != 0) {
         fprintf(stderr, "error: download failed (exit %d)\n", rc);
         cbm_unlink(tmp_archive);
@@ -2868,6 +2920,14 @@ int cbm_cmd_update(int argc, char **argv) {
             return 1;
         }
         /* crc == -1: could not verify (warning only), crc == 0: verified OK */
+    }
+
+    /* Step 4c: Kill running MCP server instances before replacement */
+    {
+        int killed = cbm_kill_other_instances();
+        if (killed > 0) {
+            printf("Stopped %d running MCP server instance(s).\n", killed);
+        }
     }
 
     /* Step 5: Extract binary */
@@ -2935,6 +2995,13 @@ int cbm_cmd_update(int argc, char **argv) {
             rename(ui_bin, bin_dest);
         }
     }
+
+    /* Step 5b: macOS ad-hoc signing (required for arm64, harmless for x86_64) */
+#ifdef __APPLE__
+    if (cbm_macos_adhoc_sign(bin_dest) != 0) {
+        fprintf(stderr, "warning: ad-hoc signing failed — binary may not run on macOS arm64\n");
+    }
+#endif
 
     /* Step 6: Reinstall skills (force to pick up new content) */
     char skills_dir[1024];

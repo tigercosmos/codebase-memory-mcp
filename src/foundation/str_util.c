@@ -249,8 +249,10 @@ bool cbm_validate_shell_arg(const char *s) {
         case '`':
         case '\n':
         case '\r':
+#ifndef _WIN32
         case '\\':
             return false;
+#endif
         default:
             break;
         }

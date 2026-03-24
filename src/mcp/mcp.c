@@ -2454,12 +2454,19 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
         return cbm_mcp_text_result("project path contains invalid characters", true);
     }
 
-    /* Get changed files via git */
-    char cmd[1024];
+    /* Get changed files via git (-C avoids cd + quoting issues on Windows) */
+    char cmd[2048];
+#ifdef _WIN32
     snprintf(cmd, sizeof(cmd),
-             "cd '%s' && { git diff --name-only '%s'...HEAD 2>/dev/null; "
-             "git diff --name-only 2>/dev/null; } | sort -u",
-             root_path, base_branch);
+             "git -C \"%s\" diff --name-only \"%s\"...HEAD 2>NUL & "
+             "git -C \"%s\" diff --name-only 2>NUL",
+             root_path, base_branch, root_path);
+#else
+    snprintf(cmd, sizeof(cmd),
+             "{ git -C '%s' diff --name-only '%s'...HEAD 2>/dev/null; "
+             "git -C '%s' diff --name-only 2>/dev/null; } | sort -u",
+             root_path, base_branch, root_path);
+#endif
 
     // NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c)
     FILE *fp = cbm_popen(cmd, "r");

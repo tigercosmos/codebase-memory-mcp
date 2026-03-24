@@ -1277,6 +1277,279 @@ TEST(snippet_include_neighbors_enabled) {
 }
 
 /* ══════════════════════════════════════════════════════════════════
+ *  JSON-RPC PARSING — EDGE CASES
+ * ══════════════════════════════════════════════════════════════════ */
+
+TEST(jsonrpc_parse_empty_string) {
+    cbm_jsonrpc_request_t req = {0};
+    int rc = cbm_jsonrpc_parse("", &req);
+    ASSERT_EQ(rc, -1);
+    cbm_jsonrpc_request_free(&req);
+    PASS();
+}
+
+TEST(jsonrpc_parse_missing_jsonrpc_field) {
+    /* jsonrpc field absent — parser defaults to "2.0" if method present */
+    const char *line = "{\"id\":1,\"method\":\"initialize\",\"params\":{}}";
+    cbm_jsonrpc_request_t req = {0};
+    int rc = cbm_jsonrpc_parse(line, &req);
+    ASSERT_EQ(rc, 0);
+    ASSERT_STR_EQ(req.jsonrpc, "2.0");
+    ASSERT_STR_EQ(req.method, "initialize");
+    ASSERT_TRUE(req.has_id);
+    cbm_jsonrpc_request_free(&req);
+    PASS();
+}
+
+TEST(jsonrpc_parse_missing_method) {
+    /* method is required — should fail */
+    const char *line = "{\"jsonrpc\":\"2.0\",\"id\":1,\"params\":{}}";
+    cbm_jsonrpc_request_t req = {0};
+    int rc = cbm_jsonrpc_parse(line, &req);
+    ASSERT_EQ(rc, -1);
+    cbm_jsonrpc_request_free(&req);
+    PASS();
+}
+
+TEST(jsonrpc_parse_string_id) {
+    /* JSON-RPC spec allows string IDs; parser converts via strtol */
+    const char *line = "{\"jsonrpc\":\"2.0\",\"id\":\"99\",\"method\":\"tools/list\"}";
+    cbm_jsonrpc_request_t req = {0};
+    int rc = cbm_jsonrpc_parse(line, &req);
+    ASSERT_EQ(rc, 0);
+    ASSERT_TRUE(req.has_id);
+    ASSERT_EQ(req.id, 99);
+    ASSERT_STR_EQ(req.method, "tools/list");
+    cbm_jsonrpc_request_free(&req);
+    PASS();
+}
+
+TEST(jsonrpc_parse_no_params) {
+    /* Request with no params field — params_raw should be NULL */
+    const char *line = "{\"jsonrpc\":\"2.0\",\"id\":5,\"method\":\"tools/list\"}";
+    cbm_jsonrpc_request_t req = {0};
+    int rc = cbm_jsonrpc_parse(line, &req);
+    ASSERT_EQ(rc, 0);
+    ASSERT_NULL(req.params_raw);
+    ASSERT_EQ(req.id, 5);
+    cbm_jsonrpc_request_free(&req);
+    PASS();
+}
+
+TEST(jsonrpc_parse_extra_whitespace) {
+    /* Leading/trailing whitespace and internal spacing in JSON */
+    const char *line = "  { \"jsonrpc\" : \"2.0\" , \"id\" : 7 , \"method\" : \"ping\" }  ";
+    cbm_jsonrpc_request_t req = {0};
+    int rc = cbm_jsonrpc_parse(line, &req);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(req.id, 7);
+    ASSERT_STR_EQ(req.method, "ping");
+    cbm_jsonrpc_request_free(&req);
+    PASS();
+}
+
+TEST(jsonrpc_parse_array_not_object) {
+    /* JSON array at root — not a valid JSON-RPC request */
+    cbm_jsonrpc_request_t req = {0};
+    int rc = cbm_jsonrpc_parse("[1,2,3]", &req);
+    ASSERT_EQ(rc, -1);
+    cbm_jsonrpc_request_free(&req);
+    PASS();
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ *  ARGUMENT EXTRACTION — EDGE CASES
+ * ══════════════════════════════════════════════════════════════════ */
+
+TEST(mcp_get_string_arg_empty_json) {
+    /* Empty JSON string — yyjson_read fails → NULL */
+    char *val = cbm_mcp_get_string_arg("", "key");
+    ASSERT_NULL(val);
+    PASS();
+}
+
+TEST(mcp_get_string_arg_empty_object) {
+    /* Valid JSON with no keys → NULL for any key */
+    char *val = cbm_mcp_get_string_arg("{}", "key");
+    ASSERT_NULL(val);
+    PASS();
+}
+
+TEST(mcp_get_string_arg_nested_value) {
+    /* Value is an object, not a string → should return NULL */
+    const char *args = "{\"config\":{\"nested\":true},\"name\":\"hello\"}";
+    char *val = cbm_mcp_get_string_arg(args, "config");
+    ASSERT_NULL(val); /* not a string type */
+    val = cbm_mcp_get_string_arg(args, "name");
+    ASSERT_NOT_NULL(val);
+    ASSERT_STR_EQ(val, "hello");
+    free(val);
+    PASS();
+}
+
+TEST(mcp_get_string_arg_int_value) {
+    /* Value is an integer, not a string → NULL */
+    char *val = cbm_mcp_get_string_arg("{\"count\":42}", "count");
+    ASSERT_NULL(val);
+    PASS();
+}
+
+TEST(mcp_get_int_arg_empty_json) {
+    int val = cbm_mcp_get_int_arg("", "key", 99);
+    ASSERT_EQ(val, 99);
+    PASS();
+}
+
+TEST(mcp_get_int_arg_string_value) {
+    /* Value is a string, not int → should return default */
+    int val = cbm_mcp_get_int_arg("{\"limit\":\"ten\"}", "limit", 5);
+    ASSERT_EQ(val, 5);
+    PASS();
+}
+
+TEST(mcp_get_int_arg_bool_value) {
+    /* Value is a bool, not int → default */
+    int val = cbm_mcp_get_int_arg("{\"flag\":true}", "flag", -1);
+    ASSERT_EQ(val, -1);
+    PASS();
+}
+
+TEST(mcp_get_bool_arg_empty_json) {
+    bool val = cbm_mcp_get_bool_arg("", "key");
+    ASSERT_FALSE(val);
+    PASS();
+}
+
+TEST(mcp_get_bool_arg_int_value) {
+    /* Value is int 1, not bool → should return false */
+    bool val = cbm_mcp_get_bool_arg("{\"flag\":1}", "flag");
+    ASSERT_FALSE(val);
+    PASS();
+}
+
+TEST(mcp_get_tool_name_empty_json) {
+    char *name = cbm_mcp_get_tool_name("");
+    ASSERT_NULL(name);
+    PASS();
+}
+
+TEST(mcp_get_tool_name_missing_name) {
+    char *name = cbm_mcp_get_tool_name("{\"arguments\":{}}");
+    ASSERT_NULL(name);
+    PASS();
+}
+
+TEST(mcp_get_arguments_empty_json) {
+    char *args = cbm_mcp_get_arguments("");
+    ASSERT_NULL(args);
+    PASS();
+}
+
+TEST(mcp_get_arguments_no_arguments_key) {
+    /* No "arguments" key → returns "{}" */
+    char *args = cbm_mcp_get_arguments("{\"name\":\"tool\"}");
+    ASSERT_NOT_NULL(args);
+    ASSERT_STR_EQ(args, "{}");
+    free(args);
+    PASS();
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ *  FILE URI PARSING — EDGE CASES
+ * ══════════════════════════════════════════════════════════════════ */
+
+TEST(parse_file_uri_http_scheme) {
+    char path[256];
+    ASSERT_FALSE(cbm_parse_file_uri("http://example.com/path", path, sizeof(path)));
+    ASSERT_STR_EQ(path, "");
+    PASS();
+}
+
+TEST(parse_file_uri_ftp_scheme) {
+    char path[256];
+    ASSERT_FALSE(cbm_parse_file_uri("ftp://server/file.txt", path, sizeof(path)));
+    ASSERT_STR_EQ(path, "");
+    PASS();
+}
+
+TEST(parse_file_uri_buffer_too_small) {
+    char path[5]; /* only 5 bytes — path gets truncated */
+    ASSERT_TRUE(cbm_parse_file_uri("file:///usr/local/bin", path, sizeof(path)));
+    /* snprintf truncates to 4 chars + NUL */
+    ASSERT_EQ(strlen(path), 4);
+    ASSERT_STR_EQ(path, "/usr");
+    PASS();
+}
+
+TEST(parse_file_uri_spaces_in_path) {
+    char path[256];
+    ASSERT_TRUE(cbm_parse_file_uri("file:///home/user/my%20project", path, sizeof(path)));
+    /* Raw percent-encoding is preserved (not decoded) */
+    ASSERT_STR_EQ(path, "/home/user/my%20project");
+    PASS();
+}
+
+TEST(parse_file_uri_null_out_path) {
+    /* NULL out_path — should not crash */
+    ASSERT_FALSE(cbm_parse_file_uri("file:///tmp", NULL, 256));
+    PASS();
+}
+
+TEST(parse_file_uri_zero_size) {
+    char path[256] = "garbage";
+    /* out_size=0 → should fail safely */
+    ASSERT_FALSE(cbm_parse_file_uri("file:///tmp", path, 0));
+    PASS();
+}
+
+/* ══════════════════════════════════════════════════════════════════
+ *  SERVER HANDLE — EDGE CASES
+ * ══════════════════════════════════════════════════════════════════ */
+
+TEST(server_handle_invalid_json) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+
+    char *resp = cbm_mcp_server_handle(srv, "this is not json at all");
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "\"error\""));
+    ASSERT_NOT_NULL(strstr(resp, "-32700")); /* Parse error */
+    free(resp);
+
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
+TEST(server_handle_empty_object) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+
+    /* Valid JSON but no method field → parse error */
+    char *resp = cbm_mcp_server_handle(srv, "{}");
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "\"error\""));
+    free(resp);
+
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
+TEST(server_handle_tools_call_missing_name) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+
+    /* tools/call with no tool name in params */
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"tools/call\","
+             "\"params\":{\"arguments\":{}}}");
+    ASSERT_NOT_NULL(resp);
+    /* Should return error about unknown/missing tool */
+    ASSERT_NOT_NULL(strstr(resp, "\"id\":50"));
+    ASSERT_TRUE(strstr(resp, "error") || strstr(resp, "isError") || strstr(resp, "unknown"));
+    free(resp);
+
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
+/* ══════════════════════════════════════════════════════════════════
  *  POLL/GETLINE FILE* BUFFERING FIX
  * ══════════════════════════════════════════════════════════════════ */
 
@@ -1364,6 +1637,15 @@ SUITE(mcp) {
     RUN_TEST(jsonrpc_parse_invalid);
     RUN_TEST(jsonrpc_parse_tools_call);
 
+    /* JSON-RPC parsing — edge cases */
+    RUN_TEST(jsonrpc_parse_empty_string);
+    RUN_TEST(jsonrpc_parse_missing_jsonrpc_field);
+    RUN_TEST(jsonrpc_parse_missing_method);
+    RUN_TEST(jsonrpc_parse_string_id);
+    RUN_TEST(jsonrpc_parse_no_params);
+    RUN_TEST(jsonrpc_parse_extra_whitespace);
+    RUN_TEST(jsonrpc_parse_array_not_object);
+
     /* JSON-RPC formatting */
     RUN_TEST(jsonrpc_format_response);
     RUN_TEST(jsonrpc_format_error);
@@ -1382,11 +1664,31 @@ SUITE(mcp) {
     RUN_TEST(mcp_get_int_arg);
     RUN_TEST(mcp_get_bool_arg);
 
+    /* Argument extraction — edge cases */
+    RUN_TEST(mcp_get_string_arg_empty_json);
+    RUN_TEST(mcp_get_string_arg_empty_object);
+    RUN_TEST(mcp_get_string_arg_nested_value);
+    RUN_TEST(mcp_get_string_arg_int_value);
+    RUN_TEST(mcp_get_int_arg_empty_json);
+    RUN_TEST(mcp_get_int_arg_string_value);
+    RUN_TEST(mcp_get_int_arg_bool_value);
+    RUN_TEST(mcp_get_bool_arg_empty_json);
+    RUN_TEST(mcp_get_bool_arg_int_value);
+    RUN_TEST(mcp_get_tool_name_empty_json);
+    RUN_TEST(mcp_get_tool_name_missing_name);
+    RUN_TEST(mcp_get_arguments_empty_json);
+    RUN_TEST(mcp_get_arguments_no_arguments_key);
+
     /* Server protocol handling */
     RUN_TEST(server_handle_initialize);
     RUN_TEST(server_handle_initialized_notification);
     RUN_TEST(server_handle_tools_list);
     RUN_TEST(server_handle_unknown_method);
+
+    /* Server handle — edge cases */
+    RUN_TEST(server_handle_invalid_json);
+    RUN_TEST(server_handle_empty_object);
+    RUN_TEST(server_handle_tools_call_missing_name);
 
     /* Tool handlers */
     RUN_TEST(tool_list_projects_empty);
@@ -1425,6 +1727,14 @@ SUITE(mcp) {
     RUN_TEST(parse_file_uri_unix);
     RUN_TEST(parse_file_uri_windows);
     RUN_TEST(parse_file_uri_invalid);
+
+    /* URI helpers — edge cases */
+    RUN_TEST(parse_file_uri_http_scheme);
+    RUN_TEST(parse_file_uri_ftp_scheme);
+    RUN_TEST(parse_file_uri_buffer_too_small);
+    RUN_TEST(parse_file_uri_spaces_in_path);
+    RUN_TEST(parse_file_uri_null_out_path);
+    RUN_TEST(parse_file_uri_zero_size);
 
     /* Poll/getline FILE* buffering fix */
 #ifndef _WIN32

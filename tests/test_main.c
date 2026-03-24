@@ -32,6 +32,7 @@ extern void suite_discover(void);
 extern void suite_graph_buffer(void);
 extern void suite_registry(void);
 extern void suite_pipeline(void);
+extern void suite_fqn(void);
 extern void suite_watcher(void);
 extern void suite_lz4(void);
 extern void suite_sqlite_writer(void);
@@ -50,6 +51,7 @@ extern void suite_parallel(void);
 extern void suite_mem(void);
 extern void suite_ui(void);
 extern void suite_security(void);
+extern void suite_yaml(void);
 extern void suite_integration(void);
 
 int main(void) {
@@ -92,6 +94,7 @@ int main(void) {
     /* Pipeline (M8) */
     RUN_SUITE(registry);
     RUN_SUITE(pipeline);
+    RUN_SUITE(fqn);
 
     /* Watcher (M10) */
     RUN_SUITE(watcher);
@@ -137,6 +140,9 @@ int main(void) {
 
     /* Security defenses */
     RUN_SUITE(security);
+
+    /* YAML parser */
+    RUN_SUITE(yaml);
 
     /* Integration (end-to-end) */
     RUN_SUITE(integration);

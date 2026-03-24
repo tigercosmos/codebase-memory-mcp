@@ -377,6 +377,37 @@ TEST(arena_total_through_reset) {
     PASS();
 }
 
+TEST(arena_reset_block_size_invariant) {
+    /* BUG DETECTOR: after reset, block_size should match blocks[0]'s actual size.
+     * arena_grow() updates block_size to the new (larger) block's size.
+     * arena_reset() frees the grown blocks but does NOT restore block_size.
+     * Result: arena thinks blocks[0] has more capacity than it actually does.
+     * This is a heap-buffer-overflow waiting to happen. */
+    CBMArena a;
+    cbm_arena_init_sized(&a, 128);
+    size_t original_block_size = a.block_size;
+    ASSERT_EQ(original_block_size, 128);
+    ASSERT_EQ(a.block_sizes[0], 128);
+
+    /* Force growth: block_size will be updated to new (larger) value */
+    cbm_arena_alloc(&a, 100);
+    cbm_arena_alloc(&a, 100); /* triggers grow */
+    ASSERT_GTE(a.nblocks, 2);
+    ASSERT_GT(a.block_size, 128); /* block_size grew */
+
+    /* Reset: frees grown blocks, keeps blocks[0] (which is 128 bytes) */
+    cbm_arena_reset(&a);
+    ASSERT_EQ(a.nblocks, 1);
+
+    /* CRITICAL CHECK: block_size must match blocks[0]'s actual capacity.
+     * If block_size > block_sizes[0], the arena will allow allocations
+     * that overflow blocks[0]. */
+    ASSERT_EQ(a.block_size, a.block_sizes[0]);
+
+    cbm_arena_destroy(&a);
+    PASS();
+}
+
 TEST(arena_strndup_zero_len) {
     /* strndup with len=0 — should return empty string */
     CBMArena a;
@@ -419,5 +450,6 @@ SUITE(arena) {
     RUN_TEST(arena_calloc_zero);
     RUN_TEST(arena_many_large_allocs_block_growth);
     RUN_TEST(arena_total_through_reset);
+    RUN_TEST(arena_reset_block_size_invariant);
     RUN_TEST(arena_strndup_zero_len);
 }

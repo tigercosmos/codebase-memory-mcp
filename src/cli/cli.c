@@ -1559,8 +1559,14 @@ static void cbm_install_hook_gate_script(const char *home) {
                "is not indexed yet, call index_repository first. Fall back to Grep/Glob/Read "
                "only for text content search. If you need Grep, retry.' >&2\n"
                "exit 2\n");
+    /* fchmod before close to avoid TOCTOU race (CodeQL cpp/toctou-race-condition) */
+#ifndef _WIN32
+    fchmod(fileno(f), 0755);
+#endif
     fclose(f);
+#ifdef _WIN32
     chmod(script_path, 0755);
+#endif
 }
 
 #define GEMINI_HOOK_MATCHER "google_search|read_file|grep_search"

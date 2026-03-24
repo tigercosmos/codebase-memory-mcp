@@ -33,6 +33,28 @@
 #include <sys/stat.h>
 #include <time.h>
 
+/* ── Global index lock ─────────────────────────────────────────── */
+/* Prevents concurrent pipeline runs on the same DB file.
+ * Atomic spinlock: 0 = free, 1 = locked. */
+static atomic_int g_pipeline_busy = 0;
+
+bool cbm_pipeline_try_lock(void) {
+    return atomic_exchange(&g_pipeline_busy, 1) == 0;
+}
+
+#define LOCK_SPIN_NS 100000000 /* 100ms between lock retries */
+
+void cbm_pipeline_lock(void) {
+    while (atomic_exchange(&g_pipeline_busy, 1) != 0) {
+        struct timespec ts = {0, LOCK_SPIN_NS};
+        cbm_nanosleep(&ts, NULL);
+    }
+}
+
+void cbm_pipeline_unlock(void) {
+    atomic_store(&g_pipeline_busy, 0);
+}
+
 /* ── Internal state ──────────────────────────────────────────────── */
 
 struct cbm_pipeline {
@@ -344,45 +366,44 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
         return -1;
     }
 
-    /* Check for existing DB with file hashes → incremental path */
+    /* Check for existing DB → route to incremental or delete for reindex */
     {
         char *db_path = resolve_db_path(p);
         if (db_path) {
             struct stat db_st;
             if (stat(db_path, &db_st) == 0) {
-                /* DB exists — check if it has file hashes */
+                /* DB exists — try incremental path first */
                 cbm_store_t *check_store = cbm_store_open_path(db_path);
-                if (check_store) {
-                    /* Integrity check — corrupt DB → delete and fall through to full reindex */
-                    if (!cbm_store_check_integrity(check_store)) {
-                        cbm_log_error("pipeline.corrupt_db", "path", db_path, "action",
-                                      "deleting — will do full reindex");
-                        cbm_store_close(check_store);
-                        cbm_unlink(db_path);
-                        char wal[1040];
-                        char shm[1040];
-                        snprintf(wal, sizeof(wal), "%s-wal", db_path);
-                        snprintf(shm, sizeof(shm), "%s-shm", db_path);
-                        cbm_unlink(wal);
-                        cbm_unlink(shm);
-                    } else {
-                        cbm_file_hash_t *hashes = NULL;
-                        int hash_count = 0;
-                        cbm_store_get_file_hashes(check_store, p->project_name, &hashes,
-                                                  &hash_count);
-                        cbm_store_free_file_hashes(hashes, hash_count);
-                        cbm_store_close(check_store);
+                if (check_store && cbm_store_check_integrity(check_store)) {
+                    cbm_file_hash_t *hashes = NULL;
+                    int hash_count = 0;
+                    cbm_store_get_file_hashes(check_store, p->project_name, &hashes, &hash_count);
+                    cbm_store_free_file_hashes(hashes, hash_count);
+                    cbm_store_close(check_store);
 
-                        if (hash_count > 0) {
-                            cbm_log_info("pipeline.route", "path", "incremental", "stored_hashes",
-                                         itoa_buf(hash_count));
-                            rc = cbm_pipeline_run_incremental(p, db_path, files, file_count);
-                            cbm_discover_free(files, file_count);
-                            free(db_path);
-                            return rc;
-                        }
+                    if (hash_count > 0) {
+                        cbm_log_info("pipeline.route", "path", "incremental", "stored_hashes",
+                                     itoa_buf(hash_count));
+                        rc = cbm_pipeline_run_incremental(p, db_path, files, file_count);
+                        cbm_discover_free(files, file_count);
+                        free(db_path);
+                        return rc;
                     }
+                } else if (check_store) {
+                    cbm_store_close(check_store);
                 }
+
+                /* Not eligible for incremental → reindex: delete old DB first.
+                 * cbm_write_db writes directly to the final path (no rename),
+                 * so the old file must be gone before the pipeline dumps. */
+                cbm_log_info("pipeline.route", "path", "reindex", "action", "deleting old db");
+                cbm_unlink(db_path);
+                char wal[1040];
+                char shm[1040];
+                snprintf(wal, sizeof(wal), "%s-wal", db_path);
+                snprintf(shm, sizeof(shm), "%s-shm", db_path);
+                cbm_unlink(wal);
+                cbm_unlink(shm);
             }
             free(db_path);
         }

@@ -77,15 +77,25 @@ static void *http_thread(void *arg) {
 
 static int watcher_index_fn(const char *project_name, const char *root_path, void *user_data) {
     (void)user_data;
+
+    /* Non-blocking: skip if another pipeline is already running.
+     * Watcher will retry on next poll cycle (5-60s). */
+    if (!cbm_pipeline_try_lock()) {
+        cbm_log_info("watcher.skip", "project", project_name, "reason", "pipeline_busy");
+        return 0;
+    }
+
     cbm_log_info("watcher.reindex", "project", project_name, "path", root_path);
 
     cbm_pipeline_t *p = cbm_pipeline_new(root_path, NULL, CBM_MODE_FULL);
     if (!p) {
+        cbm_pipeline_unlock();
         return -1;
     }
 
     int rc = cbm_pipeline_run(p);
     cbm_pipeline_free(p);
+    cbm_pipeline_unlock();
     return rc;
 }
 

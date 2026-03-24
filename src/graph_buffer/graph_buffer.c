@@ -971,22 +971,11 @@ int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
     cbm_ht_free(gb->edges_by_type);
     gb->edges_by_type = NULL;
 
-    /* Write to .tmp first, then atomic rename */
-    char tmp_path[1040];
-    snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", path);
-
-    int rc = cbm_write_db(tmp_path, gb->project, gb->root_path, indexed_at, dump_nodes, node_idx,
+    /* Write directly to final path — no .tmp + rename.
+     * Callers must delete the old .db before calling this (reindex)
+     * or ensure no file exists (first index). */
+    int rc = cbm_write_db(path, gb->project, gb->root_path, indexed_at, dump_nodes, node_idx,
                           dump_edges, edge_idx);
-
-    if (rc == 0) {
-        rc = rename(tmp_path, path);
-        if (rc != 0) {
-            cbm_log_error("gbuf.dump", "op", "rename", "path", path);
-        }
-    } else {
-        // NOLINTNEXTLINE(cert-err33-c) — best-effort cleanup
-        remove(tmp_path);
-    }
 
     {
         char b1[16];

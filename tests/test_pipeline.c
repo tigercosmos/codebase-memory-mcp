@@ -14,6 +14,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdatomic.h>
+#include "foundation/compat_thread.h"
 #include <sys/stat.h>
 #include <unistd.h>
 #include "graph_buffer/graph_buffer.h"
@@ -5213,7 +5214,89 @@ TEST(incremental_kustomize_module_indexed) {
     PASS();
 }
 
+/* ── Index lock tests ───────────────────────────────────────────── */
+
+TEST(pipeline_lock_try_acquire) {
+    /* First try-lock should succeed */
+    ASSERT_TRUE(cbm_pipeline_try_lock());
+    /* Second try-lock should fail (already held) */
+    ASSERT_FALSE(cbm_pipeline_try_lock());
+    /* Release, then re-acquire should succeed */
+    cbm_pipeline_unlock();
+    ASSERT_TRUE(cbm_pipeline_try_lock());
+    cbm_pipeline_unlock();
+    PASS();
+}
+
+TEST(pipeline_lock_blocking) {
+    /* Lock, then unlock — basic sanity */
+    cbm_pipeline_lock();
+    cbm_pipeline_unlock();
+    /* Should be immediately re-acquirable */
+    cbm_pipeline_lock();
+    cbm_pipeline_unlock();
+    PASS();
+}
+
+/* Thread function that tries to acquire the lock and records result */
+static atomic_int g_thread_acquired = 0;
+static atomic_int g_thread_done = 0;
+
+static void *try_lock_thread(void *arg) {
+    (void)arg;
+    if (cbm_pipeline_try_lock()) {
+        atomic_store(&g_thread_acquired, 1);
+        cbm_pipeline_unlock();
+    } else {
+        atomic_store(&g_thread_acquired, 0);
+    }
+    atomic_store(&g_thread_done, 1);
+    return NULL;
+}
+
+TEST(pipeline_lock_contention) {
+    /* Main thread holds lock, spawned thread should fail try_lock */
+    cbm_pipeline_lock();
+    atomic_store(&g_thread_acquired, -1);
+    atomic_store(&g_thread_done, 0);
+
+    cbm_thread_t tid;
+    int rc = cbm_thread_create(&tid, 0, try_lock_thread, NULL);
+    ASSERT_EQ(rc, 0);
+
+    /* Wait for thread to finish */
+    cbm_thread_join(&tid);
+
+    /* Thread should NOT have acquired the lock */
+    ASSERT_EQ(atomic_load(&g_thread_acquired), 0);
+    cbm_pipeline_unlock();
+    PASS();
+}
+
+TEST(pipeline_lock_release_allows_contender) {
+    /* Main thread acquires and releases, then spawned thread should succeed */
+    cbm_pipeline_lock();
+    cbm_pipeline_unlock();
+
+    atomic_store(&g_thread_acquired, -1);
+    atomic_store(&g_thread_done, 0);
+
+    cbm_thread_t tid;
+    int rc = cbm_thread_create(&tid, 0, try_lock_thread, NULL);
+    ASSERT_EQ(rc, 0);
+    cbm_thread_join(&tid);
+
+    /* Thread SHOULD have acquired the lock */
+    ASSERT_EQ(atomic_load(&g_thread_acquired), 1);
+    PASS();
+}
+
 SUITE(pipeline) {
+    /* Index lock */
+    RUN_TEST(pipeline_lock_try_acquire);
+    RUN_TEST(pipeline_lock_blocking);
+    RUN_TEST(pipeline_lock_contention);
+    RUN_TEST(pipeline_lock_release_allows_contender);
     /* Lifecycle */
     RUN_TEST(pipeline_create_free);
     RUN_TEST(pipeline_null_repo);

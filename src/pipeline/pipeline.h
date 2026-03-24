@@ -55,6 +55,20 @@ void cbm_pipeline_cancel(cbm_pipeline_t *p);
  * owned by the pipeline. Valid until cbm_pipeline_free(). */
 const char *cbm_pipeline_project_name(const cbm_pipeline_t *p);
 
+/* ── Index lock (prevents concurrent pipeline runs on same DB) ──── */
+
+/* Try to acquire the global index lock. Returns true if acquired,
+ * false if another pipeline is already running (non-blocking).
+ * Use this in the watcher — skip reindex if busy. */
+bool cbm_pipeline_try_lock(void);
+
+/* Acquire the global index lock, blocking until available.
+ * Use this in MCP handler and autoindex — wait for busy watcher to finish. */
+void cbm_pipeline_lock(void);
+
+/* Release the global index lock. */
+void cbm_pipeline_unlock(void);
+
 /* ── FQN helpers (used by passes and external callers) ──────────── */
 
 /* Compute a qualified name: project.dir.parts.name

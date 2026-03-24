@@ -1113,6 +1113,9 @@ static char *handle_delete_project(cbm_mcp_server_t *srv, const char *args) {
         srv->current_project = NULL;
     }
 
+    /* Wait for any in-progress pipeline to finish before deleting */
+    cbm_pipeline_lock();
+
     /* Delete the .db file + WAL/SHM */
     char path[1024];
     project_db_path(name, path, sizeof(path));
@@ -1130,6 +1133,8 @@ static char *handle_delete_project(cbm_mcp_server_t *srv, const char *args) {
         (void)cbm_unlink(shm);
         status = "deleted";
     }
+
+    cbm_pipeline_unlock();
 
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root = yyjson_mut_obj(doc);
@@ -1437,9 +1442,19 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
 
     char *project_name = heap_strdup(cbm_pipeline_project_name(p));
 
-    /* Pipeline builds everything in-memory, then dumps to file atomically.
-     * No need to close srv->store — pipeline doesn't touch the open store. */
+    /* Close cached store — pipeline will delete + recreate the .db file */
+    if (srv->owns_store && srv->store) {
+        cbm_store_close(srv->store);
+        srv->store = NULL;
+    }
+    free(srv->current_project);
+    srv->current_project = NULL;
+
+    /* Serialize pipeline runs to prevent concurrent writes */
+    cbm_pipeline_lock();
     int rc = cbm_pipeline_run(p);
+    cbm_pipeline_unlock();
+
     cbm_pipeline_free(p);
     cbm_mem_collect(); /* return mimalloc pages to OS after large indexing */
 
@@ -2749,7 +2764,11 @@ static void *autoindex_thread(void *arg) {
         return NULL;
     }
 
+    /* Block until any concurrent pipeline finishes */
+    cbm_pipeline_lock();
     int rc = cbm_pipeline_run(p);
+    cbm_pipeline_unlock();
+
     cbm_pipeline_free(p);
     cbm_mem_collect(); /* return mimalloc pages to OS after indexing */
 

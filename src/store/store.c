@@ -1055,7 +1055,7 @@ int cbm_store_upsert_node_batch(cbm_store_t *s, const cbm_node_t *nodes, int cou
         return CBM_STORE_OK;
     }
 
-    exec_sql(s, "BEGIN;");
+    exec_sql(s, "BEGIN IMMEDIATE;");
     for (int i = 0; i < count; i++) {
         int64_t id = cbm_store_upsert_node(s, &nodes[i]);
         if (id == CBM_STORE_ERR) {
@@ -1291,7 +1291,7 @@ int cbm_store_insert_edge_batch(cbm_store_t *s, const cbm_edge_t *edges, int cou
         return CBM_STORE_OK;
     }
 
-    exec_sql(s, "BEGIN;");
+    exec_sql(s, "BEGIN IMMEDIATE;");
     for (int i = 0; i < count; i++) {
         int64_t id = cbm_store_insert_edge(s, &edges[i]);
         if (id == CBM_STORE_ERR) {

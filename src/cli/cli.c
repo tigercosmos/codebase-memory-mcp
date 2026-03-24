@@ -2295,9 +2295,17 @@ static int verify_download_checksum(const char *archive_path, const char *archiv
     char checksum_file[256];
     snprintf(checksum_file, sizeof(checksum_file), "%s/cbm-checksums.txt", cbm_tmpdir());
 
-    int rc = cbm_download_to_file_quiet(
-        "https://github.com/DeusData/codebase-memory-mcp/releases/latest/download/checksums.txt",
-        checksum_file);
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    const char *dl_base = getenv("CBM_DOWNLOAD_URL");
+    char checksum_url[512];
+    if (dl_base && dl_base[0]) {
+        snprintf(checksum_url, sizeof(checksum_url), "%s/checksums.txt", dl_base);
+    } else {
+        snprintf(checksum_url, sizeof(checksum_url), "%s",
+                 "https://github.com/DeusData/codebase-memory-mcp/releases/latest/download/"
+                 "checksums.txt");
+    }
+    int rc = cbm_download_to_file_quiet(checksum_url, checksum_file);
     if (rc != 0) {
         fprintf(stderr, "warning: could not download checksums.txt — skipping verification\n");
         cbm_unlink(checksum_file);
@@ -3016,22 +3024,22 @@ int cbm_cmd_update(int argc, char **argv) {
     // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     const char *variant_label = want_ui ? "ui" : "standard";
 
-    /* Step 3: Build download URL */
+    /* Step 3: Build download URL (CBM_DOWNLOAD_URL overrides for testing) */
     const char *os = detect_os();
     const char *arch = detect_arch();
     const char *ext = strcmp(os, "windows") == 0 ? "zip" : "tar.gz";
 
+    // NOLINTNEXTLINE(concurrency-mt-unsafe)
+    const char *base_url = getenv("CBM_DOWNLOAD_URL");
+    if (!base_url || !base_url[0]) {
+        base_url = "https://github.com/DeusData/codebase-memory-mcp/releases/latest/download";
+    }
+
     char url[512];
     if (want_ui) {
-        snprintf(url, sizeof(url),
-                 "https://github.com/DeusData/codebase-memory-mcp/releases/latest/download/"
-                 "codebase-memory-mcp-ui-%s-%s.%s",
-                 os, arch, ext);
+        snprintf(url, sizeof(url), "%s/codebase-memory-mcp-ui-%s-%s.%s", base_url, os, arch, ext);
     } else {
-        snprintf(url, sizeof(url),
-                 "https://github.com/DeusData/codebase-memory-mcp/releases/latest/download/"
-                 "codebase-memory-mcp-%s-%s.%s",
-                 os, arch, ext);
+        snprintf(url, sizeof(url), "%s/codebase-memory-mcp-%s-%s.%s", base_url, os, arch, ext);
     }
 
     if (dry_run) {

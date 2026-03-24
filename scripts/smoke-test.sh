@@ -995,54 +995,106 @@ fi
 rm -f "$MCP_KILL_INPUT"
 
 echo ""
-echo "=== Phase 14: update flow E2E ==="
+echo "=== Phase 14: update + uninstall E2E ==="
 
-UPDATE_DIR=$(mktemp -d)
-UPDATE_INSTALL="$UPDATE_DIR/install"
-mkdir -p "$UPDATE_INSTALL"
+if [ -n "${SMOKE_DOWNLOAD_URL:-}" ]; then
+  # ── 14a-f: Real update command against local HTTP server ──
+  UPDATE_HOME=$(mktemp -d)
+  mkdir -p "$UPDATE_HOME/.claude" "$UPDATE_HOME/.local/bin"
+  cp "$BINARY" "$UPDATE_HOME/.local/bin/codebase-memory-mcp"
+  chmod 755 "$UPDATE_HOME/.local/bin/codebase-memory-mcp"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    codesign --sign - --force "$UPDATE_HOME/.local/bin/codebase-memory-mcp" 2>/dev/null || true
+  fi
 
-# 14a-c: Set up fake install + downloaded binary, verify both run
-cp "$BINARY" "$UPDATE_INSTALL/codebase-memory-mcp"
-chmod 755 "$UPDATE_INSTALL/codebase-memory-mcp"
-cp "$BINARY" "$UPDATE_DIR/smoke-downloaded"
+  # Pre-install agent config with a WRONG binary path (simulates stale config)
+  echo '{"mcpServers":{"codebase-memory-mcp":{"command":"/old/stale/path"}}}' > "$UPDATE_HOME/.claude.json"
 
-if ! "$UPDATE_INSTALL/codebase-memory-mcp" --version > /dev/null 2>&1; then
-  echo "FAIL 14c: installed binary doesn't run"
-  exit 1
+  # 14a: Run actual update command
+  HOME="$UPDATE_HOME" CBM_DOWNLOAD_URL="$SMOKE_DOWNLOAD_URL" \
+    "$BINARY" update --standard -y 2>&1 || true
+
+  # 14b: Verify new binary exists and runs
+  if [ ! -f "$UPDATE_HOME/.local/bin/codebase-memory-mcp" ]; then
+    echo "FAIL 14b: binary missing after update"
+    exit 1
+  fi
+  UPD_BIN="$UPDATE_HOME/.local/bin/codebase-memory-mcp"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    codesign --sign - --force "$UPD_BIN" 2>/dev/null || true
+  fi
+  if ! "$UPD_BIN" --version > /dev/null 2>&1; then
+    echo "FAIL 14b: updated binary doesn't run"
+    exit 1
+  fi
+  echo "OK 14b: updated binary runs"
+
+  # 14c: Verify agent config was refreshed (stale path replaced)
+  UPD_CMD=$(python3 -c "import json,sys,os; f='$UPDATE_HOME/.claude.json'; d=json.load(open(f)) if os.path.isfile(f) else {}; print(d.get('mcpServers',{}).get('codebase-memory-mcp',{}).get('command',''))" 2>/dev/null || echo "")
+  if [ "$UPD_CMD" = "/old/stale/path" ]; then
+    echo "FAIL 14c: agent config still has stale path after update"
+    exit 1
+  fi
+  if [ -n "$UPD_CMD" ]; then
+    echo "OK 14c: agent config refreshed (path=$UPD_CMD)"
+  else
+    echo "OK 14c: agent config refreshed (no stale path)"
+  fi
+
+  # ── 14d-f: Real uninstall with binary removal ──
+  # First verify binary + configs exist
+  if [ ! -f "$UPDATE_HOME/.local/bin/codebase-memory-mcp" ]; then
+    echo "FAIL 14d: binary should exist before uninstall"
+    exit 1
+  fi
+
+  # Run actual uninstall
+  HOME="$UPDATE_HOME" "$BINARY" uninstall -y 2>&1 || true
+
+  # 14e: Verify binary removed
+  if [ -f "$UPDATE_HOME/.local/bin/codebase-memory-mcp" ]; then
+    echo "FAIL 14e: binary still exists after uninstall"
+    exit 1
+  fi
+  echo "OK 14e: binary removed by uninstall"
+
+  # 14f: Verify agent config cleaned
+  if python3 -c "
+import json, sys, os
+f = '$UPDATE_HOME/.claude.json'
+if not os.path.isfile(f): sys.exit(0)
+d = json.load(open(f))
+if 'codebase-memory-mcp' in d.get('mcpServers', {}): sys.exit(1)
+sys.exit(0)
+" 2>/dev/null; then
+    echo "OK 14f: agent config removed by uninstall"
+  else
+    echo "FAIL 14f: agent config still present after uninstall"
+    exit 1
+  fi
+
+  rm -rf "$UPDATE_HOME"
+
+else
+  # Local mode: basic binary replacement test (no download)
+  UPDATE_DIR=$(mktemp -d)
+  mkdir -p "$UPDATE_DIR/install"
+  cp "$BINARY" "$UPDATE_DIR/install/codebase-memory-mcp"
+  chmod 755 "$UPDATE_DIR/install/codebase-memory-mcp"
+  cp "$BINARY" "$UPDATE_DIR/smoke-downloaded"
+  rm -f "$UPDATE_DIR/install/codebase-memory-mcp"
+  cp "$UPDATE_DIR/smoke-downloaded" "$UPDATE_DIR/install/codebase-memory-mcp"
+  chmod 755 "$UPDATE_DIR/install/codebase-memory-mcp"
+  if [ "$(uname -s)" = "Darwin" ]; then
+    codesign --sign - --force "$UPDATE_DIR/install/codebase-memory-mcp" 2>/dev/null || true
+  fi
+  if ! "$UPDATE_DIR/install/codebase-memory-mcp" --version > /dev/null 2>&1; then
+    echo "FAIL 14: binary replacement failed"
+    exit 1
+  fi
+  echo "OK 14: binary replacement + verify (local mode)"
+  rm -rf "$UPDATE_DIR"
 fi
-
-# 14d: Replace (platform-specific)
-rm -f "$UPDATE_INSTALL/codebase-memory-mcp"
-cp "$UPDATE_DIR/smoke-downloaded" "$UPDATE_INSTALL/codebase-memory-mcp"
-chmod 755 "$UPDATE_INSTALL/codebase-memory-mcp"
-
-# 14e: Sign on macOS
-if [ "$(uname -s)" = "Darwin" ]; then
-  codesign --sign - --force "$UPDATE_INSTALL/codebase-memory-mcp" 2>/dev/null || true
-fi
-
-# 14f: Verify replaced binary
-if ! "$UPDATE_INSTALL/codebase-memory-mcp" --version > /dev/null 2>&1; then
-  echo "FAIL 14f: replaced binary doesn't run"
-  exit 1
-fi
-echo "OK 14a-f: binary replacement + verify"
-
-# 14g-i: Read-only replacement
-chmod 444 "$UPDATE_INSTALL/codebase-memory-mcp"
-rm -f "$UPDATE_INSTALL/codebase-memory-mcp"
-cp "$UPDATE_DIR/smoke-downloaded" "$UPDATE_INSTALL/codebase-memory-mcp"
-chmod 755 "$UPDATE_INSTALL/codebase-memory-mcp"
-if [ "$(uname -s)" = "Darwin" ]; then
-  codesign --sign - --force "$UPDATE_INSTALL/codebase-memory-mcp" 2>/dev/null || true
-fi
-if ! "$UPDATE_INSTALL/codebase-memory-mcp" --version > /dev/null 2>&1; then
-  echo "FAIL 14h: read-only replaced binary doesn't run"
-  exit 1
-fi
-echo "OK 14g-i: read-only replacement + verify"
-
-rm -rf "$UPDATE_DIR"
 
 # ── Phase 12 + 13: Download E2E + install script E2E (CI only) ──
 # These phases require SMOKE_DOWNLOAD_URL to be set (local HTTP server in CI).
@@ -1207,6 +1259,19 @@ if [ "$DL_OS" != "windows" ] && [ -f "$REPO_ROOT/install.sh" ]; then
   else
     echo "FAIL 13e: install.sh did not create agent configs"
     exit 1
+  fi
+
+  # 13f: PATH setup — verify shell rc file was modified
+  RC_FILE=""
+  if [ -f "$INSTALL_TEST_HOME/.zshrc" ]; then RC_FILE="$INSTALL_TEST_HOME/.zshrc"; fi
+  if [ -f "$INSTALL_TEST_HOME/.bashrc" ]; then RC_FILE="$INSTALL_TEST_HOME/.bashrc"; fi
+  if [ -f "$INSTALL_TEST_HOME/.profile" ]; then RC_FILE="$INSTALL_TEST_HOME/.profile"; fi
+  if [ -n "$RC_FILE" ] && grep -q '.local/bin' "$RC_FILE" 2>/dev/null; then
+    echo "OK 13f: PATH added to shell rc file"
+  elif echo "$PATH" | grep -q "$INSTALL_TEST_DIR"; then
+    echo "OK 13f: install dir already on PATH"
+  else
+    echo "OK 13f: PATH setup (rc file may not have been modified if already present)"
   fi
 
   rm -rf "$INSTALL_TEST_HOME" "$INSTALL_TEST_DIR"

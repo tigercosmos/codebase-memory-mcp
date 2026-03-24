@@ -1024,6 +1024,124 @@ TEST(cli_extract_binary_from_targz_invalid_data) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+ *  Zip extraction tests
+ * ═══════════════════════════════════════════════════════════════════ */
+
+/* Build a minimal zip file with one stored (uncompressed) entry. */
+static unsigned char *create_test_zip_stored(const char *filename, const unsigned char *content,
+                                             int content_len, int *out_len) {
+    /* Local file header (30 bytes) + filename + content + central dir + EOCD */
+    int name_len = (int)strlen(filename);
+    int local_hdr_sz = 30 + name_len;
+    int cd_hdr_sz = 46 + name_len;
+    int eocd_sz = 22;
+    int total = local_hdr_sz + content_len + cd_hdr_sz + eocd_sz;
+    unsigned char *zip = calloc(1, (size_t)total);
+    if (!zip) return NULL;
+    int pos = 0;
+
+    /* Local file header */
+    zip[pos] = 0x50; zip[pos+1] = 0x4B; zip[pos+2] = 0x03; zip[pos+3] = 0x04; /* signature */
+    zip[pos+4] = 20; zip[pos+5] = 0; /* version needed = 2.0 */
+    zip[pos+8] = 0; zip[pos+9] = 0; /* compression = stored */
+    zip[pos+18] = (unsigned char)(content_len & 0xFF);
+    zip[pos+19] = (unsigned char)((content_len >> 8) & 0xFF);
+    zip[pos+20] = (unsigned char)((content_len >> 16) & 0xFF);
+    zip[pos+21] = (unsigned char)((content_len >> 24) & 0xFF);
+    zip[pos+22] = zip[pos+18]; zip[pos+23] = zip[pos+19];
+    zip[pos+24] = zip[pos+20]; zip[pos+25] = zip[pos+21];
+    zip[pos+26] = (unsigned char)(name_len & 0xFF);
+    zip[pos+27] = (unsigned char)((name_len >> 8) & 0xFF);
+    memcpy(zip + pos + 30, filename, (size_t)name_len);
+    pos += 30 + name_len;
+    memcpy(zip + pos, content, (size_t)content_len);
+    pos += content_len;
+
+    int cd_start = pos;
+    /* Central directory header */
+    zip[pos] = 0x50; zip[pos+1] = 0x4B; zip[pos+2] = 0x01; zip[pos+3] = 0x02;
+    zip[pos+10] = 0; zip[pos+11] = 0; /* compression = stored */
+    zip[pos+20] = (unsigned char)(content_len & 0xFF);
+    zip[pos+21] = (unsigned char)((content_len >> 8) & 0xFF);
+    zip[pos+22] = (unsigned char)((content_len >> 16) & 0xFF);
+    zip[pos+23] = (unsigned char)((content_len >> 24) & 0xFF);
+    zip[pos+24] = zip[pos+20]; zip[pos+25] = zip[pos+21];
+    zip[pos+26] = zip[pos+22]; zip[pos+27] = zip[pos+23];
+    zip[pos+28] = (unsigned char)(name_len & 0xFF);
+    zip[pos+29] = (unsigned char)((name_len >> 8) & 0xFF);
+    pos += 46 + name_len;
+
+    /* EOCD */
+    zip[pos] = 0x50; zip[pos+1] = 0x4B; zip[pos+2] = 0x05; zip[pos+3] = 0x06;
+    zip[pos+8] = 1; /* num entries this disk */
+    zip[pos+10] = 1; /* total entries */
+    int cd_size = pos - cd_start;
+    zip[pos+12] = (unsigned char)(cd_size & 0xFF);
+    zip[pos+13] = (unsigned char)((cd_size >> 8) & 0xFF);
+    zip[pos+16] = (unsigned char)(cd_start & 0xFF);
+    zip[pos+17] = (unsigned char)((cd_start >> 8) & 0xFF);
+
+    *out_len = total;
+    return zip;
+}
+
+TEST(cli_extract_binary_from_zip) {
+    const char *content = "#!/bin/sh\necho test\n";
+    int zip_len = 0;
+    unsigned char *zip =
+        create_test_zip_stored("codebase-memory-mcp", (const unsigned char *)content,
+                               (int)strlen(content), &zip_len);
+    ASSERT_NOT_NULL(zip);
+
+    int out_len = 0;
+    unsigned char *extracted = cbm_extract_binary_from_zip(zip, zip_len, &out_len);
+    ASSERT_NOT_NULL(extracted);
+    ASSERT_EQ(out_len, (int)strlen(content));
+    ASSERT_MEM_EQ(extracted, content, (size_t)out_len);
+    free(extracted);
+    free(zip);
+    PASS();
+}
+
+TEST(cli_extract_binary_from_zip_not_found) {
+    const char *content = "data";
+    int zip_len = 0;
+    unsigned char *zip =
+        create_test_zip_stored("other-file.txt", (const unsigned char *)content,
+                               (int)strlen(content), &zip_len);
+    ASSERT_NOT_NULL(zip);
+
+    int out_len = 0;
+    unsigned char *extracted = cbm_extract_binary_from_zip(zip, zip_len, &out_len);
+    ASSERT_NULL(extracted);
+    free(zip);
+    PASS();
+}
+
+TEST(cli_extract_binary_from_zip_path_traversal) {
+    const char *content = "malicious";
+    int zip_len = 0;
+    unsigned char *zip =
+        create_test_zip_stored("../../etc/codebase-memory-mcp", (const unsigned char *)content,
+                               (int)strlen(content), &zip_len);
+    ASSERT_NOT_NULL(zip);
+
+    int out_len = 0;
+    unsigned char *extracted = cbm_extract_binary_from_zip(zip, zip_len, &out_len);
+    ASSERT_NULL(extracted);
+    free(zip);
+    PASS();
+}
+
+TEST(cli_extract_binary_from_zip_invalid) {
+    const unsigned char bad_data[] = "not a zip file";
+    int out_len = 0;
+    unsigned char *extracted = cbm_extract_binary_from_zip(bad_data, sizeof(bad_data), &out_len);
+    ASSERT_NULL(extracted);
+    PASS();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
  *  Skill dry-run tests
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -2152,6 +2270,10 @@ SUITE(cli) {
     RUN_TEST(cli_extract_binary_from_targz);
     RUN_TEST(cli_extract_binary_from_targz_not_found);
     RUN_TEST(cli_extract_binary_from_targz_invalid_data);
+    RUN_TEST(cli_extract_binary_from_zip);
+    RUN_TEST(cli_extract_binary_from_zip_not_found);
+    RUN_TEST(cli_extract_binary_from_zip_path_traversal);
+    RUN_TEST(cli_extract_binary_from_zip_invalid);
 
     /* Dry-run lifecycle (2 tests) */
     RUN_TEST(cli_install_dry_run);

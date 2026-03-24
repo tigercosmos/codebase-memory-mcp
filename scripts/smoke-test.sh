@@ -1199,8 +1199,53 @@ if [ "$DL_OS" != "windows" ] && [ -f "$REPO_ROOT/install.sh" ]; then
   fi
 
   rm -rf "$INSTALL_TEST_HOME" "$INSTALL_TEST_DIR"
+
+elif [ -f "$REPO_ROOT/install.ps1" ] && command -v powershell.exe &>/dev/null; then
+  echo "--- Phase 13: install.ps1 E2E (Windows) ---"
+  PS1_TEST_HOME=$(mktemp -d)
+  PS1_TEST_DIR=$(mktemp -d)
+  mkdir -p "$PS1_TEST_HOME/.claude"
+
+  # Convert MSYS paths to Windows paths for PowerShell
+  if command -v cygpath &>/dev/null; then
+    WIN_DIR=$(cygpath -w "$PS1_TEST_DIR")
+    WIN_URL="$SMOKE_DOWNLOAD_URL"
+    WIN_SCRIPT=$(cygpath -w "$REPO_ROOT/install.ps1")
+    WIN_HOME=$(cygpath -w "$PS1_TEST_HOME")
+  else
+    WIN_DIR="$PS1_TEST_DIR"
+    WIN_URL="$SMOKE_DOWNLOAD_URL"
+    WIN_SCRIPT="$REPO_ROOT/install.ps1"
+    WIN_HOME="$PS1_TEST_HOME"
+  fi
+
+  # 13f: run install.ps1
+  HOME="$PS1_TEST_HOME" CBM_DOWNLOAD_URL="$WIN_URL" \
+    powershell.exe -ExecutionPolicy ByPass -File "$WIN_SCRIPT" "--dir=$WIN_DIR" 2>&1 || true
+
+  # 13g: binary placed
+  PS1_BIN="$PS1_TEST_DIR/codebase-memory-mcp.exe"
+  if [ ! -f "$PS1_BIN" ] && [ -f "$PS1_TEST_DIR/codebase-memory-mcp" ]; then
+    PS1_BIN="$PS1_TEST_DIR/codebase-memory-mcp"
+  fi
+  if [ -f "$PS1_BIN" ]; then
+    echo "OK 13g: binary placed by install.ps1"
+  else
+    echo "FAIL 13g: binary not placed by install.ps1"
+    exit 1
+  fi
+
+  # 13h: binary runs
+  if "$PS1_BIN" --version > /dev/null 2>&1; then
+    echo "OK 13h: binary runs"
+  else
+    echo "FAIL 13h: installed binary doesn't run"
+    exit 1
+  fi
+
+  rm -rf "$PS1_TEST_HOME" "$PS1_TEST_DIR"
 else
-  echo "SKIP Phase 13: install script not available for this platform"
+  echo "SKIP Phase 13: no install script available for this platform"
 fi
 
 else

@@ -199,6 +199,11 @@ const char *cbm_get_codex_instructions(void);
  * Returns NULL on error. Caller must free. */
 unsigned char *cbm_extract_binary_from_targz(const unsigned char *data, int data_len, int *out_len);
 
+/* Extract the codebase-memory-mcp binary from a zip archive in memory.
+ * Returns malloc'd binary content and sets *out_len.
+ * Returns NULL on error. Caller must free. */
+unsigned char *cbm_extract_binary_from_zip(const unsigned char *data, int data_len, int *out_len);
+
 /* ── Index management ─────────────────────────────────────────── */
 
 /* List .db files in the cache directory (~/.cache/codebase-memory-mcp/).

@@ -33,21 +33,6 @@ High-quality parsing through [tree-sitter](https://tree-sitter.github.io/tree-si
 
 ## Quick Start
 
-**One-line install** (macOS / Linux):
-```bash
-curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash
-```
-
-With graph visualization UI:
-```bash
-curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.sh | bash -s -- --ui
-```
-
-Restart your coding agent. Say **"Index this project"** — done.
-
-<details>
-<summary>Manual install</summary>
-
 1. **Download** the binary for your platform from the [latest release](https://github.com/DeusData/codebase-memory-mcp/releases/latest):
    - `codebase-memory-mcp-<os>-<arch>.tar.gz` — standard (MCP server only)
    - `codebase-memory-mcp-ui-<os>-<arch>.tar.gz` — with embedded graph visualization
@@ -59,15 +44,7 @@ Restart your coding agent. Say **"Index this project"** — done.
    codebase-memory-mcp install
    ```
 
-3. **Restart** your coding agent.
-
-On macOS, if the binary is killed on launch, fix code signing:
-```bash
-xattr -d com.apple.quarantine ~/.local/bin/codebase-memory-mcp
-xattr -d com.apple.provenance ~/.local/bin/codebase-memory-mcp
-codesign --force --sign - ~/.local/bin/codebase-memory-mcp
-```
-</details>
+3. **Restart** your coding agent. Say **"Index this project"** — done.
 
 The `install` command auto-detects all installed coding agents and configures MCP server entries, instruction files, skills, and pre-tool hooks for each.
 

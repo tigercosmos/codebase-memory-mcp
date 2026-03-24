@@ -248,6 +248,10 @@ jobs:
       - name: Build standard binary
         run: scripts/build.sh --version ${{ inputs.version }} CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
 
+      - name: Ad-hoc sign macOS binary
+        if: startsWith(matrix.os, 'macos')
+        run: codesign --sign - --force build/c/codebase-memory-mcp
+
       - name: Archive standard binary
         run: |
           cp LICENSE build/c/
@@ -256,6 +260,10 @@ jobs:
 
       - name: Build UI binary
         run: scripts/build.sh --with-ui --version ${{ inputs.version }} CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
+
+      - name: Ad-hoc sign macOS UI binary
+        if: startsWith(matrix.os, 'macos')
+        run: codesign --sign - --force build/c/codebase-memory-mcp
 
       - name: Frontend integrity scan (post-build dist/)
         if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
@@ -354,8 +362,23 @@ jobs:
           tar -xzf codebase-memory-mcp${SUFFIX}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
           chmod +x codebase-memory-mcp
 
+      - name: Start artifact server for E2E smoke tests
+        run: |
+          mkdir -p /tmp/smoke-server
+          cp codebase-memory-mcp /tmp/smoke-server/
+          OS=${{ matrix.goos }}
+          ARCH=${{ matrix.goarch }}
+          SUFFIX=${{ matrix.variant == 'ui' && '-ui' || '' }}
+          tar -czf "/tmp/smoke-server/codebase-memory-mcp${SUFFIX}-${OS}-${ARCH}.tar.gz" \
+            -C /tmp/smoke-server codebase-memory-mcp
+          cd /tmp/smoke-server
+          sha256sum *.tar.gz > checksums.txt 2>/dev/null || shasum -a 256 *.tar.gz > checksums.txt
+          python3 -m http.server 18080 -d /tmp/smoke-server &
+
       - name: Smoke test (${{ matrix.variant }}, ${{ matrix.goos }}-${{ matrix.goarch }})
         run: scripts/smoke-test.sh ./codebase-memory-mcp
+        env:
+          SMOKE_DOWNLOAD_URL: http://localhost:18080
 
       - name: Binary string audit (${{ matrix.goos }}-${{ matrix.goarch }})
         if: matrix.variant == 'standard'
@@ -435,9 +458,22 @@ jobs:
           unzip -o "codebase-memory-mcp${SUFFIX}-windows-amd64.zip"
           [ -n "$SUFFIX" ] && cp "codebase-memory-mcp${SUFFIX}.exe" codebase-memory-mcp.exe || true
 
+      - name: Start artifact server for E2E smoke tests
+        shell: msys2 {0}
+        run: |
+          mkdir -p /tmp/smoke-server
+          cp codebase-memory-mcp.exe /tmp/smoke-server/codebase-memory-mcp.exe
+          SUFFIX=${{ matrix.variant == 'ui' && '-ui' || '' }}
+          cd /tmp/smoke-server
+          zip -q "codebase-memory-mcp${SUFFIX}-windows-amd64.zip" codebase-memory-mcp.exe
+          sha256sum *.zip > checksums.txt
+          python3 -m http.server 18080 -d /tmp/smoke-server &
+
       - name: Smoke test (${{ matrix.variant }}, windows-amd64)
         shell: msys2 {0}
         run: scripts/smoke-test.sh ./codebase-memory-mcp.exe
+        env:
+          SMOKE_DOWNLOAD_URL: http://localhost:18080
 
       - name: Binary string audit (windows-amd64)
         if: matrix.variant == 'standard'

@@ -11,8 +11,8 @@ src/foundation/compat_fs.c:fork:cbm_exec_no_shell — fork+execvp for shell-free
 src/foundation/compat_fs.c:execvp:cbm_exec_no_shell — direct exec without shell interpretation
 
 # ── CLI: update command (user-initiated, interactive) ──────────────────────
-src/cli/cli.c:system:curl download of release binary (update cmd)
 src/cli/cli.c:cbm_popen:sha256 checksum verification (update cmd)
+src/cli/cli.c:cbm_popen:pgrep for kill_other_instances (hardcoded process name)
 src/cli/cli.c:popen:sha256 checksum computation via shasum
 
 # ── Watcher: git status polling (repo paths validated via cbm_validate_shell_arg) ──

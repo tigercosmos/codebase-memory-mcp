@@ -2100,7 +2100,7 @@ static int sha256_file(const char *path, char *out, size_t out_size) {
     return -1;
 }
 
-/* ── Download helper (replaces system("curl ...")) ────────────── */
+/* ── Download helper (shell-free curl via exec) ───────────────── */
 
 static int cbm_download_to_file(const char *url, const char *dest) {
     const char *argv[] = {"curl", "-fSL", "--progress-bar", "-o", dest, url, NULL};

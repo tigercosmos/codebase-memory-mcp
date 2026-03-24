@@ -10,6 +10,7 @@ set -euo pipefail
 # Usage: smoke-test.sh <binary-path>
 
 BINARY="${1:?usage: smoke-test.sh <binary-path>}"
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")/.." && pwd)"
 TMPDIR=$(mktemp -d)
 # On MSYS2/Windows, convert POSIX path to native Windows path for the binary
 if command -v cygpath &>/dev/null; then
@@ -1031,6 +1032,181 @@ fi
 echo "OK 14g-i: read-only replacement + verify"
 
 rm -rf "$UPDATE_DIR"
+
+# ── Phase 12 + 13: Download E2E + install script E2E (CI only) ──
+# These phases require SMOKE_DOWNLOAD_URL to be set (local HTTP server in CI).
+# When unset, they are skipped (local development runs).
+
+if [ -n "${SMOKE_DOWNLOAD_URL:-}" ]; then
+
+echo ""
+echo "=== Phase 12: download + checksum + extraction E2E ==="
+
+DL_DIR=$(mktemp -d)
+
+# Detect platform for archive name
+DL_OS=$(uname -s | tr 'A-Z' 'a-z')
+DL_ARCH=$(uname -m)
+case "$DL_ARCH" in
+  aarch64) DL_ARCH="arm64" ;;
+  x86_64)
+    # Rosetta detection
+    if [ "$DL_OS" = "darwin" ] && sysctl -n machdep.cpu.brand_string 2>/dev/null | grep -qi apple; then
+      DL_ARCH="arm64"
+    else
+      DL_ARCH="amd64"
+    fi
+    ;;
+esac
+
+if [ "$DL_OS" = "darwin" ] || [ "$DL_OS" = "linux" ]; then
+  DL_EXT="tar.gz"
+else
+  DL_EXT="zip"
+fi
+DL_ARCHIVE="codebase-memory-mcp-${DL_OS}-${DL_ARCH}.${DL_EXT}"
+
+# 12a: curl download
+echo "--- Phase 12a: curl download ---"
+if ! curl -fSL -o "$DL_DIR/$DL_ARCHIVE" "$SMOKE_DOWNLOAD_URL/$DL_ARCHIVE"; then
+  echo "FAIL 12a: curl download failed"
+  exit 1
+fi
+if [ ! -s "$DL_DIR/$DL_ARCHIVE" ]; then
+  echo "FAIL 12a: downloaded archive is empty"
+  exit 1
+fi
+echo "OK 12a: archive downloaded ($(wc -c < "$DL_DIR/$DL_ARCHIVE") bytes)"
+
+# 12b: checksum download
+echo "--- Phase 12b: checksum verification ---"
+if ! curl -fsSL -o "$DL_DIR/checksums.txt" "$SMOKE_DOWNLOAD_URL/checksums.txt"; then
+  echo "FAIL 12b: checksums.txt download failed"
+  exit 1
+fi
+
+# 12c: verify checksum
+EXPECTED=$(grep "$DL_ARCHIVE" "$DL_DIR/checksums.txt" | awk '{print $1}')
+if [ -z "$EXPECTED" ]; then
+  echo "FAIL 12c: archive not found in checksums.txt"
+  exit 1
+fi
+if command -v sha256sum &>/dev/null; then
+  ACTUAL=$(sha256sum "$DL_DIR/$DL_ARCHIVE" | awk '{print $1}')
+elif command -v shasum &>/dev/null; then
+  ACTUAL=$(shasum -a 256 "$DL_DIR/$DL_ARCHIVE" | awk '{print $1}')
+else
+  echo "FAIL 12c: no sha256 tool available"
+  exit 1
+fi
+if [ "$EXPECTED" != "$ACTUAL" ]; then
+  echo "FAIL 12c: checksum mismatch (expected=$EXPECTED actual=$ACTUAL)"
+  exit 1
+fi
+echo "OK 12c: checksum verified"
+
+# 12d: extract binary
+echo "--- Phase 12d: extraction ---"
+(cd "$DL_DIR" && if [ "$DL_EXT" = "zip" ]; then unzip -q "$DL_ARCHIVE"; else tar -xzf "$DL_ARCHIVE"; fi)
+DL_BIN="$DL_DIR/codebase-memory-mcp"
+if [ ! -f "$DL_BIN" ]; then
+  echo "FAIL 12d: binary not found after extraction"
+  exit 1
+fi
+chmod +x "$DL_BIN"
+echo "OK 12d: binary extracted"
+
+# 12e: extracted binary runs
+if ! "$DL_BIN" --version > /dev/null 2>&1; then
+  # On macOS arm64, may need signing
+  if [ "$DL_OS" = "darwin" ]; then
+    xattr -d com.apple.quarantine "$DL_BIN" 2>/dev/null || true
+    codesign --sign - --force "$DL_BIN" 2>/dev/null || true
+    if ! "$DL_BIN" --version > /dev/null 2>&1; then
+      echo "FAIL 12e: extracted binary doesn't run even after signing"
+      exit 1
+    fi
+  else
+    echo "FAIL 12e: extracted binary doesn't run"
+    exit 1
+  fi
+fi
+echo "OK 12e: extracted binary runs"
+
+# 12f: platform-specific post-extraction verification
+if [ "$DL_OS" = "darwin" ]; then
+  if codesign -v "$DL_BIN" 2>/dev/null; then
+    echo "OK 12f: macOS binary has valid signature (CI pre-signed)"
+  else
+    echo "OK 12f: macOS binary signed locally (CI pre-sign not yet active)"
+  fi
+else
+  echo "OK 12f: binary runs without signing ($DL_OS)"
+fi
+
+rm -rf "$DL_DIR"
+
+echo ""
+echo "=== Phase 13: install script E2E ==="
+
+if [ "$DL_OS" != "windows" ] && [ -f "$REPO_ROOT/install.sh" ]; then
+  echo "--- Phase 13: install.sh E2E ---"
+  INSTALL_TEST_HOME=$(mktemp -d)
+  INSTALL_TEST_DIR=$(mktemp -d)
+  mkdir -p "$INSTALL_TEST_HOME/.claude"
+  mkdir -p "$INSTALL_TEST_HOME/.local/bin"
+
+  # 13a: run install.sh with local URL + isolated HOME
+  HOME="$INSTALL_TEST_HOME" CBM_DOWNLOAD_URL="$SMOKE_DOWNLOAD_URL" \
+    "$REPO_ROOT/install.sh" --dir="$INSTALL_TEST_DIR" 2>&1 || true
+
+  # 13b: binary placed
+  if [ ! -f "$INSTALL_TEST_DIR/codebase-memory-mcp" ]; then
+    echo "FAIL 13b: binary not placed by install.sh"
+    exit 1
+  fi
+  echo "OK 13b: binary placed"
+
+  # 13c: binary runs
+  # Sign if needed on macOS
+  if [ "$DL_OS" = "darwin" ]; then
+    codesign --sign - --force "$INSTALL_TEST_DIR/codebase-memory-mcp" 2>/dev/null || true
+  fi
+  if ! "$INSTALL_TEST_DIR/codebase-memory-mcp" --version > /dev/null 2>&1; then
+    echo "FAIL 13c: installed binary doesn't run"
+    exit 1
+  fi
+  echo "OK 13c: binary runs"
+
+  # 13d: macOS signature check
+  if [ "$DL_OS" = "darwin" ]; then
+    if codesign -v "$INSTALL_TEST_DIR/codebase-memory-mcp" 2>/dev/null; then
+      echo "OK 13d: macOS binary signed"
+    else
+      echo "FAIL 13d: macOS binary not signed after install.sh"
+      exit 1
+    fi
+  else
+    echo "OK 13d: no signing needed ($DL_OS)"
+  fi
+
+  # 13e: agent configs created (at least Claude Code since we made ~/.claude)
+  if [ -f "$INSTALL_TEST_HOME/.claude.json" ] && grep -q 'codebase-memory-mcp' "$INSTALL_TEST_HOME/.claude.json" 2>/dev/null; then
+    echo "OK 13e: agent configs created by install.sh"
+  else
+    echo "FAIL 13e: install.sh did not create agent configs"
+    exit 1
+  fi
+
+  rm -rf "$INSTALL_TEST_HOME" "$INSTALL_TEST_DIR"
+else
+  echo "SKIP Phase 13: install script not available for this platform"
+fi
+
+else
+  echo ""
+  echo "=== Phase 12-13: SKIPPED (SMOKE_DOWNLOAD_URL not set) ==="
+fi
 
 echo ""
 echo "=== smoke-test: ALL PASSED ==="

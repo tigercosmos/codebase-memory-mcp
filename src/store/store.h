@@ -198,11 +198,19 @@ cbm_store_t *cbm_store_open_path(const char *db_path);
  * Returns NULL if the file does not exist — never creates a new .db file. */
 cbm_store_t *cbm_store_open_path_query(const char *db_path);
 
+/* Check database integrity. Returns true if the DB passes basic sanity checks
+ * (projects table has correct types, no corruption indicators).
+ * Returns false if corruption is detected — caller should delete and re-index. */
+bool cbm_store_check_integrity(cbm_store_t *s);
+
 /* Open database for a named project in the default cache dir. */
 cbm_store_t *cbm_store_open(const char *project);
 
 /* Close the store and free all resources. NULL-safe. */
 void cbm_store_close(cbm_store_t *s);
+
+/* Get the underlying sqlite3 handle (for testing only). */
+struct sqlite3 *cbm_store_get_db(cbm_store_t *s);
 
 /* Get the last error message (static string, valid until next call). */
 const char *cbm_store_error(cbm_store_t *s);

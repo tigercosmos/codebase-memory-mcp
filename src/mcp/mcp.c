@@ -657,6 +657,23 @@ static cbm_store_t *resolve_store(cbm_mcp_server_t *srv, const char *project) {
     project_db_path(project, path, sizeof(path));
     srv->store = cbm_store_open_path_query(path);
     if (srv->store) {
+        /* Check DB integrity — auto-clean corrupt databases */
+        if (!cbm_store_check_integrity(srv->store)) {
+            cbm_log_error("store.auto_clean", "project", project, "path", path, "action",
+                          "deleting corrupt db — re-index required");
+            cbm_store_close(srv->store);
+            srv->store = NULL;
+            /* Delete the corrupt DB + WAL/SHM files */
+            cbm_unlink(path);
+            char wal_path[1040];
+            char shm_path[1040];
+            snprintf(wal_path, sizeof(wal_path), "%s-wal", path);
+            snprintf(shm_path, sizeof(shm_path), "%s-shm", path);
+            cbm_unlink(wal_path);
+            cbm_unlink(shm_path);
+            return NULL;
+        }
+
         /* Verify the project actually exists in this database.
          * A .db file may exist but be empty (e.g., after delete_project on
          * Linux where unlink defers actual removal). Opening an empty/deleted

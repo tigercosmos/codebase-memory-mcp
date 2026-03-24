@@ -404,6 +404,54 @@ cbm_store_t *cbm_store_open_path_query(const char *db_path) {
     return s;
 }
 
+/* ── Integrity check ───────────────────────────────────────────── */
+
+bool cbm_store_check_integrity(cbm_store_t *s) {
+    if (!s || !s->db) {
+        return false;
+    }
+
+    /* Each project gets its own .db file, so the projects table should have
+     * exactly 1 row. More than 5 rows is definitely corrupt (allows some slack
+     * for edge cases). Also check that root_path looks like a real path. */
+    sqlite3_stmt *stmt = NULL;
+    int rc = sqlite3_prepare_v2(s->db, "SELECT count(*) FROM projects;", -1, &stmt, NULL);
+    if (rc != SQLITE_OK) {
+        return false;
+    }
+
+    bool ok = true;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        int row_count = sqlite3_column_int(stmt, 0);
+        if (row_count > 5) {
+            fprintf(stderr, "ERROR store.corrupt table=projects rows=%d (expected 1)\n", row_count);
+            ok = false;
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    if (ok) {
+        /* Check that root_path in projects table starts with '/' or a drive letter.
+         * Corrupt DBs often have numeric strings like "826" in root_path. */
+        rc = sqlite3_prepare_v2(
+            s->db,
+            "SELECT root_path FROM projects WHERE root_path != '' "
+            "AND substr(root_path, 1, 1) NOT IN ('/', 'A','B','C','D','E','F','G','H') LIMIT 1;",
+            -1, &stmt, NULL);
+        if (rc == SQLITE_OK) {
+            if (sqlite3_step(stmt) == SQLITE_ROW) {
+                const char *bad_path = (const char *)sqlite3_column_text(stmt, 0);
+                fprintf(stderr, "ERROR store.corrupt table=projects bad_root_path=%s\n",
+                        bad_path ? bad_path : "(null)");
+                ok = false;
+            }
+            sqlite3_finalize(stmt);
+        }
+    }
+
+    return ok;
+}
+
 cbm_store_t *cbm_store_open(const char *project) {
     if (!project) {
         return NULL;
@@ -468,6 +516,10 @@ void cbm_store_close(cbm_store_t *s) {
     sqlite3_close(s->db);
     free((void *)s->db_path);
     free(s);
+}
+
+sqlite3 *cbm_store_get_db(cbm_store_t *s) {
+    return s ? s->db : NULL;
 }
 
 const char *cbm_store_error(cbm_store_t *s) {

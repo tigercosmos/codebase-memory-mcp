@@ -353,19 +353,34 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
                 /* DB exists — check if it has file hashes */
                 cbm_store_t *check_store = cbm_store_open_path(db_path);
                 if (check_store) {
-                    cbm_file_hash_t *hashes = NULL;
-                    int hash_count = 0;
-                    cbm_store_get_file_hashes(check_store, p->project_name, &hashes, &hash_count);
-                    cbm_store_free_file_hashes(hashes, hash_count);
-                    cbm_store_close(check_store);
+                    /* Integrity check — corrupt DB → delete and fall through to full reindex */
+                    if (!cbm_store_check_integrity(check_store)) {
+                        cbm_log_error("pipeline.corrupt_db", "path", db_path, "action",
+                                      "deleting — will do full reindex");
+                        cbm_store_close(check_store);
+                        cbm_unlink(db_path);
+                        char wal[1040];
+                        char shm[1040];
+                        snprintf(wal, sizeof(wal), "%s-wal", db_path);
+                        snprintf(shm, sizeof(shm), "%s-shm", db_path);
+                        cbm_unlink(wal);
+                        cbm_unlink(shm);
+                    } else {
+                        cbm_file_hash_t *hashes = NULL;
+                        int hash_count = 0;
+                        cbm_store_get_file_hashes(check_store, p->project_name, &hashes,
+                                                  &hash_count);
+                        cbm_store_free_file_hashes(hashes, hash_count);
+                        cbm_store_close(check_store);
 
-                    if (hash_count > 0) {
-                        cbm_log_info("pipeline.route", "path", "incremental", "stored_hashes",
-                                     itoa_buf(hash_count));
-                        rc = cbm_pipeline_run_incremental(p, db_path, files, file_count);
-                        cbm_discover_free(files, file_count);
-                        free(db_path);
-                        return rc;
+                        if (hash_count > 0) {
+                            cbm_log_info("pipeline.route", "path", "incremental", "stored_hashes",
+                                         itoa_buf(hash_count));
+                            rc = cbm_pipeline_run_incremental(p, db_path, files, file_count);
+                            cbm_discover_free(files, file_count);
+                            free(db_path);
+                            return rc;
+                        }
                     }
                 }
             }

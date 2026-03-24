@@ -241,7 +241,7 @@ static const tool_def_t TOOLS[] = {
      "{\"type\":\"integer\"},\"max_degree\":{\"type\":\"integer\"},\"exclude_entry_points\":{"
      "\"type\":\"boolean\"},\"include_connected\":{\"type\":\"boolean\"},\"limit\":{\"type\":"
      "\"integer\",\"description\":\"Max results. Default: "
-     "unlimited\"},\"offset\":{\"type\":\"integer\",\"default\":0}}}"},
+     "unlimited\"},\"offset\":{\"type\":\"integer\",\"default\":0}},\"required\":[\"project\"]}"},
 
     {"query_graph",
      "Execute a Cypher query against the knowledge graph for complex multi-hop patterns, "
@@ -249,7 +249,8 @@ static const tool_def_t TOOLS[] = {
      "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Cypher "
      "query\"},\"project\":{\"type\":\"string\"},\"max_rows\":{\"type\":\"integer\","
      "\"description\":"
-     "\"Optional row limit. Default: unlimited (100k ceiling)\"}},\"required\":[\"query\"]}"},
+     "\"Optional row limit. Default: unlimited (100k "
+     "ceiling)\"}},\"required\":[\"query\",\"project\"]}"},
 
     {"trace_call_path",
      "Trace function call paths — who calls a function and what it calls. Use INSTEAD OF grep when "
@@ -258,7 +259,7 @@ static const tool_def_t TOOLS[] = {
      "\"type\":\"string\"},\"direction\":{\"type\":\"string\",\"enum\":[\"inbound\",\"outbound\","
      "\"both\"],\"default\":\"both\"},\"depth\":{\"type\":\"integer\",\"default\":3},\"edge_"
      "types\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"function_"
-     "name\"]}"},
+     "name\",\"project\"]}"},
 
     {"get_code_snippet",
      "Read source code for a function/class/symbol. IMPORTANT: First call search_graph to find the "
@@ -267,16 +268,17 @@ static const tool_def_t TOOLS[] = {
      "{\"type\":\"object\",\"properties\":{\"qualified_name\":{\"type\":\"string\",\"description\":"
      "\"Full qualified_name from search_graph, or short function name\"},\"project\":{"
      "\"type\":\"string\"},\"include_neighbors\":{"
-     "\"type\":\"boolean\",\"default\":false}},\"required\":[\"qualified_name\"]}"},
+     "\"type\":\"boolean\",\"default\":false}},\"required\":[\"qualified_name\",\"project\"]}"},
 
     {"get_graph_schema", "Get the schema of the knowledge graph (node labels, edge types)",
-     "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"}}}"},
+     "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"}},\"required\":["
+     "\"project\"]}"},
 
     {"get_architecture",
      "Get high-level architecture overview — packages, services, dependencies, and project "
      "structure at a glance.",
      "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"},\"aspects\":{\"type\":"
-     "\"array\",\"items\":{\"type\":\"string\"}}}}"},
+     "\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"project\"]}"},
 
     {"search_code",
      "Graph-augmented code search. Finds text patterns via grep, then enriches results with "
@@ -294,31 +296,33 @@ static const tool_def_t TOOLS[] = {
      "(like grep -C). Only used in compact mode.\"},"
      "\"regex\":{\"type\":\"boolean\",\"default\":false},\"limit\":{\"type\":\"integer\","
      "\"description\":\"Max results (default 10)\",\"default\":10}},\"required\":["
-     "\"pattern\"]}"},
+     "\"pattern\",\"project\"]}"},
 
     {"list_projects", "List all indexed projects", "{\"type\":\"object\",\"properties\":{}}"},
 
     {"delete_project", "Delete a project from the index",
-     "{\"type\":\"object\",\"properties\":{\"project_name\":{\"type\":\"string\"}},\"required\":["
-     "\"project_name\"]}"},
+     "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"}},\"required\":["
+     "\"project\"]}"},
 
     {"index_status", "Get the indexing status of a project",
-     "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"}}}"},
+     "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"}},\"required\":["
+     "\"project\"]}"},
 
     {"detect_changes", "Detect code changes and their impact",
      "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"},\"scope\":{\"type\":"
      "\"string\"},\"depth\":{\"type\":\"integer\",\"default\":2},\"base_branch\":{\"type\":"
-     "\"string\",\"default\":\"main\"}}}"},
+     "\"string\",\"default\":\"main\"}},\"required\":[\"project\"]}"},
 
     {"manage_adr", "Create or update Architecture Decision Records",
      "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"},\"mode\":{\"type\":"
      "\"string\",\"enum\":[\"get\",\"update\",\"sections\"]},\"content\":{\"type\":\"string\"},"
-     "\"sections\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}}}"},
+     "\"sections\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"project\"]"
+     "}"},
 
     {"ingest_traces", "Ingest runtime traces to enhance the knowledge graph",
      "{\"type\":\"object\",\"properties\":{\"traces\":{\"type\":\"array\",\"items\":{\"type\":"
      "\"object\"}},\"project\":{\"type\":"
-     "\"string\"}},\"required\":[\"traces\"]}"},
+     "\"string\"}},\"required\":[\"traces\",\"project\"]}"},
 };
 
 static const int TOOL_COUNT = sizeof(TOOLS) / sizeof(TOOLS[0]);
@@ -631,7 +635,7 @@ static const char *project_db_path(const char *project, char *buf, size_t bufsz)
  * Tracks last-access time so the event loop can evict idle stores. */
 static cbm_store_t *resolve_store(cbm_mcp_server_t *srv, const char *project) {
     if (!project) {
-        return srv->store; /* no project specified → use whatever's open */
+        return NULL; /* project is required — no implicit fallback */
     }
 
     srv->store_last_used = time(NULL);
@@ -672,13 +676,66 @@ static cbm_store_t *resolve_store(cbm_mcp_server_t *srv, const char *project) {
     return srv->store;
 }
 
-/* Bail with empty JSON result when no store is available. */
-#define REQUIRE_STORE(store, project)                                              \
-    do {                                                                           \
-        if (!(store)) {                                                            \
-            free(project);                                                         \
-            return cbm_mcp_text_result("{\"error\":\"no project loaded\"}", true); \
-        }                                                                          \
+/* Build a helpful error listing available projects. Caller must free() result. */
+static char *build_project_list_error(const char *reason) {
+    char dir_path[1024];
+    cache_dir(dir_path, sizeof(dir_path));
+
+    /* Collect project names from .db files */
+    char projects[4096] = "";
+    int count = 0;
+    cbm_dir_t *d = cbm_opendir(dir_path);
+    if (d) {
+        int offset = 0;
+        cbm_dirent_t *entry;
+        while ((entry = cbm_readdir(d)) != NULL) {
+            const char *n = entry->name;
+            size_t len = strlen(n);
+            if (len < 4 || strcmp(n + len - 3, ".db") != 0) {
+                continue;
+            }
+            if (strncmp(n, "tmp-", 4) == 0 || strncmp(n, "_", 1) == 0) {
+                continue;
+            }
+            if (count > 0 && offset < (int)sizeof(projects) - 2) {
+                projects[offset++] = ',';
+            }
+            int wrote = snprintf(projects + offset, sizeof(projects) - (size_t)offset, "\"%.*s\"",
+                                 (int)(len - 3), n);
+            if (wrote > 0) {
+                offset += wrote;
+            }
+            count++;
+        }
+        cbm_closedir(d);
+    }
+
+    enum { ERR_BUF_SZ = 5120 };
+    char buf[ERR_BUF_SZ];
+    if (count > 0) {
+        snprintf(buf, sizeof(buf),
+                 "{\"error\":\"%s\",\"hint\":\"Use list_projects to see all indexed projects, "
+                 "then pass the project name.\",\"available_projects\":[%s],\"count\":%d}",
+                 reason, projects, count);
+    } else {
+        snprintf(buf, sizeof(buf),
+                 "{\"error\":\"%s\",\"hint\":\"No projects indexed yet. "
+                 "Call index_repository first.\"}",
+                 reason);
+    }
+    return heap_strdup(buf);
+}
+
+/* Bail with project list when no store is available. */
+#define REQUIRE_STORE(store, project)                                                  \
+    do {                                                                               \
+        if (!(store)) {                                                                \
+            char *_err = build_project_list_error("project not found or not indexed"); \
+            char *_res = cbm_mcp_text_result(_err, true);                              \
+            free(_err);                                                                \
+            free(project);                                                             \
+            return _res;                                                               \
+        }                                                                              \
     } while (0)
 
 /* ── Tool handler implementations ─────────────────────────────── */
@@ -778,9 +835,6 @@ static char *handle_list_projects(cbm_mcp_server_t *srv, const char *args) {
  * Callers that receive a non-NULL return value must free(project) themselves
  * before returning the error string. */
 static char *verify_project_indexed(cbm_store_t *store, const char *project) {
-    if (!project) {
-        return NULL; /* default project — always exists */
-    }
     cbm_project_t proj_check = {0};
     if (cbm_store_get_project(store, project, &proj_check) != CBM_STORE_OK) {
         return cbm_mcp_text_result(
@@ -935,9 +989,12 @@ static char *handle_query_graph(cbm_mcp_server_t *srv, const char *args) {
         return cbm_mcp_text_result("query is required", true);
     }
     if (!store) {
+        char *_err = build_project_list_error("project not found or not indexed");
+        char *_res = cbm_mcp_text_result(_err, true);
+        free(_err);
         free(project);
         free(query);
-        return cbm_mcp_text_result("{\"error\":\"no project loaded\"}", true);
+        return _res;
     }
 
     char *not_indexed = verify_project_indexed(store, project);
@@ -1024,9 +1081,9 @@ static char *handle_index_status(cbm_mcp_server_t *srv, const char *args) {
 
 /* delete_project: just erase the .db file (and WAL/SHM). */
 static char *handle_delete_project(cbm_mcp_server_t *srv, const char *args) {
-    char *name = cbm_mcp_get_string_arg(args, "project_name");
+    char *name = cbm_mcp_get_string_arg(args, "project");
     if (!name) {
-        return cbm_mcp_text_result("project_name is required", true);
+        return cbm_mcp_text_result("project is required", true);
     }
 
     /* Close store if it's the project being deleted */
@@ -1151,10 +1208,13 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
         return cbm_mcp_text_result("function_name is required", true);
     }
     if (!store) {
+        char *_err = build_project_list_error("project not found or not indexed");
+        char *_res = cbm_mcp_text_result(_err, true);
+        free(_err);
         free(func_name);
         free(project);
         free(direction);
-        return cbm_mcp_text_result("{\"error\":\"no project loaded\"}", true);
+        return _res;
     }
 
     char *not_indexed = verify_project_indexed(store, project);
@@ -1650,9 +1710,12 @@ static char *handle_get_code_snippet(cbm_mcp_server_t *srv, const char *args) {
 
     cbm_store_t *store = resolve_store(srv, project);
     if (!store) {
+        char *_err = build_project_list_error("project not found or not indexed");
+        char *_res = cbm_mcp_text_result(_err, true);
+        free(_err);
         free(qn);
         free(project);
-        return cbm_mcp_text_result("{\"error\":\"no project loaded\"}", true);
+        return _res;
     }
 
     char *not_indexed = verify_project_indexed(store, project);
@@ -2014,9 +2077,14 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
         return cbm_mcp_text_result("pattern is required", true);
     }
 
-    /* Resolve project */
-    if (!project && srv->session_project[0]) {
-        project = heap_strdup(srv->session_project);
+    /* Project is required */
+    if (!project) {
+        free(pattern);
+        free(file_pattern);
+        char *_err = build_project_list_error("project is required");
+        char *_res = cbm_mcp_text_result(_err, true);
+        free(_err);
+        return _res;
     }
 
     char *root_path = get_project_root(srv, project);
@@ -2024,7 +2092,10 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
         free(pattern);
         free(project);
         free(file_pattern);
-        return cbm_mcp_text_result("project not found or not indexed", true);
+        char *_err = build_project_list_error("project not found or not indexed");
+        char *_res = cbm_mcp_text_result(_err, true);
+        free(_err);
+        return _res;
     }
 
     /* Reject shell metacharacters in user-supplied arguments */
@@ -2073,11 +2144,10 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
 
     cbm_store_t *pre_store = resolve_store(srv, project);
     if (pre_store) {
-        const char *pn = project ? project : srv->session_project;
         char **indexed_files = NULL;
         int indexed_count = 0;
-        if (pn &&
-            cbm_store_list_files(pre_store, pn, &indexed_files, &indexed_count) == CBM_STORE_OK &&
+        if (cbm_store_list_files(pre_store, project, &indexed_files, &indexed_count) ==
+                CBM_STORE_OK &&
             indexed_count > 0) {
             FILE *fl = fopen(filelist, "w");
             if (fl) {
@@ -2173,7 +2243,6 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
      * Then: one SQL query per unique file for nodes, one batch query for all degrees. */
 
     cbm_store_t *store = resolve_store(srv, project);
-    const char *proj_name = project ? project : srv->session_project;
 
     int sr_cap = 32;
     int sr_count = 0;
@@ -2201,8 +2270,8 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
         /* One SQL query: load all nodes in this file */
         cbm_node_t *file_nodes = NULL;
         int file_node_count = 0;
-        if (store && proj_name) {
-            cbm_store_find_nodes_by_file(store, proj_name, cur_file, &file_nodes, &file_node_count);
+        if (store) {
+            cbm_store_find_nodes_by_file(store, project, cur_file, &file_nodes, &file_node_count);
         }
 
         /* Match each grep hit to tightest containing node (in-memory) */

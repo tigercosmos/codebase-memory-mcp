@@ -433,9 +433,10 @@ TEST(tool_trace_call_path_not_found) {
     char *resp =
         cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":20,\"method\":\"tools/call\","
                                    "\"params\":{\"name\":\"trace_call_path\","
-                                   "\"arguments\":{\"function_name\":\"NonExistent\"}}}");
+                                   "\"arguments\":{\"function_name\":\"NonExistent\","
+                                   "\"project\":\"nonexistent\"}}}");
     ASSERT_NOT_NULL(resp);
-    /* Should return error about function not found */
+    /* Should return error about project not found */
     ASSERT_NOT_NULL(strstr(resp, "not found"));
     free(resp);
 
@@ -464,7 +465,7 @@ TEST(tool_delete_project_not_found) {
     char *resp =
         cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":22,\"method\":\"tools/call\","
                                    "\"params\":{\"name\":\"delete_project\","
-                                   "\"arguments\":{\"project_name\":\"nonexistent\"}}}");
+                                   "\"arguments\":{\"project\":\"nonexistent\"}}}");
     ASSERT_NOT_NULL(resp);
     ASSERT_NOT_NULL(strstr(resp, "not_found"));
     free(resp);
@@ -478,10 +479,11 @@ TEST(tool_get_architecture_empty) {
 
     char *resp =
         cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":24,\"method\":\"tools/call\","
-                                   "\"params\":{\"name\":\"get_architecture\",\"arguments\":{}}}");
+                                   "\"params\":{\"name\":\"get_architecture\","
+                                   "\"arguments\":{\"project\":\"nonexistent\"}}}");
     ASSERT_NOT_NULL(resp);
-    ASSERT_NOT_NULL(strstr(resp, "\"result\""));
-    ASSERT_NOT_NULL(strstr(resp, "total_nodes"));
+    /* No store for nonexistent project — should return project error */
+    ASSERT_TRUE(strstr(resp, "not found") || strstr(resp, "not indexed"));
     free(resp);
 
     cbm_mcp_server_free(srv);
@@ -544,7 +546,8 @@ TEST(tool_get_code_snippet_not_found) {
     char *resp =
         cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":32,\"method\":\"tools/call\","
                                    "\"params\":{\"name\":\"get_code_snippet\","
-                                   "\"arguments\":{\"qualified_name\":\"nonexistent.func\"}}}");
+                                   "\"arguments\":{\"qualified_name\":\"nonexistent.func\","
+                                   "\"project\":\"nonexistent\"}}}");
     ASSERT_NOT_NULL(resp);
     ASSERT_NOT_NULL(strstr(resp, "not found"));
     free(resp);
@@ -574,10 +577,11 @@ TEST(tool_search_code_no_project) {
     char *resp =
         cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":34,\"method\":\"tools/call\","
                                    "\"params\":{\"name\":\"search_code\","
-                                   "\"arguments\":{\"pattern\":\"func main\"}}}");
+                                   "\"arguments\":{\"pattern\":\"func main\","
+                                   "\"project\":\"nonexistent\"}}}");
     ASSERT_NOT_NULL(resp);
     /* No project indexed → error */
-    ASSERT_TRUE(strstr(resp, "not found") || strstr(resp, "not indexed"));
+    ASSERT_TRUE(strstr(resp, "not found") || strstr(resp, "not indexed") || strstr(resp, "required"));
     free(resp);
 
     cbm_mcp_server_free(srv);

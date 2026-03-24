@@ -138,7 +138,7 @@ fi
 echo "OK: search_graph found $TOTAL result(s) for 'compute'"
 
 # 3b: trace_call_path — verify compute has callers
-TRACE=$(cli trace_call_path "{\"project\":\"$PROJECT\",\"function_name\":\"compute\",\"direction\":\"inbound\",\"max_depth\":1}")
+TRACE=$(cli trace_call_path "{\"project\":\"$PROJECT\",\"function_name\":\"compute\",\"direction\":\"inbound\",\"depth\":1}")
 CALLERS=$(echo "$TRACE" | python3 -c "import json,sys; d=json.loads(json.loads(sys.stdin.read())['content'][0]['text']); print(len(d.get('callers',[])))" 2>/dev/null || echo "0")
 if [ "$CALLERS" -lt 1 ]; then
   echo "FAIL: trace_call_path found 0 callers for 'compute'"
@@ -165,7 +165,7 @@ fi
 echo "OK: $FOLDER_COUNT Folder nodes (init.py didn't clobber them)"
 
 # 3e: delete_project cleanup
-cli delete_project "{\"project_name\":\"$PROJECT\"}" > /dev/null
+cli delete_project "{\"project\":\"$PROJECT\"}" > /dev/null
 
 echo ""
 echo "=== Phase 4: security checks ==="

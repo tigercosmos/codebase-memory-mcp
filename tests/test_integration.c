@@ -314,9 +314,9 @@ TEST(integ_mcp_search_graph_by_name) {
 TEST(integ_mcp_query_graph_functions) {
     char args[512];
     snprintf(args, sizeof(args),
-             "{\"query\":\"MATCH (f:Function) WHERE f.project = '%s' "
+             "{\"project\":\"%s\",\"query\":\"MATCH (f:Function) WHERE f.project = '%s' "
              "RETURN f.name LIMIT 20\"}",
-             g_project);
+             g_project, g_project);
 
     char *resp = call_tool("query_graph", args);
     ASSERT_NOT_NULL(resp);
@@ -331,9 +331,9 @@ TEST(integ_mcp_query_graph_functions) {
 TEST(integ_mcp_query_graph_calls) {
     char args[512];
     snprintf(args, sizeof(args),
-             "{\"query\":\"MATCH (a)-[r:CALLS]->(b) WHERE a.project = '%s' "
+             "{\"project\":\"%s\",\"query\":\"MATCH (a)-[r:CALLS]->(b) WHERE a.project = '%s' "
              "RETURN a.name, b.name LIMIT 20\"}",
-             g_project);
+             g_project, g_project);
 
     char *resp = call_tool("query_graph", args);
     ASSERT_NOT_NULL(resp);
@@ -399,7 +399,7 @@ TEST(integ_mcp_index_status) {
 TEST(integ_mcp_delete_project) {
     /* Delete the project and verify it's gone */
     char args[256];
-    snprintf(args, sizeof(args), "{\"project_name\":\"%s\"}", g_project);
+    snprintf(args, sizeof(args), "{\"project\":\"%s\"}", g_project);
 
     char *resp = call_tool("delete_project", args);
     ASSERT_NOT_NULL(resp);

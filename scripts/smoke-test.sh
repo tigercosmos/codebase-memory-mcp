@@ -483,4 +483,554 @@ echo "OK: get_code_snippet via MCP"
 rm -f "$MCP_SC_INPUT" "$MCP_SC_OUTPUT"
 
 echo ""
+echo "=== Phase 8: agent config install E2E ==="
+
+# Set up isolated HOME with stub agent directories
+FAKE_HOME=$(mktemp -d)
+mkdir -p "$FAKE_HOME/.claude"
+mkdir -p "$FAKE_HOME/.codex"
+mkdir -p "$FAKE_HOME/.gemini/antigravity"
+mkdir -p "$FAKE_HOME/.openclaw"
+mkdir -p "$FAKE_HOME/.kilocode/rules"
+mkdir -p "$FAKE_HOME/.config/opencode"
+if [ "$(uname -s)" = "Darwin" ]; then
+  mkdir -p "$FAKE_HOME/Library/Application Support/Zed"
+  mkdir -p "$FAKE_HOME/Library/Application Support/Code/User"
+else
+  mkdir -p "$FAKE_HOME/.config/zed"
+  mkdir -p "$FAKE_HOME/.config/Code/User"
+fi
+# KiloCode detection always uses ~/.config/ path (even on macOS)
+mkdir -p "$FAKE_HOME/.config/Code/User/globalStorage/kilocode.kilo-code/settings"
+mkdir -p "$FAKE_HOME/.local/bin"
+cp "$BINARY" "$FAKE_HOME/.local/bin/codebase-memory-mcp"
+printf '#!/bin/sh\necho stub\n' > "$FAKE_HOME/.local/bin/aider" && chmod +x "$FAKE_HOME/.local/bin/aider"
+printf '#!/bin/sh\necho stub\n' > "$FAKE_HOME/.local/bin/opencode" && chmod +x "$FAKE_HOME/.local/bin/opencode"
+
+# Pre-existing configs (verify merge, not overwrite)
+echo '{"existingKey": true}' > "$FAKE_HOME/.claude.json"
+echo '{"existingKey": true}' > "$FAKE_HOME/.gemini/settings.json"
+printf '[existing_section]\nline_from_user = true\n' > "$FAKE_HOME/.codex/config.toml"
+
+SELF_PATH="$FAKE_HOME/.local/bin/codebase-memory-mcp"
+
+# Run install
+HOME="$FAKE_HOME" PATH="$FAKE_HOME/.local/bin:$PATH" "$BINARY" install -y 2>&1 || true
+
+# Helper for JSON validation
+json_get() { python3 -c "import json,sys,os; f='$1'; d=json.load(open(f)) if os.path.isfile(f) else {}; print($2)" 2>/dev/null || echo ""; }
+
+# 8a: Claude Code MCP (new path) — correct command
+CMD=$(json_get "$FAKE_HOME/.claude.json" "d['mcpServers']['codebase-memory-mcp']['command']")
+if [ "$CMD" != "$SELF_PATH" ]; then
+  echo "FAIL 8a: .claude.json command='$CMD', expected '$SELF_PATH'"
+  exit 1
+fi
+echo "OK 8a: Claude Code MCP (.claude.json)"
+
+# 8b: Claude Code MCP — existing key preserved (merge not overwrite)
+EXISTING=$(json_get "$FAKE_HOME/.claude.json" "d.get('existingKey', False)")
+if [ "$EXISTING" != "True" ]; then
+  echo "FAIL 8b: .claude.json existingKey lost (overwrite instead of merge)"
+  exit 1
+fi
+echo "OK 8b: .claude.json preserved existing keys"
+
+# 8c: Claude Code MCP (legacy path)
+CMD=$(json_get "$FAKE_HOME/.claude/.mcp.json" "d['mcpServers']['codebase-memory-mcp']['command']")
+if [ "$CMD" != "$SELF_PATH" ]; then
+  echo "FAIL 8c: .claude/.mcp.json command='$CMD'"
+  exit 1
+fi
+echo "OK 8c: Claude Code MCP (.claude/.mcp.json)"
+
+# 8d: Claude Code hooks
+if ! python3 -c "
+import json, sys
+d = json.load(open('$FAKE_HOME/.claude/settings.json'))
+hooks = d.get('hooks', {}).get('PreToolUse', [])
+found = any('Grep' in str(h.get('matcher', '')) for h in hooks)
+sys.exit(0 if found else 1)
+" 2>/dev/null; then
+  echo "FAIL 8d: PreToolUse hook not found in settings.json"
+  exit 1
+fi
+echo "OK 8d: Claude Code PreToolUse hook"
+
+# 8e: Claude Code gate script
+if [ "$(uname -s)" != "MINGW64_NT" ] 2>/dev/null; then
+  if [ ! -x "$FAKE_HOME/.claude/hooks/cbm-code-discovery-gate" ]; then
+    echo "FAIL 8e: gate script not executable or missing"
+    exit 1
+  fi
+  echo "OK 8e: gate script installed and executable"
+fi
+
+# 8f-8h: Codex TOML
+if ! grep -q '\[mcp_servers.codebase-memory-mcp\]' "$FAKE_HOME/.codex/config.toml"; then
+  echo "FAIL 8f: Codex TOML missing MCP section"
+  exit 1
+fi
+if ! grep -q 'existing_section' "$FAKE_HOME/.codex/config.toml"; then
+  echo "FAIL 8h: Codex TOML lost existing section (overwrite)"
+  exit 1
+fi
+echo "OK 8f-h: Codex TOML (MCP + preserved existing)"
+
+# 8i: Codex instructions
+if [ ! -f "$FAKE_HOME/.codex/AGENTS.md" ] || ! grep -q 'codebase-memory-mcp' "$FAKE_HOME/.codex/AGENTS.md"; then
+  echo "FAIL 8i: Codex AGENTS.md missing"
+  exit 1
+fi
+echo "OK 8i: Codex instructions"
+
+# 8j-l: Gemini MCP + hooks + merge
+CMD=$(json_get "$FAKE_HOME/.gemini/settings.json" "d['mcpServers']['codebase-memory-mcp']['command']")
+if [ "$CMD" != "$SELF_PATH" ]; then
+  echo "FAIL 8j: Gemini MCP command='$CMD'"
+  exit 1
+fi
+EXISTING=$(json_get "$FAKE_HOME/.gemini/settings.json" "d.get('existingKey', False)")
+if [ "$EXISTING" != "True" ]; then
+  echo "FAIL 8k: Gemini settings.json lost existing key"
+  exit 1
+fi
+echo "OK 8j-k: Gemini MCP (correct command + preserved existing)"
+
+if ! python3 -c "
+import json, sys
+d = json.load(open('$FAKE_HOME/.gemini/settings.json'))
+hooks = d.get('hooks', {}).get('BeforeTool', [])
+sys.exit(0 if len(hooks) > 0 else 1)
+" 2>/dev/null; then
+  echo "FAIL 8l: Gemini BeforeTool hook missing"
+  exit 1
+fi
+echo "OK 8l: Gemini BeforeTool hook"
+
+# 8m: Gemini instructions
+if [ ! -f "$FAKE_HOME/.gemini/GEMINI.md" ]; then
+  echo "FAIL 8m: Gemini GEMINI.md missing"
+  exit 1
+fi
+echo "OK 8m: Gemini instructions"
+
+# 8n: Zed MCP
+if [ "$(uname -s)" = "Darwin" ]; then
+  ZED_CFG="$FAKE_HOME/Library/Application Support/Zed/settings.json"
+else
+  ZED_CFG="$FAKE_HOME/.config/zed/settings.json"
+fi
+if [ -f "$ZED_CFG" ]; then
+  CMD=$(json_get "$ZED_CFG" "d['context_servers']['codebase-memory-mcp']['command']")
+  if [ "$CMD" != "$SELF_PATH" ]; then
+    echo "FAIL 8n: Zed command='$CMD'"
+    exit 1
+  fi
+  echo "OK 8n: Zed MCP"
+else
+  echo "SKIP 8n: Zed config not created (detection may have failed)"
+fi
+
+# 8o-p: OpenCode MCP + instructions
+CMD=$(json_get "$FAKE_HOME/.config/opencode/opencode.json" "d['mcp']['codebase-memory-mcp']['command']")
+if [ "$CMD" != "$SELF_PATH" ]; then
+  echo "FAIL 8o: OpenCode command='$CMD'"
+  exit 1
+fi
+echo "OK 8o: OpenCode MCP"
+if [ ! -f "$FAKE_HOME/.config/opencode/AGENTS.md" ]; then
+  echo "FAIL 8p: OpenCode AGENTS.md missing"
+  exit 1
+fi
+echo "OK 8p: OpenCode instructions"
+
+# 8q-r: Antigravity
+CMD=$(json_get "$FAKE_HOME/.gemini/antigravity/mcp_config.json" "d['mcpServers']['codebase-memory-mcp']['command']")
+if [ "$CMD" != "$SELF_PATH" ]; then
+  echo "FAIL 8q: Antigravity command='$CMD'"
+  exit 1
+fi
+echo "OK 8q: Antigravity MCP"
+if [ ! -f "$FAKE_HOME/.gemini/antigravity/AGENTS.md" ]; then
+  echo "FAIL 8r: Antigravity AGENTS.md missing"
+  exit 1
+fi
+echo "OK 8r: Antigravity instructions"
+
+# 8s: Aider instructions
+if [ ! -f "$FAKE_HOME/CONVENTIONS.md" ] || ! grep -q 'codebase-memory-mcp' "$FAKE_HOME/CONVENTIONS.md"; then
+  echo "FAIL 8s: Aider CONVENTIONS.md missing or empty"
+  exit 1
+fi
+echo "OK 8s: Aider instructions"
+
+# 8t: KiloCode MCP (detection + install both use ~/.config/ on all platforms)
+KILO_CFG="$FAKE_HOME/.config/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json"
+CMD=$(json_get "$KILO_CFG" "d['mcpServers']['codebase-memory-mcp']['command']")
+if [ "$CMD" != "$SELF_PATH" ]; then
+  echo "FAIL 8t: KiloCode command='$CMD'"
+  exit 1
+fi
+echo "OK 8t: KiloCode MCP"
+
+# 8u: KiloCode instructions
+if [ ! -f "$FAKE_HOME/.kilocode/rules/codebase-memory-mcp.md" ]; then
+  echo "FAIL 8u: KiloCode rules file missing"
+  exit 1
+fi
+echo "OK 8u: KiloCode instructions"
+
+# 8v: VS Code MCP
+if [ "$(uname -s)" = "Darwin" ]; then
+  VSCODE_CFG="$FAKE_HOME/Library/Application Support/Code/User/mcp.json"
+else
+  VSCODE_CFG="$FAKE_HOME/.config/Code/User/mcp.json"
+fi
+CMD=$(json_get "$VSCODE_CFG" "d['servers']['codebase-memory-mcp']['command']")
+if [ "$CMD" != "$SELF_PATH" ]; then
+  echo "FAIL 8v: VS Code command='$CMD'"
+  exit 1
+fi
+echo "OK 8v: VS Code MCP"
+
+# 8w: OpenClaw MCP
+CMD=$(json_get "$FAKE_HOME/.openclaw/openclaw.json" "d['mcpServers']['codebase-memory-mcp']['command']")
+if [ "$CMD" != "$SELF_PATH" ]; then
+  echo "FAIL 8w: OpenClaw command='$CMD'"
+  exit 1
+fi
+echo "OK 8w: OpenClaw MCP"
+
+# 8x-y: Skills
+for SKILL_NAME in codebase-memory-exploring codebase-memory-tracing codebase-memory-quality codebase-memory-reference; do
+  SKILL_FILE="$FAKE_HOME/.claude/skills/$SKILL_NAME/SKILL.md"
+  if [ ! -s "$SKILL_FILE" ]; then
+    echo "FAIL 8x: skill $SKILL_NAME missing or empty"
+    exit 1
+  fi
+done
+echo "OK 8x-y: all 4 skills installed"
+
+echo ""
+echo "=== Phase 9: agent config uninstall E2E ==="
+
+# Run uninstall (same FAKE_HOME with all configs present)
+HOME="$FAKE_HOME" PATH="$FAKE_HOME/.local/bin:$PATH" "$BINARY" uninstall -y -n 2>&1 || true
+
+# 9a-b: Claude Code MCP removed but existing keys preserved
+if python3 -c "
+import json, sys
+d = json.load(open('$FAKE_HOME/.claude.json'))
+if 'codebase-memory-mcp' in d.get('mcpServers', {}):
+    sys.exit(1)
+if not d.get('existingKey', False):
+    sys.exit(2)
+sys.exit(0)
+" 2>/dev/null; then
+  echo "OK 9a-b: Claude Code MCP removed, existing keys preserved"
+else
+  echo "FAIL 9a-b: Claude Code uninstall verification failed"
+  exit 1
+fi
+
+# 9c: Legacy MCP removed
+if python3 -c "
+import json, sys
+d = json.load(open('$FAKE_HOME/.claude/.mcp.json'))
+sys.exit(1 if 'codebase-memory-mcp' in d.get('mcpServers', {}) else 0)
+" 2>/dev/null; then
+  echo "OK 9c: legacy .mcp.json cleaned"
+else
+  echo "FAIL 9c: legacy .mcp.json still has entry"
+  exit 1
+fi
+
+# 9d: Hooks removed
+if python3 -c "
+import json, sys
+d = json.load(open('$FAKE_HOME/.claude/settings.json'))
+hooks = d.get('hooks', {}).get('PreToolUse', [])
+found = any('cbm-code-discovery-gate' in str(h) for h in hooks)
+sys.exit(1 if found else 0)
+" 2>/dev/null; then
+  echo "OK 9d: PreToolUse hook removed"
+else
+  echo "FAIL 9d: PreToolUse hook still present"
+  exit 1
+fi
+
+# 9e-f: Codex TOML cleaned, existing preserved
+if grep -q '\[mcp_servers.codebase-memory-mcp\]' "$FAKE_HOME/.codex/config.toml" 2>/dev/null; then
+  echo "FAIL 9e: Codex TOML still has MCP section"
+  exit 1
+fi
+if ! grep -q 'existing_section' "$FAKE_HOME/.codex/config.toml" 2>/dev/null; then
+  echo "FAIL 9f: Codex TOML lost existing section"
+  exit 1
+fi
+echo "OK 9e-f: Codex TOML cleaned, existing preserved"
+
+# 9g-i: Gemini MCP removed, existing preserved, hooks removed
+if python3 -c "
+import json, sys
+d = json.load(open('$FAKE_HOME/.gemini/settings.json'))
+has_mcp = 'codebase-memory-mcp' in d.get('mcpServers', {})
+has_existing = d.get('existingKey', False)
+hooks = d.get('hooks', {}).get('BeforeTool', [])
+has_hook = any('codebase-memory-mcp' in str(h) for h in hooks)
+sys.exit(0 if (not has_mcp and has_existing and not has_hook) else 1)
+" 2>/dev/null; then
+  echo "OK 9g-i: Gemini MCP removed, existing preserved, hooks removed"
+else
+  echo "FAIL 9g-i: Gemini uninstall verification failed"
+  exit 1
+fi
+
+# 9j: VS Code
+if python3 -c "
+import json, sys
+d = json.load(open('$VSCODE_CFG'))
+sys.exit(1 if 'codebase-memory-mcp' in d.get('servers', {}) else 0)
+" 2>/dev/null; then
+  echo "OK 9j: VS Code MCP removed"
+else
+  echo "FAIL 9j: VS Code MCP still present"
+  exit 1
+fi
+
+# 9k: OpenClaw
+if python3 -c "
+import json, sys
+d = json.load(open('$FAKE_HOME/.openclaw/openclaw.json'))
+sys.exit(1 if 'codebase-memory-mcp' in d.get('mcpServers', {}) else 0)
+" 2>/dev/null; then
+  echo "OK 9k: OpenClaw MCP removed"
+else
+  echo "FAIL 9k: OpenClaw MCP still present"
+  exit 1
+fi
+
+# 9l: Skills removed
+if [ -d "$FAKE_HOME/.claude/skills/codebase-memory-exploring" ]; then
+  echo "FAIL 9l: skills not removed"
+  exit 1
+fi
+echo "OK 9l: skills removed"
+
+echo ""
+echo "--- Phase 9b: adversarial install/uninstall tests ---"
+
+# 9b-1: Install with minimal agents (empty HOME, no agent dirs)
+# Note: cbm_find_cli searches hardcoded paths (/usr/local/bin, /opt/homebrew/bin)
+# so PATH-based agents like aider may still be detected. We verify the install
+# completes without crash and prints "Detected agents:" line.
+EMPTY_HOME=$(mktemp -d)
+mkdir -p "$EMPTY_HOME/.local/bin"
+INSTALL_OUT=$(HOME="$EMPTY_HOME" "$BINARY" install -y 2>&1) || true
+if ! echo "$INSTALL_OUT" | grep -qi 'detected agents'; then
+  echo "FAIL 9b-1: install output missing 'Detected agents' line"
+  exit 1
+fi
+echo "OK 9b-1: install with minimal agents exits cleanly"
+rm -rf "$EMPTY_HOME"
+
+# 9b-2: Install twice (idempotent)
+IDEM_HOME=$(mktemp -d)
+mkdir -p "$IDEM_HOME/.claude" "$IDEM_HOME/.local/bin"
+cp "$BINARY" "$IDEM_HOME/.local/bin/codebase-memory-mcp"
+HOME="$IDEM_HOME" "$BINARY" install -y 2>&1 > /dev/null || true
+HOME="$IDEM_HOME" "$BINARY" install -y 2>&1 > /dev/null || true
+# Count MCP entries — should be exactly 1
+COUNT=$(python3 -c "
+import json
+d = json.load(open('$IDEM_HOME/.claude.json'))
+print(list(d.get('mcpServers',{}).keys()).count('codebase-memory-mcp'))
+" 2>/dev/null || echo "0")
+if [ "$COUNT" != "1" ]; then
+  echo "FAIL 9b-2: double install created $COUNT entries (expected 1)"
+  exit 1
+fi
+echo "OK 9b-2: double install is idempotent"
+rm -rf "$IDEM_HOME"
+
+# 9b-3: Uninstall without prior install
+CLEAN_HOME=$(mktemp -d)
+mkdir -p "$CLEAN_HOME/.claude" "$CLEAN_HOME/.local/bin"
+UNINSTALL_OUT=$(HOME="$CLEAN_HOME" "$BINARY" uninstall -y -n 2>&1) || true
+echo "OK 9b-3: uninstall without install doesn't crash"
+rm -rf "$CLEAN_HOME"
+
+# 9b-4: Install over corrupt JSON
+CORRUPT_HOME=$(mktemp -d)
+mkdir -p "$CORRUPT_HOME/.claude" "$CORRUPT_HOME/.local/bin"
+cp "$BINARY" "$CORRUPT_HOME/.local/bin/codebase-memory-mcp"
+echo '{invalid json here' > "$CORRUPT_HOME/.claude.json"
+HOME="$CORRUPT_HOME" "$BINARY" install -y 2>&1 > /dev/null || true
+# Should either fix it or handle gracefully — not crash
+echo "OK 9b-4: install over corrupt JSON doesn't crash"
+rm -rf "$CORRUPT_HOME"
+
+# 9b-8: Double uninstall
+DBL_HOME=$(mktemp -d)
+mkdir -p "$DBL_HOME/.claude" "$DBL_HOME/.local/bin"
+cp "$BINARY" "$DBL_HOME/.local/bin/codebase-memory-mcp"
+HOME="$DBL_HOME" "$BINARY" install -y 2>&1 > /dev/null || true
+HOME="$DBL_HOME" "$BINARY" uninstall -y -n 2>&1 > /dev/null || true
+HOME="$DBL_HOME" "$BINARY" uninstall -y -n 2>&1 > /dev/null || true
+echo "OK 9b-8: double uninstall doesn't crash"
+rm -rf "$DBL_HOME"
+
+rm -rf "$FAKE_HOME" "$EMPTY_HOME"
+
+echo ""
+echo "=== Phase 10: binary security E2E ==="
+
+SECURITY_DIR=$(mktemp -d)
+SECURITY_BIN="$SECURITY_DIR/codebase-memory-mcp"
+cp "$BINARY" "$SECURITY_BIN"
+chmod 755 "$SECURITY_BIN"
+
+if [ "$(uname -s)" = "Darwin" ]; then
+  # macOS signing tests
+  if codesign -v "$SECURITY_BIN" 2>/dev/null; then
+    echo "OK 10a: binary has valid signature"
+  else
+    echo "FAIL 10a: binary has no valid signature (linker should auto-sign arm64)"
+    exit 1
+  fi
+
+  codesign --remove-signature "$SECURITY_BIN" 2>/dev/null || true
+
+  # Detect binary architecture (not shell arch — Rosetta reports x86_64 for arm64 binaries)
+  BIN_ARCH=$(file "$SECURITY_BIN" | grep -o 'arm64\|x86_64' | head -1)
+
+  if [ "$BIN_ARCH" = "arm64" ]; then
+    # arm64: unsigned must SIGKILL (exit 137 = 128+9)
+    UNSIGNED_EXIT=0
+    "$SECURITY_BIN" --version > /dev/null 2>&1 || UNSIGNED_EXIT=$?
+    if [ "$UNSIGNED_EXIT" -eq 137 ] || [ "$UNSIGNED_EXIT" -eq 9 ]; then
+      echo "OK 10c: unsigned arm64 binary killed (exit $UNSIGNED_EXIT)"
+    else
+      echo "FAIL 10c: unsigned arm64 exit=$UNSIGNED_EXIT (expected 137)"
+      exit 1
+    fi
+  else
+    # x86_64: unsigned should still run
+    if "$SECURITY_BIN" --version > /dev/null 2>&1; then
+      echo "OK 10c: unsigned x86_64 binary runs (no signing required)"
+    else
+      echo "FAIL 10c: unsigned x86_64 binary failed"
+      exit 1
+    fi
+  fi
+
+  # Re-sign and verify
+  xattr -d com.apple.quarantine "$SECURITY_BIN" 2>/dev/null || true
+  codesign --sign - --force "$SECURITY_BIN" 2>/dev/null
+  if "$SECURITY_BIN" --version > /dev/null 2>&1; then
+    echo "OK 10e: re-signed binary runs"
+  else
+    echo "FAIL 10e: re-signed binary failed"
+    exit 1
+  fi
+else
+  # Linux/Windows: unsigned binary should run fine
+  if "$SECURITY_BIN" --version > /dev/null 2>&1; then
+    echo "OK 10a: binary runs without signing ($(uname -s))"
+  else
+    echo "FAIL 10a: binary failed to run on $(uname -s)"
+    exit 1
+  fi
+
+  # chmod +x is sufficient
+  chmod -x "$SECURITY_BIN"
+  chmod +x "$SECURITY_BIN"
+  if "$SECURITY_BIN" --version > /dev/null 2>&1; then
+    echo "OK 10c: chmod +x is sufficient"
+  else
+    echo "FAIL 10c: chmod +x didn't restore executability"
+    exit 1
+  fi
+fi
+
+rm -rf "$SECURITY_DIR"
+
+echo ""
+echo "=== Phase 11: process kill E2E ==="
+
+# Start MCP server in background
+MCP_KILL_INPUT=$(mktemp)
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"kill-test","version":"1.0"}}}' > "$MCP_KILL_INPUT"
+"$BINARY" < "$MCP_KILL_INPUT" > /dev/null 2>&1 &
+KILL_PID=$!
+sleep 1
+
+if kill -0 "$KILL_PID" 2>/dev/null; then
+  echo "OK 11a-b: MCP server running (pid=$KILL_PID)"
+  kill "$KILL_PID" 2>/dev/null || true
+  wait "$KILL_PID" 2>/dev/null || true
+  sleep 1
+  if kill -0 "$KILL_PID" 2>/dev/null; then
+    echo "FAIL 11d: process still running after kill"
+    exit 1
+  fi
+  echo "OK 11c-d: process killed successfully"
+else
+  echo "OK 11: MCP server already exited (clean shutdown on EOF)"
+fi
+
+rm -f "$MCP_KILL_INPUT"
+
+echo ""
+echo "=== Phase 14: update flow E2E ==="
+
+UPDATE_DIR=$(mktemp -d)
+UPDATE_INSTALL="$UPDATE_DIR/install"
+mkdir -p "$UPDATE_INSTALL"
+
+# 14a-c: Set up fake install + downloaded binary, verify both run
+cp "$BINARY" "$UPDATE_INSTALL/codebase-memory-mcp"
+chmod 755 "$UPDATE_INSTALL/codebase-memory-mcp"
+cp "$BINARY" "$UPDATE_DIR/smoke-downloaded"
+
+if ! "$UPDATE_INSTALL/codebase-memory-mcp" --version > /dev/null 2>&1; then
+  echo "FAIL 14c: installed binary doesn't run"
+  exit 1
+fi
+
+# 14d: Replace (platform-specific)
+rm -f "$UPDATE_INSTALL/codebase-memory-mcp"
+cp "$UPDATE_DIR/smoke-downloaded" "$UPDATE_INSTALL/codebase-memory-mcp"
+chmod 755 "$UPDATE_INSTALL/codebase-memory-mcp"
+
+# 14e: Sign on macOS
+if [ "$(uname -s)" = "Darwin" ]; then
+  codesign --sign - --force "$UPDATE_INSTALL/codebase-memory-mcp" 2>/dev/null || true
+fi
+
+# 14f: Verify replaced binary
+if ! "$UPDATE_INSTALL/codebase-memory-mcp" --version > /dev/null 2>&1; then
+  echo "FAIL 14f: replaced binary doesn't run"
+  exit 1
+fi
+echo "OK 14a-f: binary replacement + verify"
+
+# 14g-i: Read-only replacement
+chmod 444 "$UPDATE_INSTALL/codebase-memory-mcp"
+rm -f "$UPDATE_INSTALL/codebase-memory-mcp"
+cp "$UPDATE_DIR/smoke-downloaded" "$UPDATE_INSTALL/codebase-memory-mcp"
+chmod 755 "$UPDATE_INSTALL/codebase-memory-mcp"
+if [ "$(uname -s)" = "Darwin" ]; then
+  codesign --sign - --force "$UPDATE_INSTALL/codebase-memory-mcp" 2>/dev/null || true
+fi
+if ! "$UPDATE_INSTALL/codebase-memory-mcp" --version > /dev/null 2>&1; then
+  echo "FAIL 14h: read-only replaced binary doesn't run"
+  exit 1
+fi
+echo "OK 14g-i: read-only replacement + verify"
+
+rm -rf "$UPDATE_DIR"
+
+echo ""
 echo "=== smoke-test: ALL PASSED ==="

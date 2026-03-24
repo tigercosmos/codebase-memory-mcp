@@ -213,7 +213,7 @@ const char *cbm_find_cli(const char *name, const char *home_dir) {
                 continue;
             }
             struct stat st;
-            if (stat(paths[i], &st) == 0) {
+            if (stat(paths[i], &st) == 0 && (st.st_mode & S_IXUSR)) {
                 snprintf(buf, sizeof(buf), "%s", paths[i]);
                 return buf;
             }

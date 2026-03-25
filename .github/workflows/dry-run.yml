@@ -338,7 +338,7 @@ jobs:
 
   # ── Step 4: Smoke test every binary ─────────────────────────
   smoke-unix:
-    if: ${{ inputs.skip_builds != true }}
+    if: ${{ !cancelled() && inputs.skip_builds != true }}
     needs: [build-unix]
     strategy:
       fail-fast: false
@@ -437,7 +437,7 @@ jobs:
           echo "=== ClamAV: clean ==="
 
   smoke-windows:
-    if: ${{ inputs.skip_builds != true }}
+    if: ${{ !cancelled() && inputs.skip_builds != true }}
     needs: [build-windows]
     strategy:
       fail-fast: false
@@ -511,7 +511,7 @@ jobs:
 
   # ── Step 6: Soak tests (after smoke, per-platform) ──────────
   soak-quick:
-    if: ${{ inputs.soak_level != 'none' && inputs.skip_builds != true }}
+    if: ${{ !cancelled() && inputs.soak_level != 'none' && inputs.skip_builds != true }}
     needs: [build-unix]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -561,7 +561,7 @@ jobs:
           retention-days: 14
 
   soak-quick-windows:
-    if: ${{ inputs.soak_level != 'none' && inputs.skip_builds != true }}
+    if: ${{ !cancelled() && inputs.soak_level != 'none' && inputs.skip_builds != true }}
     needs: [build-windows]
     runs-on: windows-latest
     timeout-minutes: 30
@@ -597,7 +597,7 @@ jobs:
           retention-days: 14
 
   soak-asan:
-    if: ${{ inputs.soak_level == 'full' && inputs.skip_builds != true }}
+    if: ${{ !cancelled() && inputs.soak_level == 'full' && inputs.skip_builds != true }}
     needs: [build-unix]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -651,7 +651,7 @@ jobs:
           retention-days: 14
 
   soak-asan-windows:
-    if: ${{ inputs.soak_level == 'full' && inputs.skip_builds != true }}
+    if: ${{ !cancelled() && inputs.soak_level == 'full' && inputs.skip_builds != true }}
     needs: [build-windows]
     runs-on: windows-latest
     timeout-minutes: 45

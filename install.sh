@@ -14,18 +14,21 @@ set -euo pipefail
 REPO="DeusData/codebase-memory-mcp"
 INSTALL_DIR="$HOME/.local/bin"
 VARIANT="standard"
+SKIP_CONFIG=false
 CBM_DOWNLOAD_URL="${CBM_DOWNLOAD_URL:-https://github.com/${REPO}/releases/latest/download}"
 
 for arg in "$@"; do
     case "$arg" in
-        --ui)       VARIANT="ui" ;;
-        --standard) VARIANT="standard" ;;
-        --dir=*)    INSTALL_DIR="${arg#--dir=}" ;;
+        --ui)           VARIANT="ui" ;;
+        --standard)     VARIANT="standard" ;;
+        --dir=*)        INSTALL_DIR="${arg#--dir=}" ;;
+        --skip-config)  SKIP_CONFIG=true ;;
         --help|-h)
-            echo "Usage: install.sh [--ui] [--dir=<path>]"
-            echo "  --ui        Install the UI variant (with graph visualization)"
-            echo "  --standard  Install the standard variant (default)"
-            echo "  --dir PATH  Install directory (default: ~/.local/bin)"
+            echo "Usage: install.sh [--ui] [--dir=<path>] [--skip-config]"
+            echo "  --ui           Install the UI variant (with graph visualization)"
+            echo "  --standard     Install the standard variant (default)"
+            echo "  --dir PATH     Install directory (default: ~/.local/bin)"
+            echo "  --skip-config  Skip automatic agent configuration"
             exit 0
             ;;
     esac
@@ -169,13 +172,18 @@ VERSION=$("$DEST" --version 2>&1) || {
 echo "Installed: $VERSION"
 
 # Configure agents
-echo ""
-echo "Configuring coding agents..."
-"$DEST" install -y 2>&1 || {
+if [ "$SKIP_CONFIG" = true ]; then
     echo ""
-    echo "Agent configuration failed (non-fatal)."
-    echo "Run manually: codebase-memory-mcp install"
-}
+    echo "Skipping agent configuration (--skip-config)"
+else
+    echo ""
+    echo "Configuring coding agents..."
+    "$DEST" install -y 2>&1 || {
+        echo ""
+        echo "Agent configuration failed (non-fatal)."
+        echo "Run manually: codebase-memory-mcp install"
+    }
+fi
 
 # PATH check
 if ! echo "$PATH" | tr ':' '\n' | grep -qx "$INSTALL_DIR"; then

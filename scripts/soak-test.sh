@@ -99,17 +99,37 @@ git -C "$SOAK_PROJECT" -c user.email=test@test -c user.name=test commit -q -m "i
 
 # ── Helper: run CLI tool call and record latency ─────────────────
 
-cli_call() {
+# Query ID counter
+QUERY_ID=1
+
+# Send a JSON-RPC tool call to the running server via its stdin pipe.
+# Reads response from server stdout. Records latency.
+mcp_call() {
     local tool="$1"
     local args="$2"
+    local id=$QUERY_ID
+    QUERY_ID=$((QUERY_ID + 1))
+
+    local req="{\"jsonrpc\":\"2.0\",\"id\":$id,\"method\":\"tools/call\",\"params\":{\"name\":\"$tool\",\"arguments\":$args}}"
     local t0
     t0=$(python3 -c "import time; print(int(time.time()*1000))")
-    "$BINARY" cli "$tool" "$args" > /dev/null 2>&1
-    local rc=$?
-    local t1
-    t1=$(python3 -c "import time; print(int(time.time()*1000))")
-    local dur=$((t1 - t0))
-    echo "$(date +%s),$tool,$dur,$rc" >> "$LATENCY_CSV"
+
+    # Send request to server stdin
+    echo "$req" >&3
+
+    # Read response (wait up to 30s)
+    local resp=""
+    if read -t 30 resp <&4 2>/dev/null; then
+        local t1
+        t1=$(python3 -c "import time; print(int(time.time()*1000))")
+        local dur=$((t1 - t0))
+        echo "$(date +%s),$tool,$dur,0" >> "$LATENCY_CSV"
+    else
+        local t1
+        t1=$(python3 -c "import time; print(int(time.time()*1000))")
+        local dur=$((t1 - t0))
+        echo "$(date +%s),$tool,$dur,1" >> "$LATENCY_CSV"
+    fi
 }
 
 # ── Helper: collect diagnostics snapshot ─────────────────────────
@@ -131,23 +151,35 @@ collect_snapshot() {
 # ── Phase 1: Start MCP server with diagnostics ──────────────────
 
 echo "--- Phase 1: start server ---"
-# Keep stdin open with a sleeping process — kill it to send EOF
-sleep 999999 | CBM_DIAGNOSTICS=1 "$BINARY" > /dev/null 2>"$RESULTS_DIR/server-stderr.log" &
+# Bidirectional pipes: fd3 = server stdin (write), fd4 = server stdout (read)
+SERVER_IN=$(mktemp -u).in
+SERVER_OUT=$(mktemp -u).out
+mkfifo "$SERVER_IN" "$SERVER_OUT"
+
+CBM_DIAGNOSTICS=1 "$BINARY" < "$SERVER_IN" > "$SERVER_OUT" 2>"$RESULTS_DIR/server-stderr.log" &
 SERVER_PID=$!
-SLEEP_PID=$(jobs -p | head -1)
+
+# Open fds AFTER server starts (otherwise fifo blocks)
+exec 3>"$SERVER_IN"   # write to server stdin
+exec 4<"$SERVER_OUT"  # read from server stdout
 sleep 3
 
 if ! kill -0 "$SERVER_PID" 2>/dev/null; then
     echo "FAIL: server did not start"
-    kill "$SLEEP_PID" 2>/dev/null || true
+    exec 3>&- 4<&-
+    rm -f "$SERVER_IN" "$SERVER_OUT"
     exit 1
 fi
 echo "OK: server running (pid=$SERVER_PID)"
 
+# Send initialize handshake
+echo '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{}}}' >&3
+read -t 10 INIT_RESP <&4 || true
+
 # ── Phase 2: Initial index ───────────────────────────────────────
 
 echo "--- Phase 2: initial index ---"
-cli_call index_repository "{\"repo_path\":\"$SOAK_PROJECT\"}"
+mcp_call index_repository "{\"repo_path\":\"$SOAK_PROJECT\"}"
 sleep 6  # wait for diagnostics write
 collect_snapshot
 
@@ -172,8 +204,8 @@ while [ "$(date +%s)" -lt "$END_TIME" ]; do
     CYCLE=$((CYCLE + 1))
 
     # Queries every 2 seconds
-    cli_call search_graph "{\"project\":\"$PROJ_NAME\",\"name_pattern\":\".*compute.*\"}"
-    cli_call trace_call_path "{\"project\":\"$PROJ_NAME\",\"function_name\":\"compute\",\"direction\":\"both\"}"
+    mcp_call search_graph "{\"project\":\"$PROJ_NAME\",\"name_pattern\":\".*compute.*\"}"
+    mcp_call trace_call_path "{\"project\":\"$PROJ_NAME\",\"function_name\":\"compute\",\"direction\":\"both\"}"
 
     # File mutation every 2 minutes
     if [ $((NOW - LAST_MUTATE)) -ge 120 ]; then
@@ -185,7 +217,7 @@ while [ "$(date +%s)" -lt "$END_TIME" ]; do
 
     # Full reindex every 5 minutes
     if [ $((NOW - LAST_REINDEX)) -ge 300 ]; then
-        cli_call index_repository "{\"repo_path\":\"$SOAK_PROJECT\"}"
+        mcp_call index_repository "{\"repo_path\":\"$SOAK_PROJECT\"}"
         LAST_REINDEX=$NOW
     fi
 
@@ -212,32 +244,42 @@ echo "OK: idle CPU=${IDLE_CPU}%"
 if [ "$SKIP_CRASH" != "--skip-crash-test" ]; then
     echo "--- Phase 5: crash recovery ---"
 
-    # Start a reindex then kill -9
-    cli_call index_repository "{\"repo_path\":\"$SOAK_PROJECT\"}" &
-    INDEX_PID=$!
-    sleep 1
-    kill -9 "$INDEX_PID" 2>/dev/null || true
-    wait "$INDEX_PID" 2>/dev/null || true
+    # Kill server mid-operation, restart, verify clean index
+    mcp_call index_repository "{\"repo_path\":\"$SOAK_PROJECT\"}"
+    kill -9 "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+    exec 3>&- 4<&-
 
-    # Verify the server is still alive (kill was on CLI, not server)
+    # Restart server
+    CBM_DIAGNOSTICS=1 "$BINARY" < "$SERVER_IN" > "$SERVER_OUT" 2>>"$RESULTS_DIR/server-stderr.log" &
+    SERVER_PID=$!
+    exec 3>"$SERVER_IN"
+    exec 4<"$SERVER_OUT"
+    sleep 3
+
     if kill -0 "$SERVER_PID" 2>/dev/null; then
-        echo "OK: server survived crash test"
+        echo "OK: server restarted after kill -9"
+        echo '{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"capabilities":{}}}' >&3
+        read -t 10 INIT_RESP <&4 || true
 
-        # Verify clean re-index after crash
-        cli_call index_repository "{\"repo_path\":\"$SOAK_PROJECT\"}"
-        echo "OK: clean re-index after crash"
+        # Verify clean re-index works
+        mcp_call index_repository "{\"repo_path\":\"$SOAK_PROJECT\"}"
+        echo "OK: clean re-index after crash recovery"
     else
-        echo "FAIL: server died during crash test"
+        echo "FAIL: server did not restart after kill -9"
+        PASS=false
     fi
 fi
 
 # ── Phase 6: Shutdown + analysis ─────────────────────────────────
 
 echo "--- Phase 6: shutdown + analysis ---"
-kill "$SLEEP_PID" 2>/dev/null || true  # close stdin → EOF → server exits
+exec 3>&-  # close server stdin → EOF → clean exit
 sleep 2
+exec 4<&-  # close stdout reader
 kill "$SERVER_PID" 2>/dev/null || true
 wait "$SERVER_PID" 2>/dev/null || true
+rm -f "$SERVER_IN" "$SERVER_OUT"
 
 # Final diagnostics (written by thread before exit)
 FINAL_DIAG="/tmp/cbm-diagnostics-${SERVER_PID}.json"

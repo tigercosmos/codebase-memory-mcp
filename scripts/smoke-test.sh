@@ -1345,29 +1345,29 @@ UI_PID=$!
 sleep 1
 
 if kill -0 "$UI_PID" 2>/dev/null; then
-  # 15a: HTTP root returns 200
-  UI_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "http://127.0.0.1:$UI_PORT/" 2>/dev/null || echo "000")
-  if [ "$UI_STATUS" = "200" ]; then
-    echo "OK 15a: UI root returns 200"
-  elif [ "$UI_STATUS" = "000" ]; then
+  # 15a: GET / returns 200 with HTML content
+  UI_BODY=$(curl -sf "http://127.0.0.1:$UI_PORT/" 2>/dev/null || echo "")
+  if echo "$UI_BODY" | grep -qi "<html"; then
+    echo "OK 15a: UI serves HTML at /"
+  elif [ -z "$UI_BODY" ]; then
     echo "SKIP 15a: UI not reachable (binary may not have embedded assets)"
   else
-    echo "FAIL 15a: UI root returned $UI_STATUS"
+    echo "FAIL 15a: UI root did not return HTML"
     kill "$UI_PID" 2>/dev/null || true
     exit 1
   fi
 
-  # 15b: /rpc endpoint accepts POST
-  RPC_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" -X POST \
+  # 15b: POST /rpc accepts JSON-RPC and returns JSON
+  RPC_BODY=$(curl -sf -X POST \
     -H "Content-Type: application/json" \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
-    "http://127.0.0.1:$UI_PORT/rpc" 2>/dev/null || echo "000")
-  if [ "$RPC_STATUS" = "200" ]; then
-    echo "OK 15b: UI /rpc endpoint returns 200"
-  elif [ "$RPC_STATUS" = "000" ]; then
+    "http://127.0.0.1:$UI_PORT/rpc" 2>/dev/null || echo "")
+  if echo "$RPC_BODY" | grep -q "jsonrpc"; then
+    echo "OK 15b: /rpc returns JSON-RPC response"
+  elif [ -z "$RPC_BODY" ]; then
     echo "SKIP 15b: /rpc not reachable"
   else
-    echo "FAIL 15b: /rpc returned $RPC_STATUS"
+    echo "FAIL 15b: /rpc did not return JSON-RPC"
   fi
 
   kill "$UI_PID" 2>/dev/null || true

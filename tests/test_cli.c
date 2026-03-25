@@ -346,6 +346,9 @@ TEST(cli_find_cli_on_path) {
 }
 
 TEST(cli_find_cli_fallback_paths) {
+#ifdef _WIN32
+    SKIP("shell scripts + chmod not available on Windows");
+#endif
     /* Port of TestFindCLI_FallbackPaths */
     char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-find-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))

@@ -50,7 +50,12 @@ TEST(shell_rejects_ampersand) {
 }
 
 TEST(shell_rejects_backslash) {
+#ifdef _WIN32
+    /* Backslash is allowed on Windows (path separator) */
+    ASSERT_TRUE(cbm_validate_shell_arg("foo\\bar"));
+#else
     ASSERT_FALSE(cbm_validate_shell_arg("foo\\bar"));
+#endif
     PASS();
 }
 

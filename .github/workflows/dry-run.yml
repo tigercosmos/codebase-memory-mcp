@@ -27,7 +27,7 @@ permissions:
 jobs:
   # ── Step 1: Lint (clang-format + cppcheck) ───────────────────
   lint:
-    if: ${{ !inputs.skip_lint }}
+    if: ${{ inputs.skip_lint != true }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -66,7 +66,7 @@ jobs:
   # No build needed — scans source files and vendored deps only.
   # Binary-level security (L2/L3/L4/L7) runs in smoke jobs per-platform.
   security-static:
-    if: ${{ !inputs.skip_lint }}
+    if: ${{ inputs.skip_lint != true }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -82,7 +82,7 @@ jobs:
 
   # ── Step 1c: CodeQL SAST gate ────────────────────────────────
   codeql-gate:
-    if: ${{ !inputs.skip_lint }}
+    if: ${{ inputs.skip_lint != true }}
     runs-on: ubuntu-latest
     steps:
       - name: Wait for CodeQL on current commit (max 45 min)
@@ -158,7 +158,7 @@ jobs:
   # Linux: use system gcc — full ASan/UBSan support
   # Windows: MSYS2 MinGW GCC
   test-unix:
-    if: ${{ !inputs.skip_tests && always() && (needs.lint.result == 'success' || needs.lint.result == 'skipped') }}
+    if: ${{ inputs.skip_tests != true && always() && (needs.lint.result == 'success' || needs.lint.result == 'skipped') }}
     needs: [lint]
     strategy:
       fail-fast: false
@@ -192,7 +192,7 @@ jobs:
         run: scripts/test.sh CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
 
   test-windows:
-    if: ${{ !inputs.skip_tests && always() && (needs.lint.result == 'success' || needs.lint.result == 'skipped') }}
+    if: ${{ inputs.skip_tests != true && always() && (needs.lint.result == 'success' || needs.lint.result == 'skipped') }}
     needs: [lint]
     runs-on: windows-latest
     steps:
@@ -214,7 +214,7 @@ jobs:
 
   # ── Step 3: Build binaries (standard + UI, all OS) ──────────
   build-unix:
-    if: ${{ !inputs.skip_builds && always() && (needs.test-unix.result == 'success' || needs.test-unix.result == 'skipped') && (needs.test-windows.result == 'success' || needs.test-windows.result == 'skipped') }}
+    if: ${{ inputs.skip_builds != true && always() && (needs.test-unix.result == 'success' || needs.test-unix.result == 'skipped') && (needs.test-windows.result == 'success' || needs.test-windows.result == 'skipped') }}
     needs: [test-unix, test-windows]
     strategy:
       matrix:
@@ -287,7 +287,7 @@ jobs:
           path: "*.tar.gz"
 
   build-windows:
-    if: ${{ !inputs.skip_builds && always() && (needs.test-unix.result == 'success' || needs.test-unix.result == 'skipped') && (needs.test-windows.result == 'success' || needs.test-windows.result == 'skipped') }}
+    if: ${{ inputs.skip_builds != true && always() && (needs.test-unix.result == 'success' || needs.test-unix.result == 'skipped') && (needs.test-windows.result == 'success' || needs.test-windows.result == 'skipped') }}
     needs: [test-unix, test-windows]
     runs-on: windows-latest
     steps:
@@ -338,7 +338,7 @@ jobs:
 
   # ── Step 4: Smoke test every binary ─────────────────────────
   smoke-unix:
-    if: ${{ !inputs.skip_builds }}
+    if: ${{ inputs.skip_builds != true }}
     needs: [build-unix]
     strategy:
       fail-fast: false
@@ -437,7 +437,7 @@ jobs:
           echo "=== ClamAV: clean ==="
 
   smoke-windows:
-    if: ${{ !inputs.skip_builds }}
+    if: ${{ inputs.skip_builds != true }}
     needs: [build-windows]
     strategy:
       fail-fast: false
@@ -511,7 +511,7 @@ jobs:
 
   # ── Step 6: Soak tests (after smoke, per-platform) ──────────
   soak-quick:
-    if: ${{ inputs.soak_level != 'none' && !inputs.skip_builds }}
+    if: ${{ inputs.soak_level != 'none' && inputs.skip_builds != true }}
     needs: [build-unix]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -561,7 +561,7 @@ jobs:
           retention-days: 14
 
   soak-quick-windows:
-    if: ${{ inputs.soak_level != 'none' && !inputs.skip_builds }}
+    if: ${{ inputs.soak_level != 'none' && inputs.skip_builds != true }}
     needs: [build-windows]
     runs-on: windows-latest
     timeout-minutes: 30
@@ -597,7 +597,7 @@ jobs:
           retention-days: 14
 
   soak-asan:
-    if: ${{ inputs.soak_level == 'full' && !inputs.skip_builds }}
+    if: ${{ inputs.soak_level == 'full' && inputs.skip_builds != true }}
     needs: [build-unix]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
@@ -651,7 +651,7 @@ jobs:
           retention-days: 14
 
   soak-asan-windows:
-    if: ${{ inputs.soak_level == 'full' && !inputs.skip_builds }}
+    if: ${{ inputs.soak_level == 'full' && inputs.skip_builds != true }}
     needs: [build-windows]
     runs-on: windows-latest
     timeout-minutes: 45

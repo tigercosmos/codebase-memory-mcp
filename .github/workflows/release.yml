@@ -579,7 +579,10 @@ jobs:
           msystem: CLANG64
           path-type: inherit
           install: >-
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-zlib
             mingw-w64-clang-x86_64-python3
+            make
             git
             coreutils
       - name: Build (release mode)
@@ -662,7 +665,10 @@ jobs:
           msystem: CLANG64
           path-type: inherit
           install: >-
+            mingw-w64-clang-x86_64-clang
+            mingw-w64-clang-x86_64-zlib
             mingw-w64-clang-x86_64-python3
+            make
             git
             coreutils
       - name: Build (ASan, no LeakSan on Windows)

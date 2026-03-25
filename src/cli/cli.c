@@ -2268,7 +2268,12 @@ static int cbm_macos_adhoc_sign(const char *binary_path) {
 
 static int cbm_kill_other_instances(void) {
 #ifdef _WIN32
-    const char *argv[] = {"taskkill", "/IM", "codebase-memory-mcp.exe", "/F", NULL};
+    /* taskkill /IM kills ALL matching processes INCLUDING self.
+     * Use /FI filter to exclude our own PID. */
+    char pid_filter[64];
+    snprintf(pid_filter, sizeof(pid_filter), "PID ne %lu", (unsigned long)GetCurrentProcessId());
+    const char *argv[] = {"taskkill", "/F",       "/FI", "IMAGENAME eq codebase-memory-mcp.exe",
+                          "/FI",      pid_filter, NULL};
     (void)cbm_exec_no_shell(argv);
     return 0;
 #else

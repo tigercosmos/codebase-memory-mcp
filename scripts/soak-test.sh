@@ -381,30 +381,29 @@ FIRST_RSS=$(awk -F, 'NR==2 && $3>0 { printf "%.0f", $3/1024/1024 }' "$METRICS_CS
 LAST_RSS=$(awk -F, '$3>0 { last=$3 } END { printf "%.0f", last/1024/1024 }' "$METRICS_CSV")
 echo "RSS: first=${FIRST_RSS}MB last=${LAST_RSS}MB max=${MAX_RSS}MB (${TOTAL_SAMPLES} samples)" | tee -a "$SUMMARY"
 
-if [ "$DURATION_MIN" -lt 10 ]; then
-    # Short run: absolute ceiling (warmup noise dominates slope)
-    if [ "${MAX_RSS:-0}" -gt 200 ] 2>/dev/null; then
-        echo "FAIL: RSS ${MAX_RSS}MB > 200MB ceiling" | tee -a "$SUMMARY"
-        PASS=false
-    fi
-else
-    # Long run: linear regression on post-warmup samples (skip first 20%)
-    RSS_SLOPE=$(awk -F, -v skip="$((TOTAL_SAMPLES / 5))" '
-    NR>1 && $3>0 {
-        row++
-        if (row <= skip) next
-        n++; x=$1; y=$3; sx+=x; sy+=y; sxx+=x*x; sxy+=x*y
-    }
-    END {
-        if (n<5) { print 0; exit }
-        slope = (n*sxy - sx*sy) / (n*sxx - sx*sx)
-        printf "%.0f", slope * 3600 / 1024
-    }' "$METRICS_CSV")
-    echo "RSS slope (post-warmup): ${RSS_SLOPE} KB/hr" | tee -a "$SUMMARY"
-    if [ "${RSS_SLOPE:-0}" -gt 500 ] 2>/dev/null; then
-        echo "FAIL: RSS slope ${RSS_SLOPE} KB/hr > 500 KB/hr" | tee -a "$SUMMARY"
-        PASS=false
-    fi
+# Absolute ceiling — catches catastrophic leaks on any run length
+if [ "${MAX_RSS:-0}" -gt 200 ] 2>/dev/null; then
+    echo "FAIL: RSS ${MAX_RSS}MB > 200MB ceiling" | tee -a "$SUMMARY"
+    PASS=false
+fi
+
+# Slope — informational for short runs, enforced only for runs >= 30 min
+# (10-min runs have too few post-warmup samples for reliable regression)
+RSS_SLOPE=$(awk -F, -v skip="$((TOTAL_SAMPLES / 5))" '
+NR>1 && $3>0 {
+    row++
+    if (row <= skip) next
+    n++; x=$1; y=$3; sx+=x; sy+=y; sxx+=x*x; sxy+=x*y
+}
+END {
+    if (n<5) { print 0; exit }
+    slope = (n*sxy - sx*sy) / (n*sxx - sx*sx)
+    printf "%.0f", slope * 3600 / 1024
+}' "$METRICS_CSV")
+echo "RSS slope (post-warmup): ${RSS_SLOPE} KB/hr" | tee -a "$SUMMARY"
+if [ "$DURATION_MIN" -ge 30 ] && [ "${RSS_SLOPE:-0}" -gt 500 ] 2>/dev/null; then
+    echo "FAIL: RSS slope ${RSS_SLOPE} KB/hr > 500 KB/hr" | tee -a "$SUMMARY"
+    PASS=false
 fi
 
 # Check 1b: RSS ratio (last / first) — catches step-function leaks

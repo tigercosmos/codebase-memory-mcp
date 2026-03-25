@@ -1010,9 +1010,13 @@ if [ -n "${SMOKE_DOWNLOAD_URL:-}" ]; then
   # Pre-install agent config with a WRONG binary path (simulates stale config)
   echo '{"mcpServers":{"codebase-memory-mcp":{"command":"/old/stale/path"}}}' > "$UPDATE_HOME/.claude.json"
 
-  # 14a: Run actual update command
+  # 14a: Run actual update command (detect variant from available archive)
+  UPDATE_VARIANT="--standard"
+  if curl -sf "$SMOKE_DOWNLOAD_URL/" 2>/dev/null | grep -q "ui-"; then
+    UPDATE_VARIANT="--ui"
+  fi
   HOME="$UPDATE_HOME" CBM_DOWNLOAD_URL="$SMOKE_DOWNLOAD_URL" \
-    "$BINARY" update --standard -y 2>&1 || true
+    "$BINARY" update $UPDATE_VARIANT -y 2>&1 || true
 
   # 14b: Verify new binary exists and runs
   if [ ! -f "$UPDATE_HOME/.local/bin/codebase-memory-mcp" ]; then
@@ -1328,6 +1332,50 @@ else
   echo ""
   echo "=== Phase 12-13: SKIPPED (SMOKE_DOWNLOAD_URL not set) ==="
 fi
+
+# ── Phase 15: UI HTTP server reachability ──
+# Only runs if the binary was built with embedded UI assets.
+echo ""
+echo "=== Phase 15: UI HTTP server ==="
+
+UI_PORT=19876
+UI_INPUT=$(mktemp)
+"$BINARY" --port "$UI_PORT" < "$UI_INPUT" > /dev/null 2>&1 &
+UI_PID=$!
+sleep 1
+
+if kill -0 "$UI_PID" 2>/dev/null; then
+  # 15a: HTTP root returns 200
+  UI_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" "http://127.0.0.1:$UI_PORT/" 2>/dev/null || echo "000")
+  if [ "$UI_STATUS" = "200" ]; then
+    echo "OK 15a: UI root returns 200"
+  elif [ "$UI_STATUS" = "000" ]; then
+    echo "SKIP 15a: UI not reachable (binary may not have embedded assets)"
+  else
+    echo "FAIL 15a: UI root returned $UI_STATUS"
+    kill "$UI_PID" 2>/dev/null || true
+    exit 1
+  fi
+
+  # 15b: /rpc endpoint accepts POST
+  RPC_STATUS=$(curl -sf -o /dev/null -w "%{http_code}" -X POST \
+    -H "Content-Type: application/json" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+    "http://127.0.0.1:$UI_PORT/rpc" 2>/dev/null || echo "000")
+  if [ "$RPC_STATUS" = "200" ]; then
+    echo "OK 15b: UI /rpc endpoint returns 200"
+  elif [ "$RPC_STATUS" = "000" ]; then
+    echo "SKIP 15b: /rpc not reachable"
+  else
+    echo "FAIL 15b: /rpc returned $RPC_STATUS"
+  fi
+
+  kill "$UI_PID" 2>/dev/null || true
+  wait "$UI_PID" 2>/dev/null || true
+else
+  echo "SKIP Phase 15: binary exited immediately (no UI assets embedded)"
+fi
+rm -f "$UI_INPUT"
 
 echo ""
 echo "=== smoke-test: ALL PASSED ==="

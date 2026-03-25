@@ -649,3 +649,39 @@ jobs:
           name: soak-asan-${{ matrix.goos }}-${{ matrix.goarch }}
           path: soak-results/
           retention-days: 14
+
+  soak-asan-windows:
+    if: ${{ inputs.soak_level == 'full' && !inputs.skip_builds }}
+    needs: [build-windows]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - uses: msys2/setup-msys2@4f806de0a5a7294ffabaff804b38a9b435a73bda # v2
+        with:
+          msystem: CLANG64
+          path-type: inherit
+          install: >-
+            mingw-w64-clang-x86_64-python3
+            git
+            coreutils
+      - name: Build (ASan, no LeakSan on Windows)
+        shell: msys2 {0}
+        run: |
+          SANITIZE="-fsanitize=address,undefined -fno-omit-frame-pointer"
+          scripts/build.sh CC=clang CXX=clang++ EXTRA_CFLAGS="$SANITIZE" EXTRA_LDFLAGS="$SANITIZE"
+      - name: ASan soak (15 min, no leak detection)
+        shell: msys2 {0}
+        env:
+          ASAN_OPTIONS: "detect_leaks=0:halt_on_error=0:log_path=soak-results/asan"
+        run: |
+          BIN=build/c/codebase-memory-mcp
+          [ -f "${BIN}.exe" ] && BIN="${BIN}.exe"
+          scripts/soak-test.sh "$BIN" 15
+      - name: Upload ASan soak metrics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: soak-asan-windows-amd64
+          path: soak-results/
+          retention-days: 14

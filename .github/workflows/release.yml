@@ -535,17 +535,32 @@ jobs:
             goarch: arm64
             cc: cc
             cxx: c++
-            shell: bash
-          - os: windows-latest
-            goos: windows
-            goarch: amd64
-            cc: clang
-            cxx: clang++
-            shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - name: Install deps (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev python3 git
+      - name: Build (release mode)
+        run: scripts/build.sh --version ${{ inputs.version }} CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
+      - name: Quick soak (10 min)
+        run: scripts/soak-test.sh build/c/codebase-memory-mcp 10
+      - name: Upload soak metrics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: soak-quick-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: soak-results/
+          retention-days: 14
+
+  # ── Step 5a-win: Quick soak (Windows, separate job) ─────────────
+  soak-quick-windows:
+    if: ${{ inputs.soak_level != 'none' }}
+    needs: [build-windows]
+    runs-on: windows-latest
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
       - uses: msys2/setup-msys2@4f806de0a5a7294ffabaff804b38a9b435a73bda # v2
-        if: matrix.goos == 'windows'
         with:
           msystem: CLANG64
           path-type: inherit
@@ -553,14 +568,11 @@ jobs:
             mingw-w64-clang-x86_64-python3
             git
             coreutils
-      - name: Install deps (Linux)
-        if: startsWith(matrix.os, 'ubuntu')
-        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev python3 git
       - name: Build (release mode)
-        shell: ${{ matrix.shell || 'bash' }}
-        run: scripts/build.sh --version ${{ inputs.version }} CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
+        shell: msys2 {0}
+        run: scripts/build.sh --version ${{ inputs.version }} CC=clang CXX=clang++
       - name: Quick soak (10 min)
-        shell: ${{ matrix.shell || 'bash' }}
+        shell: msys2 {0}
         run: |
           BIN=build/c/codebase-memory-mcp
           [ -f "${BIN}.exe" ] && BIN="${BIN}.exe"
@@ -569,7 +581,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: soak-quick-${{ matrix.goos }}-${{ matrix.goarch }}
+          name: soak-quick-windows-amd64
           path: soak-results/
           retention-days: 14
 
@@ -609,7 +621,7 @@ jobs:
 
   # ── Step 6: Create DRAFT release (not public yet) ─────────────
   release-draft:
-    needs: [smoke-unix, smoke-windows, security-static, codeql-gate, soak-quick]
+    needs: [smoke-unix, smoke-windows, security-static, codeql-gate, soak-quick, soak-quick-windows]
     if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     permissions:

@@ -9,6 +9,7 @@ int tf_fail_count = 0;
 int tf_skip_count = 0;
 
 #include "test_framework.h"
+#include <sqlite3.h>
 
 /* Forward declarations of suite functions */
 extern void suite_arena(void);
@@ -147,5 +148,7 @@ int main(void) {
     /* Integration (end-to-end) */
     RUN_SUITE(integration);
 
+    /* Release sqlite3 internal caches so ASan doesn't report them as leaks */
+    sqlite3_shutdown();
     TEST_SUMMARY();
 }

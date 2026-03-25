@@ -308,7 +308,8 @@ TEST(arena_strndup_len_exceeds_string) {
 TEST(arena_sprintf_empty_format) {
     CBMArena a;
     cbm_arena_init(&a);
-    char *s = cbm_arena_sprintf(&a, "");
+    /* Use "%s" with empty string — GCC rejects literal "" as format (-Wformat-zero-length) */
+    char *s = cbm_arena_sprintf(&a, "%s", "");
     ASSERT_NOT_NULL(s);
     ASSERT_STR_EQ(s, "");
     ASSERT_EQ(strlen(s), 0);

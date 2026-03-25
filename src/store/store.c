@@ -378,7 +378,8 @@ cbm_store_t *cbm_store_open_path_query(const char *db_path) {
     /* Open read-write but do NOT create — returns SQLITE_CANTOPEN if absent. */
     int rc = sqlite3_open_v2(db_path, &s->db, SQLITE_OPEN_READWRITE, NULL);
     if (rc != SQLITE_OK) {
-        /* File does not exist or cannot be opened — return NULL without creating. */
+        /* sqlite3_open_v2 allocates a handle even on failure — must close it. */
+        sqlite3_close(s->db);
         free(s);
         return NULL;
     }
@@ -513,7 +514,9 @@ void cbm_store_close(cbm_store_t *s) {
     finalize_stmt(&s->stmt_delete_file_hash);
     finalize_stmt(&s->stmt_delete_file_hashes);
 
-    sqlite3_close(s->db);
+    /* Use sqlite3_close_v2 — auto-deallocates when last statement finalizes.
+     * Prevents ASan false-positive leaks from sqlite3 internal state. */
+    sqlite3_close_v2(s->db);
     free((void *)s->db_path);
     free(s);
 }

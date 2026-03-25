@@ -335,7 +335,14 @@ int64_t cbm_gbuf_upsert_node(cbm_gbuf_t *gb, const char *label, const char *name
 
     char id_buf[32];
     make_id_key(id_buf, sizeof(id_buf), id);
-    cbm_ht_set(gb->node_by_id, strdup(id_buf), node);
+    /* Check if key exists — if so, reuse old heap key to avoid leak.
+     * cbm_ht_set replaces key pointer, leaking old strdup'd key. */
+    const char *existing_key = cbm_ht_get_key(gb->node_by_id, id_buf);
+    if (existing_key) {
+        cbm_ht_set(gb->node_by_id, existing_key, node);
+    } else {
+        cbm_ht_set(gb->node_by_id, strdup(id_buf), node);
+    }
 
     /* Secondary indexes */
     node_ptr_array_t *by_label = get_or_create_node_array(gb->nodes_by_label, label ? label : "");
@@ -771,7 +778,12 @@ int cbm_gbuf_merge(cbm_gbuf_t *dst, cbm_gbuf_t *src) {
             cbm_ht_set(dst->node_by_qn, node->qualified_name, node);
             char id_buf[32];
             make_id_key(id_buf, sizeof(id_buf), node->id);
-            cbm_ht_set(dst->node_by_id, strdup(id_buf), node);
+            const char *old_id_key = cbm_ht_get_key(dst->node_by_id, id_buf);
+            if (old_id_key) {
+                cbm_ht_set(dst->node_by_id, old_id_key, node);
+            } else {
+                cbm_ht_set(dst->node_by_id, strdup(id_buf), node);
+            }
 
             /* Secondary indexes */
             node_ptr_array_t *by_label =

@@ -2,7 +2,7 @@ name: Nightly Soak
 
 on:
   schedule:
-    - cron: '0 2 * * *' # Every night at 2am UTC
+    - cron: '0 2 * * 0' # Every Sunday at 2am UTC
   workflow_dispatch:
     inputs:
       duration_minutes:

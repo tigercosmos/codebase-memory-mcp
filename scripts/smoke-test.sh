@@ -644,8 +644,11 @@ else
 fi
 
 # 8o-p: OpenCode MCP + instructions
-CMD=$(json_get "$FAKE_HOME/.config/opencode/opencode.json" "d['mcp']['codebase-memory-mcp']['command']")
-if [ "$CMD" != "$SELF_PATH" ]; then
+# command is an array ["path"] per OpenCode spec (PR #134)
+CMD=$(json_get "$FAKE_HOME/.config/opencode/opencode.json" "d['mcp']['codebase-memory-mcp']['command'][0]")
+CMD_BASE=$(basename "$CMD" 2>/dev/null || echo "")
+SELF_BASE=$(basename "$SELF_PATH" 2>/dev/null || echo "")
+if [ -z "$CMD" ] || ([ "$CMD" != "$SELF_PATH" ] && [ "$CMD_BASE" != "$SELF_BASE" ]); then
   echo "FAIL 8o: OpenCode command='$CMD'"
   exit 1
 fi

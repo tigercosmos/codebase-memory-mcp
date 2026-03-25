@@ -3,6 +3,7 @@
  */
 #include "test_framework.h"
 #include "../src/foundation/dyn_array.h"
+#include <stdint.h>
 
 TEST(da_push_pop) {
     CBM_DYN_ARRAY(int) arr = {0};

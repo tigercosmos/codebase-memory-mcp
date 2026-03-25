@@ -16,6 +16,11 @@ on:
         required: false
         type: boolean
         default: false
+      soak_level:
+        description: 'Soak test level: full (quick+asan), quick (10min only), none (skip)'
+        type: choice
+        options: ['full', 'quick', 'none']
+        default: 'quick'
 
 permissions:
   contents: write
@@ -505,9 +510,84 @@ jobs:
           }
           Write-Host "=== Windows Defender: clean ==="
 
-  # ── Step 5: Create DRAFT release (not public yet) ─────────────
+  # ── Step 5a: Quick soak (parallel with smoke, per-platform) ────
+  soak-quick:
+    if: ${{ inputs.soak_level != 'none' }}
+    needs: [build-unix]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            cc: gcc
+            cxx: g++
+          - os: ubuntu-24.04-arm
+            goos: linux
+            goarch: arm64
+            cc: gcc
+            cxx: g++
+          - os: macos-14
+            goos: darwin
+            goarch: arm64
+            cc: cc
+            cxx: c++
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - name: Install deps (Linux)
+        if: startsWith(matrix.os, 'ubuntu')
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev python3 git
+      - name: Build (release mode)
+        run: scripts/build.sh --version ${{ inputs.version }} CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
+      - name: Quick soak (10 min)
+        run: scripts/soak-test.sh build/c/codebase-memory-mcp 10
+      - name: Upload soak metrics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: soak-quick-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: soak-results/
+          retention-days: 14
+
+  # ── Step 5b: ASan soak (Linux only, parallel) ─────────────────
+  soak-asan:
+    if: ${{ inputs.soak_level == 'full' }}
+    needs: [build-unix]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goarch: amd64
+          - os: ubuntu-24.04-arm
+            goarch: arm64
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+      - name: Install deps
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev python3 git
+      - name: Build (release mode for soak)
+        run: scripts/build.sh CC=gcc CXX=g++
+      - name: ASan soak (15 min)
+        env:
+          ASAN_OPTIONS: "detect_leaks=1:halt_on_error=0"
+        run: scripts/soak-test.sh build/c/codebase-memory-mcp 15
+      - name: Upload ASan soak metrics
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: soak-asan-linux-${{ matrix.goarch }}
+          path: soak-results/
+          retention-days: 14
+
+  # ── Step 6: Create DRAFT release (not public yet) ─────────────
   release-draft:
-    needs: [smoke-unix, smoke-windows, security-static, codeql-gate]
+    needs: [smoke-unix, smoke-windows, security-static, codeql-gate, soak-quick]
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     permissions:
       contents: write

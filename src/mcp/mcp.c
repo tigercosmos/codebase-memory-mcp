@@ -14,6 +14,7 @@
 #include "cli/cli.h"
 #include "watcher/watcher.h"
 #include "foundation/mem.h"
+#include "foundation/diagnostics.h"
 #include "foundation/platform.h"
 #include "foundation/compat.h"
 #include "foundation/compat_fs.h"
@@ -2721,7 +2722,6 @@ char *cbm_mcp_handle_tool(cbm_mcp_server_t *srv, const char *tool_name, const ch
     if (strcmp(tool_name, "ingest_traces") == 0) {
         return handle_ingest_traces(srv, args_json);
     }
-
     char msg[256];
     snprintf(msg, sizeof(msg), "unknown tool: %s", tool_name);
     return cbm_mcp_text_result(msg, true);
@@ -2997,7 +2997,17 @@ char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
         char *tool_args =
             req.params_raw ? cbm_mcp_get_arguments(req.params_raw) : heap_strdup("{}");
 
+        struct timespec t0;
+        cbm_clock_gettime(CLOCK_MONOTONIC, &t0);
         result_json = cbm_mcp_handle_tool(srv, tool_name, tool_args);
+        struct timespec t1;
+        cbm_clock_gettime(CLOCK_MONOTONIC, &t1);
+        long long dur_us = ((long long)(t1.tv_sec - t0.tv_sec) * 1000000LL) +
+                           ((long long)(t1.tv_nsec - t0.tv_nsec) / 1000LL);
+        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
+        bool is_err = (result_json != NULL) && (strstr(result_json, "\"isError\":true") != NULL);
+        cbm_diag_record_query(dur_us, is_err);
+
         result_json = inject_update_notice(srv, result_json);
         free(tool_name);
         free(tool_args);

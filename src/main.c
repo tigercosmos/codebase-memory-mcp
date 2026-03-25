@@ -19,6 +19,7 @@
 #include "store/store.h"
 #include "cli/cli.h"
 #include "foundation/log.h"
+#include "foundation/diagnostics.h"
 #include "foundation/platform.h"
 #include "foundation/compat_thread.h"
 #include "foundation/mem.h"
@@ -192,6 +193,7 @@ int main(int argc, char **argv) {
     cbm_http_server_set_binary_path(argv[0]);
     cbm_log_set_sink(cbm_ui_log_append);
     cbm_log_info("server.start", "version", CBM_VERSION);
+    cbm_diag_start(); /* starts if CBM_DIAGNOSTICS=1 */
 
     /* Parse --ui and --port flags (persisted config) */
     cbm_ui_config_t ui_cfg;
@@ -302,6 +304,7 @@ int main(int argc, char **argv) {
 
     g_watcher = NULL;
     g_server = NULL;
+    cbm_diag_stop();
 
     return rc;
 }

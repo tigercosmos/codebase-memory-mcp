@@ -101,7 +101,8 @@ FOUNDATION_SRCS = \
     src/foundation/compat_thread.c \
     src/foundation/compat_fs.c \
     src/foundation/compat_regex.c \
-    src/foundation/mem.c
+    src/foundation/mem.c \
+    src/foundation/diagnostics.c
 
 # Existing extraction C code (compiled from current location)
 EXTRACTION_SRCS = \

@@ -527,8 +527,13 @@ HOME="$FAKE_HOME" PATH="$FAKE_HOME/.local/bin:$PATH" "$BINARY" install -y 2>&1 |
 json_get() { python3 -c "import json,sys,os; f='$1'; d=json.load(open(f)) if os.path.isfile(f) else {}; print($2)" 2>/dev/null || echo ""; }
 
 # 8a: Claude Code MCP (new path) — correct command
-CMD=$(json_get "$FAKE_HOME/.claude.json" "d['mcpServers']['codebase-memory-mcp']['command']")
-if [ "$CMD" != "$SELF_PATH" ]; then
+CMD=$(json_get "$FAKE_HOME/.claude.json" "d.get('mcpServers',{}).get('codebase-memory-mcp',{}).get('command','')")
+# On Windows/MSYS2, paths differ (D:\... vs /tmp/...) — compare basename
+CMD_BASE=$(basename "$CMD" 2>/dev/null || echo "")
+SELF_BASE=$(basename "$SELF_PATH" 2>/dev/null || echo "")
+if [ -z "$CMD" ] || ([ "$CMD" != "$SELF_PATH" ] && [ "$CMD_BASE" != "$SELF_BASE" ]); then
+  echo "DEBUG 8a: file=$FAKE_HOME/.claude.json"
+  cat "$FAKE_HOME/.claude.json" 2>/dev/null | head -5 || echo "(file not found)"
   echo "FAIL 8a: .claude.json command='$CMD', expected '$SELF_PATH'"
   exit 1
 fi

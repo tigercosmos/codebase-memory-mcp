@@ -526,12 +526,16 @@ HOME="$FAKE_HOME" PATH="$FAKE_HOME/.local/bin:$PATH" "$BINARY" install -y 2>&1 |
 # Helper for JSON validation (pipe file to python — avoids MSYS2 path translation issues)
 json_get() { cat "$1" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print($2)" 2>/dev/null || echo ""; }
 
+# Helper: compare command paths (handles Windows D:\... vs POSIX /tmp/... mismatch)
+path_match() {
+  [ "$1" = "$2" ] && return 0
+  [ "$(basename "$1" 2>/dev/null)" = "$(basename "$2" 2>/dev/null)" ] && return 0
+  return 1
+}
+
 # 8a: Claude Code MCP (new path) — correct command
 CMD=$(json_get "$FAKE_HOME/.claude.json" "d.get('mcpServers',{}).get('codebase-memory-mcp',{}).get('command','')")
-# On Windows/MSYS2, paths differ (D:\... vs /tmp/...) — compare basename
-CMD_BASE=$(basename "$CMD" 2>/dev/null || echo "")
-SELF_BASE=$(basename "$SELF_PATH" 2>/dev/null || echo "")
-if [ -z "$CMD" ] || ([ "$CMD" != "$SELF_PATH" ] && [ "$CMD_BASE" != "$SELF_BASE" ]); then
+if [ -z "$CMD" ] || ! path_match "$CMD" "$SELF_PATH"; then
   echo "DEBUG 8a: file=$FAKE_HOME/.claude.json"
   cat "$FAKE_HOME/.claude.json" 2>/dev/null | head -5 || echo "(file not found)"
   echo "FAIL 8a: .claude.json command='$CMD', expected '$SELF_PATH'"
@@ -549,7 +553,7 @@ echo "OK 8b: .claude.json preserved existing keys"
 
 # 8c: Claude Code MCP (legacy path)
 CMD=$(json_get "$FAKE_HOME/.claude/.mcp.json" "d['mcpServers']['codebase-memory-mcp']['command']")
-if [ "$CMD" != "$SELF_PATH" ]; then
+if ! path_match "$CMD" "$SELF_PATH"; then
   echo "FAIL 8c: .claude/.mcp.json command='$CMD'"
   exit 1
 fi
@@ -597,7 +601,7 @@ echo "OK 8i: Codex instructions"
 
 # 8j-l: Gemini MCP + hooks + merge
 CMD=$(json_get "$FAKE_HOME/.gemini/settings.json" "d['mcpServers']['codebase-memory-mcp']['command']")
-if [ "$CMD" != "$SELF_PATH" ]; then
+if ! path_match "$CMD" "$SELF_PATH"; then
   echo "FAIL 8j: Gemini MCP command='$CMD'"
   exit 1
 fi
@@ -634,7 +638,7 @@ else
 fi
 if [ -f "$ZED_CFG" ]; then
   CMD=$(json_get "$ZED_CFG" "d['context_servers']['codebase-memory-mcp']['command']")
-  if [ "$CMD" != "$SELF_PATH" ]; then
+  if ! path_match "$CMD" "$SELF_PATH"; then
     echo "FAIL 8n: Zed command='$CMD'"
     exit 1
   fi
@@ -646,9 +650,7 @@ fi
 # 8o-p: OpenCode MCP + instructions
 # command is an array ["path"] per OpenCode spec (PR #134)
 CMD=$(json_get "$FAKE_HOME/.config/opencode/opencode.json" "d['mcp']['codebase-memory-mcp']['command'][0]")
-CMD_BASE=$(basename "$CMD" 2>/dev/null || echo "")
-SELF_BASE=$(basename "$SELF_PATH" 2>/dev/null || echo "")
-if [ -z "$CMD" ] || ([ "$CMD" != "$SELF_PATH" ] && [ "$CMD_BASE" != "$SELF_BASE" ]); then
+if [ -z "$CMD" ] || ! path_match "$CMD" "$SELF_PATH"; then
   echo "FAIL 8o: OpenCode command='$CMD'"
   exit 1
 fi
@@ -661,7 +663,7 @@ echo "OK 8p: OpenCode instructions"
 
 # 8q-r: Antigravity
 CMD=$(json_get "$FAKE_HOME/.gemini/antigravity/mcp_config.json" "d['mcpServers']['codebase-memory-mcp']['command']")
-if [ "$CMD" != "$SELF_PATH" ]; then
+if ! path_match "$CMD" "$SELF_PATH"; then
   echo "FAIL 8q: Antigravity command='$CMD'"
   exit 1
 fi
@@ -682,7 +684,7 @@ echo "OK 8s: Aider instructions"
 # 8t: KiloCode MCP (detection + install both use ~/.config/ on all platforms)
 KILO_CFG="$FAKE_HOME/.config/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json"
 CMD=$(json_get "$KILO_CFG" "d['mcpServers']['codebase-memory-mcp']['command']")
-if [ "$CMD" != "$SELF_PATH" ]; then
+if ! path_match "$CMD" "$SELF_PATH"; then
   echo "FAIL 8t: KiloCode command='$CMD'"
   exit 1
 fi
@@ -702,7 +704,7 @@ else
   VSCODE_CFG="$FAKE_HOME/.config/Code/User/mcp.json"
 fi
 CMD=$(json_get "$VSCODE_CFG" "d['servers']['codebase-memory-mcp']['command']")
-if [ "$CMD" != "$SELF_PATH" ]; then
+if ! path_match "$CMD" "$SELF_PATH"; then
   echo "FAIL 8v: VS Code command='$CMD'"
   exit 1
 fi
@@ -710,7 +712,7 @@ echo "OK 8v: VS Code MCP"
 
 # 8w: OpenClaw MCP
 CMD=$(json_get "$FAKE_HOME/.openclaw/openclaw.json" "d['mcpServers']['codebase-memory-mcp']['command']")
-if [ "$CMD" != "$SELF_PATH" ]; then
+if ! path_match "$CMD" "$SELF_PATH"; then
   echo "FAIL 8w: OpenClaw command='$CMD'"
   exit 1
 fi

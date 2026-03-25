@@ -35,67 +35,150 @@ DURATION_S=$((DURATION_MIN * 60))
 
 echo "=== soak-test: binary=$BINARY duration=${DURATION_MIN}m ==="
 
-# ── Helper: create test project ──────────────────────────────────
+# ── Helper: generate realistic test project (~200 files) ─────────
 
 SOAK_PROJECT=$(mktemp -d)
-mkdir -p "$SOAK_PROJECT/src" "$SOAK_PROJECT/lib"
 
-# Create a realistic small project with multiple languages
-cat > "$SOAK_PROJECT/src/main.py" << 'PYEOF'
-from lib.utils import compute, validate
-
-def process(data):
-    if validate(data):
-        return compute(data)
-    return None
-
-def main():
-    result = process({"key": "value"})
-    print(result)
-
-if __name__ == "__main__":
-    main()
+generate_project() {
+    local root="$1"
+    # Python package (80 files)
+    for i in $(seq 1 20); do
+        local pkg="$root/src/pkg_${i}"
+        mkdir -p "$pkg"
+        cat > "$pkg/__init__.py" << PYEOF
+from .handlers import handle_${i}
+from .models import Model${i}
 PYEOF
+        cat > "$pkg/handlers.py" << PYEOF
+from .models import Model${i}
+from .utils import validate_${i}, transform_${i}
 
-cat > "$SOAK_PROJECT/lib/utils.py" << 'PYEOF'
-def compute(data):
-    total = sum(len(str(v)) for v in data.values())
-    return total
+def handle_${i}(request):
+    data = Model${i}.from_request(request)
+    if not validate_${i}(data):
+        return {"error": "invalid"}
+    return transform_${i}(data)
 
-def validate(data):
-    return isinstance(data, dict) and len(data) > 0
-
-def helper():
-    return 42
+def process_batch_${i}(items):
+    return [handle_${i}(item) for item in items]
 PYEOF
+        cat > "$pkg/models.py" << PYEOF
+class Model${i}:
+    def __init__(self, name, value):
+        self.name = name
+        self.value = value
 
-cat > "$SOAK_PROJECT/src/server.go" << 'GOEOF'
-package main
+    @classmethod
+    def from_request(cls, req):
+        return cls(req.get("name", ""), req.get("value", 0))
+
+    def to_dict(self):
+        return {"name": self.name, "value": self.value}
+PYEOF
+        cat > "$pkg/utils.py" << PYEOF
+def validate_${i}(data):
+    return data is not None and hasattr(data, 'name')
+
+def transform_${i}(data):
+    return {"result": data.name.upper(), "score": data.value * ${i}}
+PYEOF
+    done
+
+    # Go package (40 files)
+    mkdir -p "$root/internal/api" "$root/internal/store" "$root/cmd"
+    for i in $(seq 1 20); do
+        cat > "$root/internal/api/handler_${i}.go" << GOEOF
+package api
 
 import "fmt"
 
-func StartServer(port int) error {
-    fmt.Printf("listening on %d\n", port)
-    return nil
+func HandleRoute${i}(path string) (string, error) {
+    result := ProcessData${i}(path)
+    return fmt.Sprintf("route_%d: %s", ${i}, result), nil
 }
 
-func HandleRequest(path string) string {
-    return "ok: " + path
+func ProcessData${i}(input string) string {
+    return fmt.Sprintf("processed_%d_%s", ${i}, input)
 }
 GOEOF
+        cat > "$root/internal/store/repo_${i}.go" << GOEOF
+package store
 
-cat > "$SOAK_PROJECT/config.yaml" << 'YAMLEOF'
+type Entity${i} struct {
+    ID   int
+    Name string
+    Data map[string]interface{}
+}
+
+func FindEntity${i}(id int) (*Entity${i}, error) {
+    return &Entity${i}{ID: id, Name: "entity"}, nil
+}
+
+func SaveEntity${i}(e *Entity${i}) error {
+    return nil
+}
+GOEOF
+    done
+
+    # TypeScript (40 files)
+    mkdir -p "$root/frontend/src/components" "$root/frontend/src/hooks"
+    for i in $(seq 1 20); do
+        cat > "$root/frontend/src/components/Component${i}.tsx" << TSEOF
+import React from 'react';
+import { useData${i} } from '../hooks/useData${i}';
+
+interface Props${i} { id: number; label: string; }
+
+export const Component${i}: React.FC<Props${i}> = ({ id, label }) => {
+    const { data, loading } = useData${i}(id);
+    if (loading) return <div>Loading...</div>;
+    return <div className="comp-${i}">{label}: {JSON.stringify(data)}</div>;
+};
+TSEOF
+        cat > "$root/frontend/src/hooks/useData${i}.ts" << TSEOF
+import { useState, useEffect } from 'react';
+
+export function useData${i}(id: number) {
+    const [data, setData] = useState(null);
+    const [loading, setLoading] = useState(true);
+    useEffect(() => {
+        fetch('/api/data/${i}/' + id)
+            .then(r => r.json())
+            .then(d => { setData(d); setLoading(false); });
+    }, [id]);
+    return { data, loading };
+}
+TSEOF
+    done
+
+    # Config files
+    cat > "$root/config.yaml" << 'YAMLEOF'
 database:
   host: localhost
   port: 5432
+  pool_size: 10
 server:
   workers: 4
+  timeout: 30
 YAMLEOF
+    cat > "$root/Dockerfile" << 'DEOF'
+FROM python:3.11-slim
+WORKDIR /app
+COPY . .
+RUN pip install -r requirements.txt
+CMD ["python", "-m", "src.main"]
+DEOF
+}
+
+echo "Generating test project (~200 files)..."
+generate_project "$SOAK_PROJECT"
 
 # Init git repo (required for watcher)
 git -C "$SOAK_PROJECT" init -q 2>/dev/null
 git -C "$SOAK_PROJECT" add -A 2>/dev/null
 git -C "$SOAK_PROJECT" -c user.email=test@test -c user.name=test commit -q -m "init" 2>/dev/null
+FILE_COUNT=$(find "$SOAK_PROJECT" -type f | wc -l | tr -d ' ')
+echo "OK: $FILE_COUNT files in test project"
 
 # ── Helper: run CLI tool call and record latency ─────────────────
 
@@ -137,14 +220,14 @@ mcp_call() {
 collect_snapshot() {
     local diag_file="/tmp/cbm-diagnostics-${SERVER_PID}.json"
     if [ -f "$diag_file" ]; then
-        local ts=$(date +%s)
-        local uptime=$(python3 -c "import json; d=json.load(open('$diag_file')); print(d.get('uptime_s',0))" 2>/dev/null || echo "0")
-        local rss=$(python3 -c "import json; d=json.load(open('$diag_file')); print(d.get('rss_bytes',0))" 2>/dev/null || echo "0")
-        local commit=$(python3 -c "import json; d=json.load(open('$diag_file')); print(d.get('heap_committed_bytes',0))" 2>/dev/null || echo "0")
-        local fds=$(python3 -c "import json; d=json.load(open('$diag_file')); print(d.get('fd_count',0))" 2>/dev/null || echo "0")
-        local qcount=$(python3 -c "import json; d=json.load(open('$diag_file')); print(d.get('query_count',0))" 2>/dev/null || echo "0")
-        local qmax=$(python3 -c "import json; d=json.load(open('$diag_file')); print(d.get('query_max_us',0))" 2>/dev/null || echo "0")
-        echo "$ts,$uptime,$rss,$commit,$fds,$qcount,$qmax" >> "$METRICS_CSV"
+        python3 -c "
+import json, time
+d = json.load(open('$diag_file'))
+# Use heap_committed if available, otherwise RSS (mimalloc may report 0 for committed)
+mem = d.get('heap_committed_bytes', 0)
+if mem == 0: mem = d.get('rss_bytes', 0)
+print(f\"{int(time.time())},{d.get('uptime_s',0)},{d.get('rss_bytes',0)},{mem},{d.get('fd_count',0)},{d.get('query_count',0)},{d.get('query_max_us',0)}\")
+" 2>/dev/null >> "$METRICS_CSV"
     fi
 }
 
@@ -215,14 +298,14 @@ while [ "$(date +%s)" -lt "$END_TIME" ]; do
         LAST_MUTATE=$NOW
     fi
 
-    # Full reindex every 5 minutes
-    if [ $((NOW - LAST_REINDEX)) -ge 300 ]; then
+    # Full reindex every 2 minutes (compressed — simulates 15min real interval)
+    if [ $((NOW - LAST_REINDEX)) -ge 120 ]; then
         mcp_call index_repository "{\"repo_path\":\"$SOAK_PROJECT\"}"
         LAST_REINDEX=$NOW
     fi
 
-    # Collect diagnostics every 30 seconds
-    if [ $((CYCLE % 15)) -eq 0 ]; then
+    # Collect diagnostics every 10 seconds (5 cycles)
+    if [ $((CYCLE % 5)) -eq 0 ]; then
         collect_snapshot
     fi
 

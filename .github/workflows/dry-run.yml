@@ -534,18 +534,40 @@ jobs:
             goarch: arm64
             cc: cc
             cxx: c++
+            shell: bash
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            cc: clang
+            cxx: clang++
+            shell: msys2 {0}
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4
+
+      - uses: msys2/setup-msys2@4f806de0a5a7294ffabaff804b38a9b435a73bda # v2
+        if: matrix.goos == 'windows'
+        with:
+          msystem: CLANG64
+          path-type: inherit
+          install: >-
+            mingw-w64-clang-x86_64-python3
+            git
+            coreutils
 
       - name: Install deps (Linux)
         if: startsWith(matrix.os, 'ubuntu')
         run: sudo apt-get update && sudo apt-get install -y zlib1g-dev python3 git
 
       - name: Build (release mode)
+        shell: ${{ matrix.shell || 'bash' }}
         run: scripts/build.sh CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
 
       - name: Quick soak (10 min)
-        run: scripts/soak-test.sh build/c/codebase-memory-mcp 10
+        shell: ${{ matrix.shell || 'bash' }}
+        run: |
+          BIN=build/c/codebase-memory-mcp
+          [ -f "${BIN}.exe" ] && BIN="${BIN}.exe"
+          scripts/soak-test.sh "$BIN" 10
 
       - name: Upload soak metrics
         if: always()
@@ -576,14 +598,13 @@ jobs:
 
       - name: Build (ASan + LeakSanitizer)
         run: |
-          scripts/test.sh CC=gcc CXX=g++
-          # test.sh builds with ASan; the test-runner binary has ASan linked
-          cp build/c/test-runner build/c/codebase-memory-mcp-asan || true
-          scripts/build.sh CC=gcc CXX=g++
+          # Build production binary WITH ASan for leak detection at exit
+          SANITIZE="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            scripts/build.sh CC=gcc CXX=g++ EXTRA_CFLAGS="$SANITIZE" EXTRA_LDFLAGS="$SANITIZE"
 
       - name: ASan soak (15 min)
         env:
-          ASAN_OPTIONS: "detect_leaks=1:halt_on_error=0"
+          ASAN_OPTIONS: "detect_leaks=1:halt_on_error=0:log_path=soak-results/asan"
         run: scripts/soak-test.sh build/c/codebase-memory-mcp 15
 
       - name: Upload ASan soak metrics

@@ -504,16 +504,21 @@ fi
 # KiloCode detection always uses ~/.config/ path (even on macOS)
 mkdir -p "$FAKE_HOME/.config/Code/User/globalStorage/kilocode.kilo-code/settings"
 mkdir -p "$FAKE_HOME/.local/bin"
-cp "$BINARY" "$FAKE_HOME/.local/bin/codebase-memory-mcp"
-printf '#!/bin/sh\necho stub\n' > "$FAKE_HOME/.local/bin/aider" && chmod +x "$FAKE_HOME/.local/bin/aider"
-printf '#!/bin/sh\necho stub\n' > "$FAKE_HOME/.local/bin/opencode" && chmod +x "$FAKE_HOME/.local/bin/opencode"
+# Copy binary with correct name for platform
+if [[ "$BINARY" == *.exe ]]; then
+  cp "$BINARY" "$FAKE_HOME/.local/bin/codebase-memory-mcp.exe"
+  SELF_PATH="$FAKE_HOME/.local/bin/codebase-memory-mcp.exe"
+else
+  cp "$BINARY" "$FAKE_HOME/.local/bin/codebase-memory-mcp"
+  SELF_PATH="$FAKE_HOME/.local/bin/codebase-memory-mcp"
+fi
+printf '#!/bin/sh\necho stub\n' > "$FAKE_HOME/.local/bin/aider" && chmod +x "$FAKE_HOME/.local/bin/aider" 2>/dev/null || true
+printf '#!/bin/sh\necho stub\n' > "$FAKE_HOME/.local/bin/opencode" && chmod +x "$FAKE_HOME/.local/bin/opencode" 2>/dev/null || true
 
 # Pre-existing configs (verify merge, not overwrite)
 echo '{"existingKey": true}' > "$FAKE_HOME/.claude.json"
 echo '{"existingKey": true}' > "$FAKE_HOME/.gemini/settings.json"
 printf '[existing_section]\nline_from_user = true\n' > "$FAKE_HOME/.codex/config.toml"
-
-SELF_PATH="$FAKE_HOME/.local/bin/codebase-memory-mcp"
 
 # Run install
 HOME="$FAKE_HOME" PATH="$FAKE_HOME/.local/bin:$PATH" "$BINARY" install -y 2>&1 || true
@@ -1131,13 +1136,20 @@ if [ "$DL_OS" = "darwin" ] || [ "$DL_OS" = "linux" ]; then
 else
   DL_EXT="zip"
 fi
+# Try standard name first, fall back to UI variant
 DL_ARCHIVE="codebase-memory-mcp-${DL_OS}-${DL_ARCH}.${DL_EXT}"
+DL_ARCHIVE_UI="codebase-memory-mcp-ui-${DL_OS}-${DL_ARCH}.${DL_EXT}"
 
-# 12a: curl download
+# 12a: curl download (try standard, then UI variant)
 echo "--- Phase 12a: curl download ---"
-if ! curl -fSL -o "$DL_DIR/$DL_ARCHIVE" "$SMOKE_DOWNLOAD_URL/$DL_ARCHIVE"; then
-  echo "FAIL 12a: curl download failed"
-  exit 1
+if ! curl -fSL -o "$DL_DIR/$DL_ARCHIVE" "$SMOKE_DOWNLOAD_URL/$DL_ARCHIVE" 2>/dev/null; then
+  # Try UI variant
+  if curl -fSL -o "$DL_DIR/$DL_ARCHIVE_UI" "$SMOKE_DOWNLOAD_URL/$DL_ARCHIVE_UI" 2>/dev/null; then
+    DL_ARCHIVE="$DL_ARCHIVE_UI"
+  else
+    echo "FAIL 12a: curl download failed (tried standard and ui variants)"
+    exit 1
+  fi
 fi
 if [ ! -s "$DL_DIR/$DL_ARCHIVE" ]; then
   echo "FAIL 12a: downloaded archive is empty"

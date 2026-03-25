@@ -560,9 +560,9 @@ fi
 echo "OK 8c: Claude Code MCP (.claude/.mcp.json)"
 
 # 8d: Claude Code hooks
-if ! python3 -c "
+if ! cat "$FAKE_HOME/.claude/settings.json" 2>/dev/null | python3 -c "
 import json, sys
-d = json.load(open('$FAKE_HOME/.claude/settings.json'))
+d = json.load(sys.stdin)
 hooks = d.get('hooks', {}).get('PreToolUse', [])
 found = any('Grep' in str(h.get('matcher', '')) for h in hooks)
 sys.exit(0 if found else 1)
@@ -612,9 +612,9 @@ if [ "$EXISTING" != "True" ]; then
 fi
 echo "OK 8j-k: Gemini MCP (correct command + preserved existing)"
 
-if ! python3 -c "
+if ! cat "$FAKE_HOME/.gemini/settings.json" 2>/dev/null | python3 -c "
 import json, sys
-d = json.load(open('$FAKE_HOME/.gemini/settings.json'))
+d = json.load(sys.stdin)
 hooks = d.get('hooks', {}).get('BeforeTool', [])
 sys.exit(0 if len(hooks) > 0 else 1)
 " 2>/dev/null; then
@@ -735,9 +735,9 @@ echo "=== Phase 9: agent config uninstall E2E ==="
 HOME="$FAKE_HOME" PATH="$FAKE_HOME/.local/bin:$PATH" "$BINARY" uninstall -y -n 2>&1 || true
 
 # 9a-b: Claude Code MCP removed but existing keys preserved
-if python3 -c "
+if cat "$FAKE_HOME/.claude.json" 2>/dev/null | python3 -c "
 import json, sys
-d = json.load(open('$FAKE_HOME/.claude.json'))
+d = json.load(sys.stdin)
 if 'codebase-memory-mcp' in d.get('mcpServers', {}):
     sys.exit(1)
 if not d.get('existingKey', False):
@@ -751,9 +751,9 @@ else
 fi
 
 # 9c: Legacy MCP removed
-if python3 -c "
+if cat "$FAKE_HOME/.claude/.mcp.json" 2>/dev/null | python3 -c "
 import json, sys
-d = json.load(open('$FAKE_HOME/.claude/.mcp.json'))
+d = json.load(sys.stdin)
 sys.exit(1 if 'codebase-memory-mcp' in d.get('mcpServers', {}) else 0)
 " 2>/dev/null; then
   echo "OK 9c: legacy .mcp.json cleaned"
@@ -763,9 +763,9 @@ else
 fi
 
 # 9d: Hooks removed
-if python3 -c "
+if cat "$FAKE_HOME/.claude/settings.json" 2>/dev/null | python3 -c "
 import json, sys
-d = json.load(open('$FAKE_HOME/.claude/settings.json'))
+d = json.load(sys.stdin)
 hooks = d.get('hooks', {}).get('PreToolUse', [])
 found = any('cbm-code-discovery-gate' in str(h) for h in hooks)
 sys.exit(1 if found else 0)
@@ -788,9 +788,9 @@ fi
 echo "OK 9e-f: Codex TOML cleaned, existing preserved"
 
 # 9g-i: Gemini MCP removed, existing preserved, hooks removed
-if python3 -c "
+if cat "$FAKE_HOME/.gemini/settings.json" 2>/dev/null | python3 -c "
 import json, sys
-d = json.load(open('$FAKE_HOME/.gemini/settings.json'))
+d = json.load(sys.stdin)
 has_mcp = 'codebase-memory-mcp' in d.get('mcpServers', {})
 has_existing = d.get('existingKey', False)
 hooks = d.get('hooks', {}).get('BeforeTool', [])
@@ -804,9 +804,9 @@ else
 fi
 
 # 9j: VS Code
-if python3 -c "
+if cat "$VSCODE_CFG" 2>/dev/null | python3 -c "
 import json, sys
-d = json.load(open('$VSCODE_CFG'))
+d = json.load(sys.stdin)
 sys.exit(1 if 'codebase-memory-mcp' in d.get('servers', {}) else 0)
 " 2>/dev/null; then
   echo "OK 9j: VS Code MCP removed"
@@ -816,9 +816,9 @@ else
 fi
 
 # 9k: OpenClaw
-if python3 -c "
+if cat "$FAKE_HOME/.openclaw/openclaw.json" 2>/dev/null | python3 -c "
 import json, sys
-d = json.load(open('$FAKE_HOME/.openclaw/openclaw.json'))
+d = json.load(sys.stdin)
 sys.exit(1 if 'codebase-memory-mcp' in d.get('mcpServers', {}) else 0)
 " 2>/dev/null; then
   echo "OK 9k: OpenClaw MCP removed"
@@ -858,9 +858,9 @@ cp "$BINARY" "$IDEM_HOME/.local/bin/codebase-memory-mcp"
 HOME="$IDEM_HOME" "$BINARY" install -y 2>&1 > /dev/null || true
 HOME="$IDEM_HOME" "$BINARY" install -y 2>&1 > /dev/null || true
 # Count MCP entries — should be exactly 1
-COUNT=$(python3 -c "
-import json
-d = json.load(open('$IDEM_HOME/.claude.json'))
+COUNT=$(cat "$IDEM_HOME/.claude.json" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
 print(list(d.get('mcpServers',{}).keys()).count('codebase-memory-mcp'))
 " 2>/dev/null || echo "0")
 if [ "$COUNT" != "1" ]; then
@@ -1078,11 +1078,9 @@ if [ -n "${SMOKE_DOWNLOAD_URL:-}" ]; then
   echo "OK 14e: binary removed by uninstall"
 
   # 14f: Verify agent config cleaned
-  if python3 -c "
-import json, sys, os
-f = '$UPDATE_HOME/.claude.json'
-if not os.path.isfile(f): sys.exit(0)
-d = json.load(open(f))
+  if cat "$UPDATE_HOME/.claude.json" 2>/dev/null | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
 if 'codebase-memory-mcp' in d.get('mcpServers', {}): sys.exit(1)
 sys.exit(0)
 " 2>/dev/null; then

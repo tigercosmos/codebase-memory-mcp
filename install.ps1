@@ -15,9 +15,11 @@ $BaseUrl = if ($env:CBM_DOWNLOAD_URL) { $env:CBM_DOWNLOAD_URL } else { "https://
 
 # Detect variant from args (--ui or --standard)
 $Variant = "standard"
+$SkipConfig = $false
 foreach ($arg in $args) {
     if ($arg -eq "--ui") { $Variant = "ui" }
     if ($arg -eq "--standard") { $Variant = "standard" }
+    if ($arg -eq "--skip-config") { $SkipConfig = $true }
     if ($arg -like "--dir=*") { $InstallDir = $arg.Substring(6) }
 }
 
@@ -121,13 +123,18 @@ try {
 }
 
 # Configure agents
-Write-Host ""
-Write-Host "Configuring coding agents..."
-try {
-    & $Dest install -y 2>&1 | Write-Host
-} catch {
-    Write-Host "Agent configuration failed (non-fatal)."
-    Write-Host "Run manually: codebase-memory-mcp install"
+if ($SkipConfig) {
+    Write-Host ""
+    Write-Host "Skipping agent configuration (--skip-config)"
+} else {
+    Write-Host ""
+    Write-Host "Configuring coding agents..."
+    try {
+        & $Dest install -y 2>&1 | Write-Host
+    } catch {
+        Write-Host "Agent configuration failed (non-fatal)."
+        Write-Host "Run manually: codebase-memory-mcp install"
+    }
 }
 
 # Add to PATH (user scope, no admin needed)

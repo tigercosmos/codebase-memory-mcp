@@ -48,29 +48,34 @@ curl -fsSL https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/i
 powershell -ExecutionPolicy ByPass -c "irm https://raw.githubusercontent.com/DeusData/codebase-memory-mcp/main/install.ps1 | iex"
 ```
 
+Options: `--ui` (graph visualization), `--skip-config` (binary only, no agent setup), `--dir=<path>` (custom location).
+
 Restart your coding agent. Say **"Index this project"** — done.
 
 <details>
 <summary>Manual install</summary>
 
-1. **Download** the binary for your platform from the [latest release](https://github.com/DeusData/codebase-memory-mcp/releases/latest):
-   - `codebase-memory-mcp-<os>-<arch>.tar.gz` — standard (MCP server only)
-   - `codebase-memory-mcp-ui-<os>-<arch>.tar.gz` — with embedded graph visualization
+1. **Download** the archive for your platform from the [latest release](https://github.com/DeusData/codebase-memory-mcp/releases/latest):
+   - `codebase-memory-mcp-<os>-<arch>.tar.gz` (macOS/Linux) or `.zip` (Windows) — standard
+   - `codebase-memory-mcp-ui-<os>-<arch>.tar.gz` / `.zip` — with graph visualization
 
-2. **Extract and install**:
+2. **Extract and install** (each archive includes `install.sh` or `install.ps1`):
+
+   macOS / Linux:
    ```bash
    tar xzf codebase-memory-mcp-*.tar.gz
-   mv codebase-memory-mcp ~/.local/bin/
-   codebase-memory-mcp install
+   ./install.sh
+   ```
+
+   Windows (PowerShell):
+   ```powershell
+   Expand-Archive codebase-memory-mcp-windows-amd64.zip -DestinationPath .
+   .\install.ps1
    ```
 
 3. **Restart** your coding agent.
 
-On macOS, if the binary is killed on launch, fix code signing:
-```bash
-xattr -d com.apple.quarantine ~/.local/bin/codebase-memory-mcp
-codesign --sign - --force ~/.local/bin/codebase-memory-mcp
-```
+The `install` command automatically strips macOS quarantine attributes and ad-hoc signs the binary — no manual `xattr`/`codesign` needed.
 </details>
 
 The `install` command auto-detects all installed coding agents and configures MCP server entries, instruction files, skills, and pre-tool hooks for each.

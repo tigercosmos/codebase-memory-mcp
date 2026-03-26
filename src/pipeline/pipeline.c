@@ -382,12 +382,23 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
                     cbm_store_close(check_store);
 
                     if (hash_count > 0) {
-                        cbm_log_info("pipeline.route", "path", "incremental", "stored_hashes",
-                                     itoa_buf(hash_count));
-                        rc = cbm_pipeline_run_incremental(p, db_path, files, file_count);
-                        cbm_discover_free(files, file_count);
-                        free(db_path);
-                        return rc;
+                        /* Detect mode change (e.g. fast→full): if discovered files
+                         * outnumber stored hashes by >50%, the DB was built with a
+                         * narrower file set.  Delete and reindex fresh instead of
+                         * single-threading ~thousands of "new" files incrementally. */
+                        if (file_count > hash_count + (hash_count / 2)) {
+                            cbm_log_info("pipeline.route", "path", "mode_change_reindex",
+                                         "stored_hashes", itoa_buf(hash_count), "discovered",
+                                         itoa_buf(file_count));
+                            /* Falls through to delete-and-reindex below */
+                        } else {
+                            cbm_log_info("pipeline.route", "path", "incremental", "stored_hashes",
+                                         itoa_buf(hash_count));
+                            rc = cbm_pipeline_run_incremental(p, db_path, files, file_count);
+                            cbm_discover_free(files, file_count);
+                            free(db_path);
+                            return rc;
+                        }
                     }
                 } else if (check_store) {
                     cbm_store_close(check_store);

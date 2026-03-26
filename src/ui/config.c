@@ -5,6 +5,7 @@
  * Format: {"ui_enabled": false, "ui_port": 9749}
  */
 #include "ui/config.h"
+#include "ui/embedded_assets.h"
 #include "foundation/log.h"
 #include "foundation/platform.h"
 #include "foundation/compat_fs.h"
@@ -37,7 +38,11 @@ void cbm_ui_config_load(cbm_ui_config_t *cfg) {
 
     FILE *f = fopen(path, "rb");
     if (!f) {
-        return; /* no config file → defaults */
+        /* No config file — auto-enable UI if binary has embedded assets */
+        if (CBM_EMBEDDED_FILE_COUNT > 0) {
+            cfg->ui_enabled = true;
+        }
+        return;
     }
 
     fseek(f, 0, SEEK_END);

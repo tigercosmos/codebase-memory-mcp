@@ -1139,6 +1139,10 @@ DL_DIR=$(mktemp -d)
 
 # Detect platform for archive name
 DL_OS=$(uname -s | tr 'A-Z' 'a-z')
+# Normalize MSYS2/MinGW to "windows"
+case "$DL_OS" in
+  mingw*|msys*) DL_OS="windows" ;;
+esac
 DL_ARCH=$(uname -m)
 case "$DL_ARCH" in
   aarch64) DL_ARCH="arm64" ;;

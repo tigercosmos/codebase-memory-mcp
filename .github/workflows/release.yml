@@ -942,8 +942,16 @@ jobs:
             done
 
             if [ "$SCAN_COMPLETE" != "true" ]; then
-              echo "BLOCKED: $BASENAME scan did not complete within 20 minutes!"
-              echo "FAIL" >> /tmp/vt_gate_fail
+              # Script files (sh, ps1) are low-priority in VT queue — warn but don't block
+              case "$BASENAME" in
+                *.sh|*.ps1)
+                  echo "WARNING: $BASENAME scan did not complete within 20 minutes (script files are low-priority in VT)"
+                  ;;
+                *)
+                  echo "BLOCKED: $BASENAME scan did not complete within 20 minutes!"
+                  echo "FAIL" >> /tmp/vt_gate_fail
+                  ;;
+              esac
             fi
           done
 

@@ -694,7 +694,7 @@ jobs:
 
   # ── Step 6: Create DRAFT release (not public yet) ─────────────
   release-draft:
-    needs: [smoke-unix, smoke-windows, security-static, codeql-gate, soak-quick, soak-quick-windows]
+    needs: [smoke-unix, smoke-windows, security-static, codeql-gate, soak-quick, soak-quick-windows, soak-asan, soak-asan-windows]
     if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-latest
     permissions:

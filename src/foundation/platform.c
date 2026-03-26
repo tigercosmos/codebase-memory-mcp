@@ -227,8 +227,15 @@ int64_t cbm_file_size(const char *path) {
 }
 
 char *cbm_normalize_path_sep(char *path) {
-    /* No-op on POSIX — paths already use forward slashes. */
-    (void)path;
+    /* Normalize on ALL platforms — backslash paths can arrive via stored
+     * data, cross-platform DB files, or Windows-style arguments. */
+    if (path) {
+        for (char *p = path; *p; p++) {
+            if (*p == '\\') {
+                *p = '/';
+            }
+        }
+    }
     return path;
 }
 

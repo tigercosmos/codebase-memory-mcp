@@ -131,8 +131,13 @@ static bool is_env_var_name(const char *s) {
     return has_upper;
 }
 
+#define WALK_ENV_MAX_DEPTH 4096
+
 // NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk
-static void walk_env_accesses(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
+static void walk_env_inner(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, int depth) {
+    if (depth > WALK_ENV_MAX_DEPTH) {
+        return;
+    }
     const char *kind = ts_node_type(node);
     const char *env_key = NULL;
 
@@ -158,8 +163,12 @@ static void walk_env_accesses(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
     // Recurse
     uint32_t count = ts_node_child_count(node);
     for (uint32_t i = 0; i < count; i++) {
-        walk_env_accesses(ctx, ts_node_child(node, i), spec);
+        walk_env_inner(ctx, ts_node_child(node, i), spec, depth + 1);
     }
+}
+
+static void walk_env_accesses(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
+    walk_env_inner(ctx, node, spec, 0);
 }
 
 void cbm_extract_env_accesses(CBMExtractCtx *ctx) {

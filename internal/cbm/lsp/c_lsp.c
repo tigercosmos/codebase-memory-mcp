@@ -5,6 +5,12 @@
 #include <stdlib.h>
 #include <ctype.h>
 
+/* Safe kind accessor — returns CBM_TYPE_UNKNOWN for NULL types.
+ * Prevents SEGV in c_eval_expr_type_inner on unusual C++ AST shapes. */
+static inline CBMTypeKind safe_kind(const CBMType* t) {
+    return t ? t->kind : CBM_TYPE_UNKNOWN;
+}
+
 // Forward declarations
 static void c_resolve_calls_in_node(CLSPContext* ctx, TSNode node);
 static void c_emit_resolved_call(CLSPContext* ctx, const char* callee_qn, const char* strategy, float confidence);
@@ -1196,8 +1202,22 @@ static const char* type_to_qn(const CBMType* t) {
 // c_eval_expr_type: recursive expression type evaluator
 // ============================================================================
 
+static const CBMType* c_eval_expr_type_inner(CLSPContext* ctx, TSNode node);
+
 const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
     if (ts_node_is_null(node)) return cbm_type_unknown();
+    /* Guard against unbounded recursion on deeply nested C++ templates.
+     * Prevents stack overflow and NULL-deref from unusual AST shapes. */
+    if (ctx->eval_depth > 256) {
+        return cbm_type_unknown();
+    }
+    ctx->eval_depth++;
+    const CBMType* result = c_eval_expr_type_inner(ctx, node);
+    ctx->eval_depth--;
+    return result ? result : cbm_type_unknown();
+}
+
+static const CBMType* c_eval_expr_type_inner(CLSPContext* ctx, TSNode node) {
     const char* kind = ts_node_type(node);
 
     // --- identifier: scope lookup ---
@@ -1219,7 +1239,7 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
 
         // Check if it's a type name (for constructor calls / casts)
         const CBMType* type = c_resolve_name_to_type(ctx, name);
-        if (type && type->kind == CBM_TYPE_NAMED) {
+        if (type && safe_kind(type) == CBM_TYPE_NAMED) {
             // Could be a constructor call — return as type
             return type;
         }
@@ -1283,11 +1303,11 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
             // a template param name) and receiver is a TEMPLATE type, substitute using
             // receiver's template args.
             // e.g., pair<int, Foo>.second where second has type V → substitute V=Foo
-            bool is_tparam = (field_type->kind == CBM_TYPE_TYPE_PARAM);
+            bool is_tparam = (safe_kind(field_type) == CBM_TYPE_TYPE_PARAM);
             // Also check NAMED types that match template param names (extract_defs
             // may register template fields as NAMED("V") rather than TYPE_PARAM("V"))
-            if (!is_tparam && field_type->kind == CBM_TYPE_NAMED &&
-                base->kind == CBM_TYPE_TEMPLATE) {
+            if (!is_tparam && safe_kind(field_type) == CBM_TYPE_NAMED &&
+                safe_kind(base) == CBM_TYPE_TEMPLATE) {
                 const CBMRegisteredType* trt = cbm_registry_lookup_type(ctx->registry, type_qn);
                 if (!trt && ctx->module_qn) {
                     trt = cbm_registry_lookup_type(ctx->registry,
@@ -1308,7 +1328,7 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
                     }
                 }
             }
-            if (is_tparam && base->kind == CBM_TYPE_TEMPLATE &&
+            if (is_tparam && safe_kind(base) == CBM_TYPE_TEMPLATE &&
                 base->data.template_type.template_args) {
                 const CBMRegisteredType* rt = cbm_registry_lookup_type(ctx->registry, type_qn);
                 if (!rt && ctx->module_qn) {
@@ -1386,7 +1406,7 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
         if (f && f->signature) {
             // If template args present, substitute into return type
             if (qi_has_tmpl_args && !ts_node_is_null(qi_tmpl_args) &&
-                f->signature->kind == CBM_TYPE_FUNC &&
+                safe_kind(f->signature) == CBM_TYPE_FUNC &&
                 f->signature->data.func.return_types &&
                 f->signature->data.func.return_types[0]) {
                 const CBMType* base_ret = f->signature->data.func.return_types[0];
@@ -1418,7 +1438,7 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
                     // (e.g., smart pointer dereference) can extract inner types.
                     // e.g., make_shared<Widget> returns NAMED("std.shared_ptr") →
                     //        TEMPLATE("std.shared_ptr", [Widget])
-                    if (base_ret->kind == CBM_TYPE_NAMED) {
+                    if (safe_kind(base_ret) == CBM_TYPE_NAMED) {
                         const CBMType** final_targs = (const CBMType**)cbm_arena_alloc(
                             ctx->arena, (targ_count + 1) * sizeof(const CBMType*));
                         for (int i = 0; i < targ_count; i++) final_targs[i] = targs[i];
@@ -1526,7 +1546,7 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
 
         // Get the base return type from the function signature
         const CBMType* base_ret = NULL;
-        if (f->signature->kind == CBM_TYPE_FUNC &&
+        if (safe_kind(f->signature) == CBM_TYPE_FUNC &&
             f->signature->data.func.return_types &&
             f->signature->data.func.return_types[0]) {
             base_ret = f->signature->data.func.return_types[0];
@@ -1605,19 +1625,19 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
         const CBMType* func_type = c_eval_expr_type(ctx, func_node);
         if (!func_type) return cbm_type_unknown();
         // FUNC type -> return its return type
-        if (func_type->kind == CBM_TYPE_FUNC &&
+        if (safe_kind(func_type) == CBM_TYPE_FUNC &&
             func_type->data.func.return_types && func_type->data.func.return_types[0]) {
             const CBMType* ret = func_type->data.func.return_types[0];
 
             // Template param substitution: try receiver's template args (method calls)
             // then try TAD from call-site argument types (free function calls)
-            bool needs_subst = (ret->kind == CBM_TYPE_TYPE_PARAM ||
-                                ret->kind == CBM_TYPE_NAMED ||
-                                ret->kind == CBM_TYPE_POINTER ||
-                                ret->kind == CBM_TYPE_REFERENCE ||
-                                ret->kind == CBM_TYPE_RVALUE_REF ||
-                                ret->kind == CBM_TYPE_TEMPLATE ||
-                                ret->kind == CBM_TYPE_SLICE);
+            bool needs_subst = (safe_kind(ret) == CBM_TYPE_TYPE_PARAM ||
+                                safe_kind(ret) == CBM_TYPE_NAMED ||
+                                safe_kind(ret) == CBM_TYPE_POINTER ||
+                                safe_kind(ret) == CBM_TYPE_REFERENCE ||
+                                safe_kind(ret) == CBM_TYPE_RVALUE_REF ||
+                                safe_kind(ret) == CBM_TYPE_TEMPLATE ||
+                                safe_kind(ret) == CBM_TYPE_SLICE);
 
             if (needs_subst) {
                 bool substituted = false;
@@ -1630,7 +1650,7 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
                         // Use false to preserve TEMPLATE type — we need template args
                         // for substitution, not the pointed-to type from operator->
                         obj_type = c_simplify_type(ctx, obj_type, false);
-                        if (obj_type && obj_type->kind == CBM_TYPE_TEMPLATE &&
+                        if (obj_type && safe_kind(obj_type) == CBM_TYPE_TEMPLATE &&
                             obj_type->data.template_type.template_args) {
                             // Use registered type_param_names if available
                             TSNode field_node = ts_node_child_by_field_name(func_node, "field", 5);
@@ -1695,7 +1715,7 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
                     }
 
                     if (rf && rf->type_param_names && rf->signature &&
-                        rf->signature->kind == CBM_TYPE_FUNC &&
+                        safe_kind(rf->signature) == CBM_TYPE_FUNC &&
                         rf->signature->data.func.param_types) {
                         // Deduce: match call-site arg types against param types
                         // to bind type_param_names
@@ -1714,22 +1734,22 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
                                     if (cbm_type_is_unknown(arg_t)) { pi++; continue; }
                                     // Unwrap ref/ptr from param type
                                     const CBMType* param_t = rf->signature->data.func.param_types[pi];
-                                    while (param_t && (param_t->kind == CBM_TYPE_REFERENCE ||
-                                                       param_t->kind == CBM_TYPE_RVALUE_REF ||
-                                                       param_t->kind == CBM_TYPE_POINTER)) {
-                                        if (param_t->kind == CBM_TYPE_POINTER) param_t = param_t->data.pointer.elem;
+                                    while (param_t && (safe_kind(param_t) == CBM_TYPE_REFERENCE ||
+                                                       safe_kind(param_t) == CBM_TYPE_RVALUE_REF ||
+                                                       safe_kind(param_t) == CBM_TYPE_POINTER)) {
+                                        if (safe_kind(param_t) == CBM_TYPE_POINTER) param_t = param_t->data.pointer.elem;
                                         else param_t = param_t->data.reference.elem;
                                     }
                                     // If param type is TYPE_PARAM, bind it
-                                    if (param_t && param_t->kind == CBM_TYPE_TYPE_PARAM) {
+                                    if (param_t && safe_kind(param_t) == CBM_TYPE_TYPE_PARAM) {
                                         for (int ti = 0; ti < tp_count; ti++) {
                                             if (strcmp(rf->type_param_names[ti], param_t->data.type_param.name) == 0) {
                                                 // Unwrap ref/ptr from actual arg too
                                                 const CBMType* unwrapped = arg_t;
-                                                while (unwrapped && (unwrapped->kind == CBM_TYPE_REFERENCE ||
-                                                                     unwrapped->kind == CBM_TYPE_RVALUE_REF ||
-                                                                     unwrapped->kind == CBM_TYPE_POINTER)) {
-                                                    if (unwrapped->kind == CBM_TYPE_POINTER) unwrapped = unwrapped->data.pointer.elem;
+                                                while (unwrapped && (safe_kind(unwrapped) == CBM_TYPE_REFERENCE ||
+                                                                     safe_kind(unwrapped) == CBM_TYPE_RVALUE_REF ||
+                                                                     safe_kind(unwrapped) == CBM_TYPE_POINTER)) {
+                                                    if (safe_kind(unwrapped) == CBM_TYPE_POINTER) unwrapped = unwrapped->data.pointer.elem;
                                                     else unwrapped = unwrapped->data.reference.elem;
                                                 }
                                                 if (!deduced[ti]) deduced[ti] = unwrapped;
@@ -1755,13 +1775,13 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
             }
 
             // Unwrap references in return type
-            if (ret->kind == CBM_TYPE_REFERENCE || ret->kind == CBM_TYPE_RVALUE_REF)
+            if (safe_kind(ret) == CBM_TYPE_REFERENCE || safe_kind(ret) == CBM_TYPE_RVALUE_REF)
                 ret = ret->data.reference.elem;
             return ret;
         }
 
         // Constructor call: Type(args) — if func_node resolves to a named type
-        if (func_type->kind == CBM_TYPE_NAMED) {
+        if (safe_kind(func_type) == CBM_TYPE_NAMED) {
             return func_type;
         }
 
@@ -1800,20 +1820,20 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
         if (!arr_type) return cbm_type_unknown();
 
         // Array/slice: return element
-        if (arr_type->kind == CBM_TYPE_SLICE) return arr_type->data.slice.elem;
-        if (arr_type->kind == CBM_TYPE_POINTER) return arr_type->data.pointer.elem;
+        if (safe_kind(arr_type) == CBM_TYPE_SLICE) return arr_type->data.slice.elem;
+        if (safe_kind(arr_type) == CBM_TYPE_POINTER) return arr_type->data.pointer.elem;
 
         // Template with operator[]: return via method lookup
         const char* qn = type_to_qn(c_simplify_type(ctx, arr_type, false));
         if (qn) {
             const CBMRegisteredFunc* op = cbm_registry_lookup_method(ctx->registry, qn, "operator[]");
-            if (op && op->signature && op->signature->kind == CBM_TYPE_FUNC &&
+            if (op && op->signature && safe_kind(op->signature) == CBM_TYPE_FUNC &&
                 op->signature->data.func.return_types && op->signature->data.func.return_types[0]) {
                 const CBMType* ret = op->signature->data.func.return_types[0];
-                if (ret->kind == CBM_TYPE_REFERENCE) ret = ret->data.reference.elem;
+                if (safe_kind(ret) == CBM_TYPE_REFERENCE) ret = ret->data.reference.elem;
 
                 // Substitute template params
-                if (ret->kind == CBM_TYPE_TYPE_PARAM && arr_type->kind == CBM_TYPE_TEMPLATE) {
+                if (safe_kind(ret) == CBM_TYPE_TYPE_PARAM && safe_kind(arr_type) == CBM_TYPE_TEMPLATE) {
                     const char* params[] = {"T", "K", "V", NULL};
                     const CBMType* args[3] = {NULL};
                     int nargs = arr_type->data.template_type.arg_count;
@@ -1868,10 +1888,10 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
                     const CBMType* inner = c_eval_expr_type(ctx, operand);
                     inner = c_simplify_type(ctx, inner, false);
                     // TEMPLATE with operator*(): look up and substitute return type
-                    if (inner && inner->kind == CBM_TYPE_TEMPLATE) {
+                    if (inner && safe_kind(inner) == CBM_TYPE_TEMPLATE) {
                         const char* tqn = inner->data.template_type.template_name;
                         const CBMRegisteredFunc* opf = c_lookup_member(ctx, tqn, "operator*");
-                        if (opf && opf->signature && opf->signature->kind == CBM_TYPE_FUNC &&
+                        if (opf && opf->signature && safe_kind(opf->signature) == CBM_TYPE_FUNC &&
                             opf->signature->data.func.return_types &&
                             opf->signature->data.func.return_types[0]) {
                             const CBMType* ret = opf->signature->data.func.return_types[0];
@@ -1894,7 +1914,7 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
                                 if (na > 2) fa[2] = inner->data.template_type.template_args[2];
                                 ret = cbm_type_substitute(ctx->arena, ret, fb, fa);
                             }
-                            if (ret->kind == CBM_TYPE_REFERENCE)
+                            if (safe_kind(ret) == CBM_TYPE_REFERENCE)
                                 ret = ret->data.reference.elem;
                             return ret;
                         }
@@ -1928,10 +1948,10 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
                 if (op && strcmp(op, "*") == 0) {
                     const CBMType* inner = c_eval_expr_type(ctx, arg);
                     inner = c_simplify_type(ctx, inner, false);
-                    if (inner && inner->kind == CBM_TYPE_TEMPLATE) {
+                    if (inner && safe_kind(inner) == CBM_TYPE_TEMPLATE) {
                         const char* tqn = inner->data.template_type.template_name;
                         const CBMRegisteredFunc* opf = c_lookup_member(ctx, tqn, "operator*");
-                        if (opf && opf->signature && opf->signature->kind == CBM_TYPE_FUNC &&
+                        if (opf && opf->signature && safe_kind(opf->signature) == CBM_TYPE_FUNC &&
                             opf->signature->data.func.return_types &&
                             opf->signature->data.func.return_types[0]) {
                             const CBMType* ret = opf->signature->data.func.return_types[0];
@@ -1954,7 +1974,7 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
                                 if (na > 2) fa[2] = inner->data.template_type.template_args[2];
                                 ret = cbm_type_substitute(ctx->arena, ret, fb, fa);
                             }
-                            if (ret->kind == CBM_TYPE_REFERENCE)
+                            if (safe_kind(ret) == CBM_TYPE_REFERENCE)
                                 ret = ret->data.reference.elem;
                             return ret;
                         }
@@ -2079,7 +2099,7 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
             // co_await returns the result of operator co_await or the awaitable's await_resume
             // Heuristic: if operand is a template type (e.g., Task<T>), return first template arg
             op_type = c_simplify_type(ctx, op_type, false);
-            if (op_type && op_type->kind == CBM_TYPE_TEMPLATE &&
+            if (op_type && safe_kind(op_type) == CBM_TYPE_TEMPLATE &&
                 op_type->data.template_type.arg_count > 0) {
                 return op_type->data.template_type.template_args[0];
             }
@@ -2087,7 +2107,7 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
             const char* op_qn = type_to_qn(op_type);
             if (op_qn) {
                 const CBMRegisteredFunc* ar = c_lookup_member(ctx, op_qn, "await_resume");
-                if (ar && ar->signature && ar->signature->kind == CBM_TYPE_FUNC &&
+                if (ar && ar->signature && safe_kind(ar->signature) == CBM_TYPE_FUNC &&
                     ar->signature->data.func.return_types &&
                     ar->signature->data.func.return_types[0]) {
                     return ar->signature->data.func.return_types[0];

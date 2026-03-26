@@ -231,7 +231,8 @@ const CBMType* cbm_type_resolve_alias(const CBMType* t) {
 // Generic substitution: recursively replace TYPE_PARAM with concrete types.
 const CBMType* cbm_type_substitute(CBMArena* a, const CBMType* t,
     const char** type_params, const CBMType** type_args) {
-    if (!t || !type_params || !type_args) return t;
+    if (!t) return cbm_type_unknown();
+    if (!type_params || !type_args) return t;
 
     switch (t->kind) {
     case CBM_TYPE_TYPE_PARAM: {

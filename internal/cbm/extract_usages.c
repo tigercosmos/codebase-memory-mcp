@@ -76,7 +76,14 @@ static bool is_reference_node(TSNode node, CBMLanguage lang) {
 }
 
 // NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk
-static void walk_usages(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
+/* Max recursion depth — prevents stack overflow on deeply nested C++ templates.
+ * 8MB stack / ~256 bytes per frame ≈ 32K max, use 4K as safe limit. */
+#define WALK_USAGES_MAX_DEPTH 4096
+
+static void walk_usages_inner(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, int depth) {
+    if (depth > WALK_USAGES_MAX_DEPTH) {
+        return;
+    }
     if (is_reference_node(node, ctx->language)) {
         // Skip if inside a call (already counted as CALLS edge)
         if (is_inside_call(node, spec)) {
@@ -110,8 +117,12 @@ static void walk_usages(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec
 recurse:;
     uint32_t count = ts_node_child_count(node);
     for (uint32_t i = 0; i < count; i++) {
-        walk_usages(ctx, ts_node_child(node, i), spec);
+        walk_usages_inner(ctx, ts_node_child(node, i), spec, depth + 1);
     }
+}
+
+static void walk_usages(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
+    walk_usages_inner(ctx, node, spec, 0);
 }
 
 void cbm_extract_usages(CBMExtractCtx *ctx) {

@@ -1024,10 +1024,15 @@ if [ -n "${SMOKE_DOWNLOAD_URL:-}" ]; then
   # ── 14a-f: Real update command against local HTTP server ──
   UPDATE_HOME=$(mktemp -d)
   mkdir -p "$UPDATE_HOME/.claude" "$UPDATE_HOME/.local/bin"
-  cp "$BINARY" "$UPDATE_HOME/.local/bin/codebase-memory-mcp"
-  chmod 755 "$UPDATE_HOME/.local/bin/codebase-memory-mcp"
-  if [ "$(uname -s)" = "Darwin" ]; then
-    codesign --sign - --force "$UPDATE_HOME/.local/bin/codebase-memory-mcp" 2>/dev/null || true
+  if [[ "$BINARY" == *.exe ]]; then
+    cp "$BINARY" "$UPDATE_HOME/.local/bin/codebase-memory-mcp.exe"
+    chmod 755 "$UPDATE_HOME/.local/bin/codebase-memory-mcp.exe"
+  else
+    cp "$BINARY" "$UPDATE_HOME/.local/bin/codebase-memory-mcp"
+    chmod 755 "$UPDATE_HOME/.local/bin/codebase-memory-mcp"
+    if [ "$(uname -s)" = "Darwin" ]; then
+      codesign --sign - --force "$UPDATE_HOME/.local/bin/codebase-memory-mcp" 2>/dev/null || true
+    fi
   fi
 
   # Pre-install agent config with a WRONG binary path (simulates stale config)
@@ -1079,7 +1084,7 @@ if [ -n "${SMOKE_DOWNLOAD_URL:-}" ]; then
   HOME="$UPDATE_HOME" "$BINARY" uninstall -y 2>&1 || true
 
   # 14e: Verify binary removed
-  if [ -f "$UPDATE_HOME/.local/bin/codebase-memory-mcp" ]; then
+  if [ -f "$UPDATE_HOME/.local/bin/codebase-memory-mcp" ] || [ -f "$UPDATE_HOME/.local/bin/codebase-memory-mcp.exe" ]; then
     echo "FAIL 14e: binary still exists after uninstall"
     exit 1
   fi

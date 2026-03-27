@@ -3675,7 +3675,7 @@ TEST(infra_parse_terraform_full) {
                       "    }\n"
                       "  }\n"
                       "  backend \"gcs\" {\n"
-                      "    bucket = \"hoepke-tf\"\n"
+                      "    bucket = \"example-tf\"\n"
                       "    prefix = \"state\"\n"
                       "  }\n"
                       "}\n"
@@ -3683,7 +3683,7 @@ TEST(infra_parse_terraform_full) {
                       "variable \"project_id\" {\n"
                       "  description = \"The GCP project ID\"\n"
                       "  type        = string\n"
-                      "  default     = \"hoepke-cloud\"\n"
+                      "  default     = \"example-cloud\"\n"
                       "}\n"
                       "\n"
                       "variable \"region\" {\n"
@@ -3736,7 +3736,7 @@ TEST(infra_parse_terraform_full) {
     bool found_project_id = false;
     for (int i = 0; i < r.variable_count; i++) {
         if (strcmp(r.variables[i].name, "project_id") == 0) {
-            ASSERT_STR_EQ(r.variables[i].default_val, "hoepke-cloud");
+            ASSERT_STR_EQ(r.variables[i].default_val, "example-cloud");
             ASSERT_STR_EQ(r.variables[i].type, "string");
             ASSERT_STR_EQ(r.variables[i].description, "The GCP project ID");
             found_project_id = true;
@@ -3770,7 +3770,7 @@ TEST(infra_parse_terraform_variables_only) {
                       "variable \"project_id\" {\n"
                       "  description = \"The GCP project ID\"\n"
                       "  type        = string\n"
-                      "  default     = \"hoepke-cloud\"\n"
+                      "  default     = \"example-cloud\"\n"
                       "}\n"
                       "\n"
                       "variable \"secret_key\" {\n"

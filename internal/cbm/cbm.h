@@ -107,11 +107,23 @@ typedef struct {
     bool is_entry_point;
 } CBMDefinition;
 
+/* Argument captured from a call expression */
 typedef struct {
-    const char *callee_name;       // raw callee text ("pkg.Func", "foo")
-    const char *enclosing_func_qn; // QN of enclosing function (or module QN)
-    const char *first_string_arg;  // first string literal argument (URL, topic, key) or NULL
-    const char *second_arg_name;   // second argument identifier (handler ref) or NULL
+    const char *expr;    // raw expression text ("payload.info", "MY_URL", "'hello'")
+    const char *value;   // resolved string value or NULL (constant propagation)
+    const char *keyword; // keyword name if keyword arg ("url", "topic_id"), NULL if positional
+    int index;           // positional index (0-based)
+} CBMCallArg;
+
+#define CBM_MAX_CALL_ARGS 8
+
+typedef struct {
+    const char *callee_name;            // raw callee text ("pkg.Func", "foo")
+    const char *enclosing_func_qn;      // QN of enclosing function (or module QN)
+    const char *first_string_arg;       // first string literal argument (URL, topic, key) or NULL
+    const char *second_arg_name;        // second argument identifier (handler ref) or NULL
+    CBMCallArg args[CBM_MAX_CALL_ARGS]; // first N arguments with expressions
+    int arg_count;                      // number of captured arguments
 } CBMCall;
 
 typedef struct {

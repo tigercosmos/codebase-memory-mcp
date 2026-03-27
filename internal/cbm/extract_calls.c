@@ -22,6 +22,25 @@ static const char *lookup_string_constant(const CBMExtractCtx *ctx, const char *
     return NULL;
 }
 
+/* Check if a node type is a string literal */
+static int is_string_like(const char *kind) {
+    return (strcmp(kind, "string") == 0 || strcmp(kind, "string_literal") == 0 ||
+            strcmp(kind, "interpreted_string_literal") == 0 ||
+            strcmp(kind, "raw_string_literal") == 0 || strcmp(kind, "string_content") == 0);
+}
+
+/* Strip surrounding quotes from a string, return arena-allocated copy */
+static const char *strip_quotes(CBMArena *a, const char *text) {
+    if (!text || !text[0]) {
+        return NULL;
+    }
+    int len = (int)strlen(text);
+    if (len >= 2 && (text[0] == '"' || text[0] == '\'')) {
+        return cbm_arena_strndup(a, text + 1, (size_t)(len - 2));
+    }
+    return text;
+}
+
 // Forward declarations
 static void walk_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec);
 static char *extract_callee_name(CBMArena *a, TSNode node, const char *source, CBMLanguage lang);
@@ -365,6 +384,53 @@ void cbm_extract_calls(CBMExtractCtx *ctx) {
 
 // --- Unified handler: called once per node by the cursor walk ---
 
+/* Extract all arguments from a call expression into call->args[].
+ * Captures expression text, resolved constants, keyword names, and
+ * dotted field chains (member_expression → "payload.info.url"). */
+static void extract_call_args(CBMExtractCtx *ctx, TSNode args, CBMCall *call) {
+    uint32_t argc = ts_node_named_child_count(args);
+    int positional_idx = 0;
+    for (uint32_t ai = 0; ai < argc && call->arg_count < CBM_MAX_CALL_ARGS; ai++) {
+        TSNode arg_node = ts_node_named_child(args, ai);
+        const char *ak = ts_node_type(arg_node);
+        CBMCallArg *ca = &call->args[call->arg_count];
+        memset(ca, 0, sizeof(*ca));
+
+        if (strcmp(ak, "keyword_argument") == 0 || strcmp(ak, "pair") == 0) {
+            TSNode key_n = ts_node_child_by_field_name(arg_node, "name", 4);
+            TSNode val_n = ts_node_child_by_field_name(arg_node, "value", 5);
+            if (ts_node_is_null(key_n)) {
+                key_n = ts_node_child_by_field_name(arg_node, "key", 3);
+            }
+            if (!ts_node_is_null(key_n)) {
+                ca->keyword = cbm_node_text(ctx->arena, key_n, ctx->source);
+            }
+            if (!ts_node_is_null(val_n)) {
+                ca->expr = cbm_node_text(ctx->arena, val_n, ctx->source);
+                if (strcmp(ts_node_type(val_n), "identifier") == 0 && ca->expr) {
+                    ca->value = lookup_string_constant(ctx, ca->expr);
+                } else if (is_string_like(ts_node_type(val_n)) && ca->expr) {
+                    ca->value = strip_quotes(ctx->arena, ca->expr);
+                }
+            }
+            ca->index = positional_idx++;
+            call->arg_count++;
+        } else if (strcmp(ak, "list_splat") == 0 || strcmp(ak, "dictionary_splat") == 0 ||
+                   strcmp(ak, "spread_element") == 0) {
+            positional_idx++;
+        } else {
+            ca->expr = cbm_node_text(ctx->arena, arg_node, ctx->source);
+            ca->index = positional_idx++;
+            if (is_string_like(ak) && ca->expr) {
+                ca->value = strip_quotes(ctx->arena, ca->expr);
+            } else if (strcmp(ak, "identifier") == 0 && ca->expr) {
+                ca->value = lookup_string_constant(ctx, ca->expr);
+            }
+            call->arg_count++;
+        }
+    }
+}
+
 void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, WalkState *state) {
     if (!spec->call_node_types || !spec->call_node_types[0]) {
         return;
@@ -504,24 +570,24 @@ void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, Walk
                 }
             }
 
-            /* Extract second argument name (handler ref for route registrations).
-             * Pattern: router.GET("/path", handlerFunc) → second_arg_name = "handlerFunc"
-             * Only extracted when first_string_arg looks like a path. */
+            /* Extract second argument name (handler ref for route registrations). */
             if (call.first_string_arg != NULL && call.first_string_arg[0] == '/' &&
                 !ts_node_is_null(args)) {
                 uint32_t nc2 = ts_node_named_child_count(args);
                 for (uint32_t ai = 1; ai < nc2 && ai < 4 && !call.second_arg_name; ai++) {
                     TSNode arg2 = ts_node_named_child(args, ai);
                     const char *ak2 = ts_node_type(arg2);
-                    if (strcmp(ak2, "identifier") == 0) {
-                        call.second_arg_name = cbm_node_text(ctx->arena, arg2, ctx->source);
-                    } else if (strcmp(ak2, "member_expression") == 0 ||
-                               strcmp(ak2, "selector_expression") == 0 ||
-                               strcmp(ak2, "attribute") == 0 ||
-                               strcmp(ak2, "field_expression") == 0) {
+                    if (strcmp(ak2, "identifier") == 0 || strcmp(ak2, "member_expression") == 0 ||
+                        strcmp(ak2, "selector_expression") == 0 || strcmp(ak2, "attribute") == 0 ||
+                        strcmp(ak2, "field_expression") == 0) {
                         call.second_arg_name = cbm_node_text(ctx->arena, arg2, ctx->source);
                     }
                 }
+            }
+
+            /* B2+B3: Capture all arguments with expressions + field chains. */
+            if (!ts_node_is_null(args)) {
+                extract_call_args(ctx, args, &call);
             }
 
             cbm_calls_push(&ctx->result->calls, ctx->arena, call);

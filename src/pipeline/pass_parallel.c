@@ -692,6 +692,65 @@ typedef struct {
     _Atomic int next_file_idx;
 } resolve_ctx_t;
 
+/* Minimum buffer space needed per arg JSON object */
+#define CBM_ARG_JSON_GUARD 32
+
+/* Append arg data as JSON to edge properties: ,"args":[{"i":0,"e":"x","v":"val"},...]
+ * Returns new position in buffer. */
+static size_t append_args_json(char *buf, size_t bufsize, size_t pos, const CBMCall *call) {
+    if (call->arg_count == 0 || pos >= bufsize - 20) {
+        return pos;
+    }
+    int n = snprintf(buf + pos, bufsize - pos, ",\"args\":[");
+    if (n <= 0) {
+        return pos;
+    }
+    pos += (size_t)n;
+    for (int i = 0; i < call->arg_count && pos < bufsize - CBM_ARG_JSON_GUARD; i++) {
+        const CBMCallArg *a = &call->args[i];
+        if (i > 0 && pos < bufsize - 1) {
+            buf[pos++] = ',';
+        }
+        /* Truncate long expressions to keep edge properties compact */
+        char expr_buf[128];
+        if (a->expr) {
+            snprintf(expr_buf, sizeof(expr_buf), "%.*s", 120, a->expr);
+            /* Escape quotes for JSON safety */
+            for (char *p = expr_buf; *p; p++) {
+                if (*p == '"') {
+                    *p = '\'';
+                }
+                if (*p == '\n' || *p == '\r') {
+                    *p = ' ';
+                }
+            }
+        } else {
+            expr_buf[0] = '\0';
+        }
+        if (a->keyword && a->value) {
+            n = snprintf(buf + pos, bufsize - pos,
+                         "{\"i\":%d,\"k\":\"%s\",\"e\":\"%s\",\"v\":\"%s\"}", a->index, a->keyword,
+                         expr_buf, a->value);
+        } else if (a->keyword) {
+            n = snprintf(buf + pos, bufsize - pos, "{\"i\":%d,\"k\":\"%s\",\"e\":\"%s\"}", a->index,
+                         a->keyword, expr_buf);
+        } else if (a->value) {
+            n = snprintf(buf + pos, bufsize - pos, "{\"i\":%d,\"e\":\"%s\",\"v\":\"%s\"}", a->index,
+                         expr_buf, a->value);
+        } else {
+            n = snprintf(buf + pos, bufsize - pos, "{\"i\":%d,\"e\":\"%s\"}", a->index, expr_buf);
+        }
+        if (n > 0) {
+            pos += (size_t)n;
+        }
+    }
+    if (pos < bufsize - 1) {
+        buf[pos++] = ']';
+    }
+    buf[pos] = '\0';
+    return pos;
+}
+
 /* Classify a resolved call by library identity and emit the appropriate edge.
  * Extracted from resolve_worker to keep cognitive complexity under threshold. */
 static void emit_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
@@ -759,23 +818,46 @@ static void emit_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
         int64_t route_id =
             cbm_gbuf_upsert_node(gbuf, "Route", arg, route_qn, "", 0, 0, route_props);
 
-        char props[512];
-        snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"url_path\":\"%s\"%s%s%s%s%s%s}",
-                 call->callee_name, arg, method ? ",\"method\":\"" : "", method ? method : "",
-                 method ? "\"" : "", broker ? ",\"broker\":\"" : "", broker ? broker : "",
-                 broker ? "\"" : "");
+        char props[2048];
+        int n = snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"url_path\":\"%s\"%s%s%s%s%s%s",
+                         call->callee_name, arg, method ? ",\"method\":\"" : "",
+                         method ? method : "", method ? "\"" : "", broker ? ",\"broker\":\"" : "",
+                         broker ? broker : "", broker ? "\"" : "");
+        if (n > 0 && (size_t)n < sizeof(props) - 2) {
+            size_t pos = append_args_json(props, sizeof(props), (size_t)n, call);
+            if (pos < sizeof(props) - 1) {
+                props[pos] = '}';
+                props[pos + 1] = '\0';
+            }
+        }
         cbm_gbuf_insert_edge(gbuf, source->id, route_id, edge_type, props);
     } else if (svc == CBM_SVC_CONFIG) {
-        char props[512];
-        snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"key\":\"%s\",\"confidence\":%.2f}",
-                 call->callee_name, arg != NULL ? arg : "", res->confidence);
+        char props[2048];
+        int n =
+            snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"key\":\"%s\",\"confidence\":%.2f",
+                     call->callee_name, arg != NULL ? arg : "", res->confidence);
+        if (n > 0 && (size_t)n < sizeof(props) - 2) {
+            size_t pos = append_args_json(props, sizeof(props), (size_t)n, call);
+            if (pos < sizeof(props) - 1) {
+                props[pos] = '}';
+                props[pos + 1] = '\0';
+            }
+        }
         cbm_gbuf_insert_edge(gbuf, source->id, target->id, "CONFIGURES", props);
     } else {
-        char props[512];
-        snprintf(props, sizeof(props),
-                 "{\"callee\":\"%s\",\"confidence\":%.2f,\"strategy\":\"%s\",\"candidates\":%d}",
-                 call->callee_name, res->confidence, res->strategy ? res->strategy : "unknown",
-                 res->candidate_count);
+        char props[2048];
+        int n = snprintf(props, sizeof(props),
+                         "{\"callee\":\"%s\",\"confidence\":%.2f,\"strategy\":\"%s\","
+                         "\"candidates\":%d",
+                         call->callee_name, res->confidence,
+                         res->strategy ? res->strategy : "unknown", res->candidate_count);
+        if (n > 0 && (size_t)n < sizeof(props) - 2) {
+            size_t pos = append_args_json(props, sizeof(props), (size_t)n, call);
+            if (pos < sizeof(props) - 1) {
+                props[pos] = '}';
+                props[pos + 1] = '\0';
+            }
+        }
         cbm_gbuf_insert_edge(gbuf, source->id, target->id, "CALLS", props);
     }
 }

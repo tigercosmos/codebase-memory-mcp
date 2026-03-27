@@ -54,6 +54,7 @@ extern void suite_ui(void);
 extern void suite_security(void);
 extern void suite_yaml(void);
 extern void suite_integration(void);
+extern void suite_incremental(void);
 
 int main(void) {
     printf("\n  codebase-memory-mcp  C test suite\n");
@@ -147,6 +148,7 @@ int main(void) {
 
     /* Integration (end-to-end) */
     RUN_SUITE(integration);
+    RUN_SUITE(incremental);
 
     /* Release sqlite3 internal caches so ASan doesn't report them as leaks */
     sqlite3_shutdown();

@@ -283,7 +283,7 @@ TEST_GO_LSP_SRCS = tests/test_go_lsp.c
 
 TEST_C_LSP_SRCS = tests/test_c_lsp.c
 
-TEST_INTEGRATION_SRCS = tests/test_integration.c
+TEST_INTEGRATION_SRCS = tests/test_integration.c tests/test_incremental.c
 
 TEST_TRACES_SRCS = tests/test_traces.c
 

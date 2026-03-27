@@ -2502,7 +2502,7 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
             continue;
         }
 
-        yyjson_mut_arr_add_str(doc, changed, line);
+        yyjson_mut_arr_add_strcpy(doc, changed, line);
         file_count++;
 
         /* Find symbols defined in this file */
@@ -2514,9 +2514,9 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
             if (nodes[i].label && strcmp(nodes[i].label, "File") != 0 &&
                 strcmp(nodes[i].label, "Folder") != 0 && strcmp(nodes[i].label, "Project") != 0) {
                 yyjson_mut_val *item = yyjson_mut_obj(doc);
-                yyjson_mut_obj_add_str(doc, item, "name", nodes[i].name ? nodes[i].name : "");
-                yyjson_mut_obj_add_str(doc, item, "label", nodes[i].label);
-                yyjson_mut_obj_add_str(doc, item, "file", line);
+                yyjson_mut_obj_add_strcpy(doc, item, "name", nodes[i].name ? nodes[i].name : "");
+                yyjson_mut_obj_add_strcpy(doc, item, "label", nodes[i].label);
+                yyjson_mut_obj_add_strcpy(doc, item, "file", line);
                 yyjson_mut_arr_add_val(impacted, item);
             }
         }
@@ -2592,7 +2592,7 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
                     while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
                         line[--len] = '\0';
                     }
-                    yyjson_mut_arr_add_str(doc, sections, line);
+                    yyjson_mut_arr_add_strcpy(doc, sections, line);
                 }
             }
             (void)fclose(fp);

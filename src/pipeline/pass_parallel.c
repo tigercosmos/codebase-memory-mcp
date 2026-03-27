@@ -16,6 +16,7 @@
 #include "foundation/compat.h"
 #include "foundation/compat_thread.h"
 #include "graph_buffer/graph_buffer.h"
+#include "service_patterns.h"
 // NOLINTNEXTLINE(misc-include-cleaner) — platform.h included for interface contract
 #include "foundation/platform.h"
 #include "foundation/log.h"
@@ -998,6 +999,63 @@ typedef struct {
     _Atomic int next_file_idx;
 } resolve_ctx_t;
 
+/* Classify a resolved call by library identity and emit the appropriate edge.
+ * Extracted from resolve_worker to keep cognitive complexity under threshold. */
+static void emit_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
+                              const cbm_gbuf_node_t *target, const CBMCall *call,
+                              const cbm_resolution_t *res) {
+    cbm_svc_kind_t svc = cbm_service_pattern_match(res->qualified_name);
+    const char *arg = call->first_string_arg;
+
+    int has_url = (arg != NULL && arg[0] != '\0' && (arg[0] == '/' || strstr(arg, "://") != NULL));
+    int has_topic = (arg != NULL && arg[0] != '\0' && svc == CBM_SVC_ASYNC && strlen(arg) > 2);
+
+    if ((svc == CBM_SVC_HTTP || svc == CBM_SVC_ASYNC) && (has_url || has_topic)) {
+        const char *edge_type = (svc == CBM_SVC_HTTP) ? "HTTP_CALLS" : "ASYNC_CALLS";
+        const char *method =
+            (svc == CBM_SVC_HTTP) ? cbm_service_pattern_http_method(call->callee_name) : NULL;
+        const char *broker =
+            (svc == CBM_SVC_ASYNC) ? cbm_service_pattern_broker(res->qualified_name) : NULL;
+
+        char route_qn[CBM_ROUTE_QN_SIZE];
+        if (svc == CBM_SVC_HTTP) {
+            snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", method ? method : "ANY", arg);
+        } else {
+            snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", broker ? broker : "async", arg);
+        }
+
+        char route_props[256];
+        if (method != NULL) {
+            snprintf(route_props, sizeof(route_props), "{\"method\":\"%s\"}", method);
+        } else if (broker != NULL) {
+            snprintf(route_props, sizeof(route_props), "{\"broker\":\"%s\"}", broker);
+        } else {
+            snprintf(route_props, sizeof(route_props), "{}");
+        }
+        int64_t route_id =
+            cbm_gbuf_upsert_node(gbuf, "Route", arg, route_qn, "", 0, 0, route_props);
+
+        char props[512];
+        snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"url_path\":\"%s\"%s%s%s%s%s%s}",
+                 call->callee_name, arg, method ? ",\"method\":\"" : "", method ? method : "",
+                 method ? "\"" : "", broker ? ",\"broker\":\"" : "", broker ? broker : "",
+                 broker ? "\"" : "");
+        cbm_gbuf_insert_edge(gbuf, source->id, route_id, edge_type, props);
+    } else if (svc == CBM_SVC_CONFIG) {
+        char props[512];
+        snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"key\":\"%s\",\"confidence\":%.2f}",
+                 call->callee_name, arg != NULL ? arg : "", res->confidence);
+        cbm_gbuf_insert_edge(gbuf, source->id, target->id, "CONFIGURES", props);
+    } else {
+        char props[512];
+        snprintf(props, sizeof(props),
+                 "{\"callee\":\"%s\",\"confidence\":%.2f,\"strategy\":\"%s\",\"candidates\":%d}",
+                 call->callee_name, res->confidence, res->strategy ? res->strategy : "unknown",
+                 res->candidate_count);
+        cbm_gbuf_insert_edge(gbuf, source->id, target->id, "CALLS", props);
+    }
+}
+
 static void resolve_worker(int worker_id, void *ctx_ptr) {
     resolve_ctx_t *rc = ctx_ptr;
     resolve_worker_state_t *ws = &rc->workers[worker_id];
@@ -1069,12 +1127,8 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                 continue;
             }
 
-            char props[256];
-            snprintf(props, sizeof(props),
-                     "{\"confidence\":%.2f,\"strategy\":\"%s\",\"candidates\":%d}", res.confidence,
-                     res.strategy ? res.strategy : "unknown", res.candidate_count);
-            cbm_gbuf_insert_edge(ws->local_edge_buf, source_node->id, target_node->id, "CALLS",
-                                 props);
+            /* Classify and emit edge via helper (keeps resolve_worker complexity down) */
+            emit_service_edge(ws->local_edge_buf, source_node, target_node, call, &res);
             ws->calls_resolved++;
         }
 
@@ -1109,7 +1163,11 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                 continue;
             }
 
-            cbm_gbuf_insert_edge(ws->local_edge_buf, src->id, tgt->id, "USAGE", "{}");
+            {
+                char uprops[256];
+                snprintf(uprops, sizeof(uprops), "{\"callee\":\"%s\"}", usage->ref_name);
+                cbm_gbuf_insert_edge(ws->local_edge_buf, src->id, tgt->id, "USAGE", uprops);
+            }
             ws->usages_resolved++;
         }
 

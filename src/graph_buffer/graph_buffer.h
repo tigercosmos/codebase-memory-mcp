@@ -102,6 +102,22 @@ void cbm_gbuf_set_next_id(cbm_gbuf_t *gb, int64_t next_id);
 /* Delete all nodes with a label. Cascade-deletes referencing edges. */
 int cbm_gbuf_delete_by_label(cbm_gbuf_t *gb, const char *label);
 
+/* Delete all nodes for a given file path. Cascade-deletes referencing edges.
+ * Used by incremental indexing to remove stale nodes before re-extraction. */
+int cbm_gbuf_delete_by_file(cbm_gbuf_t *gb, const char *file_path);
+
+/* Bulk-load all nodes and edges for a project from an existing SQLite DB
+ * into this graph buffer. Returns 0 on success. */
+int cbm_gbuf_load_from_db(cbm_gbuf_t *gb, const char *db_path, const char *project);
+
+/* Iterate all live nodes (not deleted from QN index). */
+typedef void (*cbm_gbuf_node_visitor_fn)(const cbm_gbuf_node_t *node, void *userdata);
+void cbm_gbuf_foreach_node(const cbm_gbuf_t *gb, cbm_gbuf_node_visitor_fn fn, void *userdata);
+
+/* Iterate all edges. */
+typedef void (*cbm_gbuf_edge_visitor_fn)(const cbm_gbuf_edge_t *edge, void *userdata);
+void cbm_gbuf_foreach_edge(const cbm_gbuf_t *gb, cbm_gbuf_edge_visitor_fn fn, void *userdata);
+
 /* ── Edge operations ─────────────────────────────────────────────── */
 
 /* Insert an edge. Deduplicates by (source_id, target_id, type).

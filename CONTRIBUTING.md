@@ -118,8 +118,32 @@ Examples: `fix(store): set busy_timeout before WAL`, `feat(cli): add --progress 
 
 ## Pull Request Guidelines
 
-- **One issue per PR.** Each PR must address exactly one bug, one feature, or one refactor. Do not bundle multiple fixes or feature additions into a single PR. If your change touches multiple areas, split it into separate PRs.
-- **Open an issue first.** Every PR should reference a tracking issue (`Fixes #N` or `Closes #N`). This ensures the change is discussed before code is written.
+### Before You Write Code
+
+- **Open an issue first — always.** Every PR must reference a tracking issue (`Fixes #N` or `Closes #N`). Describe what you want to change and why. Wait for maintainer feedback before implementing. PRs without a prior issue discussion will be closed.
+- **Bug fixes and test additions** are the exception — these are welcome without prior discussion, as long as they're focused.
+
+### What Requires Explicit Maintainer Approval
+
+The following changes will not be merged without prior design discussion in an issue:
+
+- **API surface changes** — adding, removing, renaming, or changing defaults of MCP tools
+- **New pipeline passes or indexing algorithms** — anything that changes what gets extracted or how
+- **Build system / Makefile changes** — beyond trivial fixes
+- **Project configuration** — CLAUDE.md, skill files, .mcp.json, CI workflows
+- **New dependencies** — vendored or otherwise
+- **Breaking changes** of any kind
+
+If in doubt, open an issue and ask.
+
+### PR Scope and Size
+
+- **One issue per PR.** Each PR must address exactly one bug, one feature, or one refactor. Do not bundle multiple fixes or feature additions into a single PR. Kitchen-sink PRs will be closed with a request to split.
+- **Keep PRs small.** A good PR is under 500 lines. If your change is larger, split it into reviewable increments that each stand on their own.
+- **Don't mix features with fixes.** If you find a bug while implementing a feature, submit the bug fix as a separate PR.
+
+### Code Requirements
+
 - **C code only** — this project was rewritten from Go to pure C in v0.5.0. Go PRs will be acknowledged and potentially ported, but cannot be merged directly.
 - Include tests for new functionality
 - Run `scripts/test.sh` and `scripts/lint.sh` before submitting

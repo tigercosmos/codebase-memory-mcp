@@ -15,6 +15,7 @@
 #include "foundation/compat.h"
 #include "foundation/log.h"
 #include "foundation/dyn_array.h"
+#include <sqlite3.h>
 
 #include <stdatomic.h>
 #include <stdint.h> // int64_t
@@ -506,6 +507,253 @@ int cbm_gbuf_delete_by_label(cbm_gbuf_t *gb, const char *label) {
     return 0;
 }
 
+int cbm_gbuf_delete_by_file(cbm_gbuf_t *gb, const char *file_path) {
+    if (!gb || !file_path) {
+        return -1;
+    }
+
+    /* Collect IDs of nodes in this file */
+    CBMHashTable *deleted_set = cbm_ht_create(64);
+    int deleted_count = 0;
+    int scanned = 0;
+
+    for (int i = 0; i < gb->nodes.count; i++) {
+        cbm_gbuf_node_t *n = gb->nodes.items[i];
+        scanned++;
+        if (!n->file_path || strcmp(n->file_path, file_path) != 0) {
+            continue;
+        }
+        if (!n->qualified_name || !cbm_ht_get(gb->node_by_qn, n->qualified_name)) {
+            continue;
+        }
+
+        char id_buf[32];
+        make_id_key(id_buf, sizeof(id_buf), n->id);
+        cbm_ht_set(deleted_set, strdup(id_buf), (void *)1);
+
+        /* Remove from label index */
+        node_ptr_array_t *label_arr = cbm_ht_get(gb->nodes_by_label, n->label);
+        if (label_arr) {
+            for (int j = 0; j < label_arr->count; j++) {
+                if (label_arr->items[j]->id == n->id) {
+                    label_arr->items[j] = label_arr->items[--label_arr->count];
+                    break;
+                }
+            }
+        }
+
+        /* Remove from name index */
+        node_ptr_array_t *name_arr = cbm_ht_get(gb->nodes_by_name, n->name);
+        if (name_arr) {
+            for (int j = 0; j < name_arr->count; j++) {
+                if (name_arr->items[j]->id == n->id) {
+                    name_arr->items[j] = name_arr->items[--name_arr->count];
+                    break;
+                }
+            }
+        }
+
+        cbm_ht_delete(gb->node_by_qn, n->qualified_name);
+        const char *stored_key = cbm_ht_get_key(gb->node_by_id, id_buf);
+        cbm_ht_delete(gb->node_by_id, id_buf);
+        free((void *)stored_key);
+
+        /* NULL out QN so dump's liveness check (cbm_ht_get by QN) fails
+         * even if a new node with the same QN is inserted later via merge. */
+        free(n->qualified_name);
+        n->qualified_name = NULL;
+        deleted_count++;
+    }
+
+    if (deleted_count == 0) {
+        cbm_ht_free(deleted_set);
+        return 0;
+    }
+
+    /* Cascade-delete edges referencing deleted nodes */
+    int write_idx = 0;
+    for (int i = 0; i < gb->edges.count; i++) {
+        cbm_gbuf_edge_t *e = gb->edges.items[i];
+        char src_id[32];
+        char tgt_id[32];
+        make_id_key(src_id, sizeof(src_id), e->source_id);
+        make_id_key(tgt_id, sizeof(tgt_id), e->target_id);
+
+        if (cbm_ht_get(deleted_set, src_id) || cbm_ht_get(deleted_set, tgt_id)) {
+            char key[EDGE_KEY_BUF];
+            make_edge_key(key, sizeof(key), e->source_id, e->target_id, e->type);
+            const char *ekey = cbm_ht_get_key(gb->edge_by_key, key);
+            cbm_ht_delete(gb->edge_by_key, key);
+            free((void *)ekey);
+
+            make_src_type_key(key, sizeof(key), e->source_id, e->type);
+            edge_ptr_array_t *st = cbm_ht_get(gb->edges_by_source_type, key);
+            if (st) {
+                for (int j = 0; j < st->count; j++) {
+                    if (st->items[j]->id == e->id) {
+                        st->items[j] = st->items[--st->count];
+                        break;
+                    }
+                }
+            }
+
+            make_src_type_key(key, sizeof(key), e->target_id, e->type);
+            edge_ptr_array_t *tt = cbm_ht_get(gb->edges_by_target_type, key);
+            if (tt) {
+                for (int j = 0; j < tt->count; j++) {
+                    if (tt->items[j]->id == e->id) {
+                        tt->items[j] = tt->items[--tt->count];
+                        break;
+                    }
+                }
+            }
+
+            edge_ptr_array_t *bt = cbm_ht_get(gb->edges_by_type, e->type);
+            if (bt) {
+                for (int j = 0; j < bt->count; j++) {
+                    if (bt->items[j]->id == e->id) {
+                        bt->items[j] = bt->items[--bt->count];
+                        break;
+                    }
+                }
+            }
+
+            free_edge_strings(e);
+            free(e);
+        } else {
+            gb->edges.items[write_idx++] = gb->edges.items[i];
+        }
+    }
+    gb->edges.count = write_idx;
+
+    cbm_ht_foreach(deleted_set, free_key_only, NULL);
+    cbm_ht_free(deleted_set);
+    {
+        char s_buf[16];
+        char d_buf[16];
+        snprintf(s_buf, sizeof(s_buf), "%d", scanned);
+        snprintf(d_buf, sizeof(d_buf), "%d", deleted_count);
+        cbm_log_info("gbuf.delete_by_file", "file", file_path, "scanned", s_buf, "deleted", d_buf);
+    }
+    return deleted_count;
+}
+
+int cbm_gbuf_load_from_db(cbm_gbuf_t *gb, const char *db_path, const char *project) {
+    if (!gb || !db_path || !project) {
+        return -1;
+    }
+
+    cbm_store_t *store = cbm_store_open_path(db_path);
+    if (!store) {
+        return -1;
+    }
+
+    sqlite3 *db = cbm_store_get_db(store);
+    if (!db) {
+        cbm_store_close(store);
+        return -1;
+    }
+
+    /* First pass: find max node ID for mapping array */
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, "SELECT MAX(id) FROM nodes WHERE project = ?", -1, &stmt, NULL) !=
+        SQLITE_OK) {
+        cbm_store_close(store);
+        return -1;
+    }
+    sqlite3_bind_text(stmt, 1, project, -1, SQLITE_STATIC);
+    int64_t max_old_id = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        max_old_id = sqlite3_column_int64(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+
+    int64_t *old_to_new = calloc((size_t)(max_old_id + 1), sizeof(int64_t));
+    if (!old_to_new) {
+        cbm_store_close(store);
+        return -1;
+    }
+
+    /* Load all nodes */
+    if (sqlite3_prepare_v2(
+            db,
+            "SELECT id, label, name, qualified_name, file_path, start_line, end_line, properties "
+            "FROM nodes WHERE project = ? ORDER BY id",
+            -1, &stmt, NULL) != SQLITE_OK) {
+        free(old_to_new);
+        cbm_store_close(store);
+        return -1;
+    }
+    sqlite3_bind_text(stmt, 1, project, -1, SQLITE_STATIC);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int64_t old_id = sqlite3_column_int64(stmt, 0);
+        const char *label = (const char *)sqlite3_column_text(stmt, 1);
+        const char *name = (const char *)sqlite3_column_text(stmt, 2);
+        const char *qn = (const char *)sqlite3_column_text(stmt, 3);
+        const char *fp = (const char *)sqlite3_column_text(stmt, 4);
+        int sl = sqlite3_column_int(stmt, 5);
+        int el = sqlite3_column_int(stmt, 6);
+        const char *props = (const char *)sqlite3_column_text(stmt, 7);
+
+        int64_t new_id = cbm_gbuf_upsert_node(gb, label, name, qn, fp, sl, el, props);
+        if (new_id > 0 && old_id <= max_old_id) {
+            old_to_new[old_id] = new_id;
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    /* Load all edges, remap IDs */
+    if (sqlite3_prepare_v2(db,
+                           "SELECT source_id, target_id, type, properties "
+                           "FROM edges WHERE project = ?",
+                           -1, &stmt, NULL) != SQLITE_OK) {
+        free(old_to_new);
+        cbm_store_close(store);
+        return -1;
+    }
+    sqlite3_bind_text(stmt, 1, project, -1, SQLITE_STATIC);
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int64_t old_src = sqlite3_column_int64(stmt, 0);
+        int64_t old_tgt = sqlite3_column_int64(stmt, 1);
+        const char *type = (const char *)sqlite3_column_text(stmt, 2);
+        const char *props = (const char *)sqlite3_column_text(stmt, 3);
+
+        int64_t new_src = (old_src <= max_old_id) ? old_to_new[old_src] : 0;
+        int64_t new_tgt = (old_tgt <= max_old_id) ? old_to_new[old_tgt] : 0;
+        if (new_src > 0 && new_tgt > 0) {
+            cbm_gbuf_insert_edge(gb, new_src, new_tgt, type, props);
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    free(old_to_new);
+    cbm_store_close(store);
+    return 0;
+}
+
+void cbm_gbuf_foreach_node(const cbm_gbuf_t *gb, cbm_gbuf_node_visitor_fn fn, void *userdata) {
+    if (!gb || !fn) {
+        return;
+    }
+    for (int i = 0; i < gb->nodes.count; i++) {
+        const cbm_gbuf_node_t *n = gb->nodes.items[i];
+        if (n->qualified_name && cbm_ht_get(gb->node_by_qn, n->qualified_name)) {
+            fn(n, userdata);
+        }
+    }
+}
+
+void cbm_gbuf_foreach_edge(const cbm_gbuf_t *gb, cbm_gbuf_edge_visitor_fn fn, void *userdata) {
+    if (!gb || !fn) {
+        return;
+    }
+    for (int i = 0; i < gb->edges.count; i++) {
+        fn(gb->edges.items[i], userdata);
+    }
+}
+
 /* ── Edge operations ─────────────────────────────────────────────── */
 
 int64_t cbm_gbuf_insert_edge(cbm_gbuf_t *gb, int64_t source_id, int64_t target_id, const char *type,
@@ -866,7 +1114,7 @@ int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
     int live_count = 0;
     for (int i = 0; i < gb->nodes.count; i++) {
         cbm_gbuf_node_t *n = gb->nodes.items[i];
-        if (cbm_ht_get(gb->node_by_qn, n->qualified_name)) {
+        if (n->qualified_name && cbm_ht_get(gb->node_by_qn, n->qualified_name)) {
             live_count++;
         }
     }
@@ -885,7 +1133,7 @@ int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
 
     for (int i = 0; i < gb->nodes.count; i++) {
         cbm_gbuf_node_t *n = gb->nodes.items[i];
-        if (!cbm_ht_get(gb->node_by_qn, n->qualified_name)) {
+        if (!n->qualified_name || !cbm_ht_get(gb->node_by_qn, n->qualified_name)) {
             continue;
         }
 
@@ -1037,7 +1285,7 @@ int cbm_gbuf_flush_to_store(cbm_gbuf_t *gb, cbm_store_t *store) {
         cbm_gbuf_node_t *n = gb->nodes.items[i];
 
         /* Skip if deleted from QN index */
-        if (!cbm_ht_get(gb->node_by_qn, n->qualified_name)) {
+        if (!n->qualified_name || !cbm_ht_get(gb->node_by_qn, n->qualified_name)) {
             continue;
         }
 
@@ -1099,7 +1347,7 @@ int cbm_gbuf_merge_into_store(cbm_gbuf_t *gb, cbm_store_t *store) {
     for (int i = 0; i < gb->nodes.count; i++) {
         cbm_gbuf_node_t *n = gb->nodes.items[i];
 
-        if (!cbm_ht_get(gb->node_by_qn, n->qualified_name)) {
+        if (!n->qualified_name || !cbm_ht_get(gb->node_by_qn, n->qualified_name)) {
             continue;
         }
 

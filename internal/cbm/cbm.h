@@ -110,6 +110,7 @@ typedef struct {
 typedef struct {
     const char *callee_name;       // raw callee text ("pkg.Func", "foo")
     const char *enclosing_func_qn; // QN of enclosing function (or module QN)
+    const char *first_string_arg;  // first string literal argument (URL, topic, key) or NULL
 } CBMCall;
 
 typedef struct {
@@ -148,6 +149,19 @@ typedef struct {
     const char *type_name;         // class/type name of RHS constructor
     const char *enclosing_func_qn; // QN of enclosing function
 } CBMTypeAssign;
+
+// String reference: URL, config key, or async target found in source.
+// Extracted from string literals during AST walk.
+typedef enum {
+    CBM_STRREF_URL = 0,    // REST path or full URL
+    CBM_STRREF_CONFIG = 1, // config file path or env var key
+} CBMStringRefKind;
+
+typedef struct {
+    const char *value;             // the string literal content
+    const char *enclosing_func_qn; // QN of enclosing function
+    CBMStringRefKind kind;         // URL, CONFIG
+} CBMStringRef;
 
 // Rust: impl Trait for Struct
 typedef struct {
@@ -226,6 +240,12 @@ typedef struct {
 } CBMTypeAssignArray;
 
 typedef struct {
+    CBMStringRef *items;
+    int count;
+    int cap;
+} CBMStringRefArray;
+
+typedef struct {
     CBMImplTrait *items;
     int count;
     int cap;
@@ -246,6 +266,7 @@ typedef struct {
     CBMTypeAssignArray type_assigns;
     CBMImplTraitArray impl_traits;       // Rust: impl Trait for Struct pairs
     CBMResolvedCallArray resolved_calls; // LSP-resolved calls (high confidence)
+    CBMStringRefArray string_refs;       // URL/config string literals from AST
 
     const char *module_qn;    // module qualified name
     const char **exports;     // NULL-terminated (NULL if none)
@@ -279,6 +300,14 @@ typedef struct {
 
 // --- Extraction context passed to sub-extractors ---
 
+// Module-level string constant map (for constant propagation)
+#define CBM_MAX_STRING_CONSTANTS 256
+typedef struct {
+    const char *names[CBM_MAX_STRING_CONSTANTS];
+    const char *values[CBM_MAX_STRING_CONSTANTS];
+    int count;
+} CBMStringConstantMap;
+
 typedef struct {
     CBMArena *arena;
     CBMFileResult *result;
@@ -289,8 +318,9 @@ typedef struct {
     const char *rel_path;
     const char *module_qn;
     TSNode root;
-    EFCache ef_cache;               // enclosing function cache
-    const char *enclosing_class_qn; // for nested class QN computation
+    EFCache ef_cache;                      // enclosing function cache
+    const char *enclosing_class_qn;        // for nested class QN computation
+    CBMStringConstantMap string_constants; // module-level NAME = "value" pairs
 } CBMExtractCtx;
 
 // --- Public API ---
@@ -346,6 +376,7 @@ void cbm_rw_push(CBMRWArray *arr, CBMArena *a, CBMReadWrite rw);
 void cbm_typerefs_push(CBMTypeRefArray *arr, CBMArena *a, CBMTypeRef tr);
 void cbm_envaccess_push(CBMEnvAccessArray *arr, CBMArena *a, CBMEnvAccess ea);
 void cbm_typeassign_push(CBMTypeAssignArray *arr, CBMArena *a, CBMTypeAssign ta);
+void cbm_stringref_push(CBMStringRefArray *arr, CBMArena *a, CBMStringRef sr);
 void cbm_impltrait_push(CBMImplTraitArray *arr, CBMArena *a, CBMImplTrait it);
 void cbm_resolvedcall_push(CBMResolvedCallArray *arr, CBMArena *a, CBMResolvedCall rc);
 

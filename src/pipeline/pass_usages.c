@@ -274,7 +274,11 @@ int cbm_pipeline_pass_usages(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *fil
                 continue;
             }
 
-            cbm_gbuf_insert_edge(ctx->gbuf, src->id, tgt->id, "USAGE", "{}");
+            {
+                char uprops[256];
+                snprintf(uprops, sizeof(uprops), "{\"callee\":\"%s\"}", usage->ref_name);
+                cbm_gbuf_insert_edge(ctx->gbuf, src->id, tgt->id, "USAGE", uprops);
+            }
             usage_resolved++;
         }
 

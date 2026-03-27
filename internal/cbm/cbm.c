@@ -124,6 +124,11 @@ void cbm_typeassign_push(CBMTypeAssignArray *arr, CBMArena *a, CBMTypeAssign ta)
     arr->items[arr->count++] = ta;
 }
 
+void cbm_stringref_push(CBMStringRefArray *arr, CBMArena *a, CBMStringRef sr) {
+    GROW_ARRAY(arr, a);
+    arr->items[arr->count++] = sr;
+}
+
 void cbm_impltrait_push(CBMImplTraitArray *arr, CBMArena *a, CBMImplTrait it) {
     GROW_ARRAY(arr, a);
     arr->items[arr->count++] = it;

@@ -8,6 +8,20 @@
 #include <string.h>
 #include <ctype.h>
 
+/* Look up a module-level string constant by name. */
+static const char *lookup_string_constant(const CBMExtractCtx *ctx, const char *name) {
+    if (!name || !name[0]) {
+        return NULL;
+    }
+    const CBMStringConstantMap *map = &ctx->string_constants;
+    for (int i = 0; i < map->count; i++) {
+        if (strcmp(map->names[i], name) == 0) {
+            return map->values[i];
+        }
+    }
+    return NULL;
+}
+
 // Forward declarations
 static void walk_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec);
 static char *extract_callee_name(CBMArena *a, TSNode node, const char *source, CBMLanguage lang);
@@ -256,6 +270,46 @@ static void walk_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec)
                 CBMCall call;
                 call.callee_name = callee;
                 call.enclosing_func_qn = cbm_enclosing_func_qn_cached(ctx, node);
+                call.first_string_arg = NULL;
+
+                /* Extract first string literal argument (URL, topic, key) */
+                TSNode args = ts_node_child_by_field_name(node, "arguments", 9);
+                if (!ts_node_is_null(args)) {
+                    uint32_t nc = ts_node_named_child_count(args);
+                    for (uint32_t ai = 0; ai < nc && ai < 3; ai++) {
+                        TSNode arg = ts_node_named_child(args, ai);
+                        const char *ak = ts_node_type(arg);
+                        if (strcmp(ak, "string") == 0 || strcmp(ak, "string_literal") == 0 ||
+                            strcmp(ak, "interpreted_string_literal") == 0 ||
+                            strcmp(ak, "raw_string_literal") == 0 ||
+                            strcmp(ak, "string_content") == 0) {
+                            char *text = cbm_node_text(ctx->arena, arg, ctx->source);
+                            if (text && text[0]) {
+                                /* Strip quotes */
+                                int len = (int)strlen(text);
+                                if (len >= 2 && (text[0] == '"' || text[0] == '\'')) {
+                                    text =
+                                        cbm_arena_strndup(ctx->arena, text + 1, (size_t)(len - 2));
+                                    len -= 2;
+                                }
+                                /* Validate: must be printable ASCII, no control chars */
+                                // NOLINTNEXTLINE(readability-implicit-bool-conversion)
+                                bool valid = (text != NULL && len > 0 && len < 512);
+                                for (int vi = 0; vi < len && valid; vi++) {
+                                    unsigned char ch = (unsigned char)text[vi];
+                                    if (ch < 0x20 && ch != '\t') {
+                                        valid = false;
+                                    }
+                                }
+                                if (valid) {
+                                    call.first_string_arg = text;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+
                 cbm_calls_push(&ctx->result->calls, ctx->arena, call);
             }
         }
@@ -294,7 +348,7 @@ static void extract_jsx_refs(CBMExtractCtx *ctx, TSNode node) {
         return;
     }
 
-    CBMCall call;
+    CBMCall call = {0};
     call.callee_name = name;
     call.enclosing_func_qn = cbm_enclosing_func_qn_cached(ctx, node);
     cbm_calls_push(&ctx->result->calls, ctx->arena, call);
@@ -321,9 +375,135 @@ void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, Walk
     if (cbm_kind_in_set(node, spec->call_node_types)) {
         char *callee = extract_callee_name(ctx->arena, node, ctx->source, ctx->language);
         if (callee && callee[0] && !cbm_is_keyword(callee, ctx->language)) {
-            CBMCall call;
+            CBMCall call = {0};
             call.callee_name = callee;
             call.enclosing_func_qn = state->enclosing_func_qn;
+
+            /* Extract URL/topic/key from call arguments.
+             * Strategy: check keyword args first (url=, topic_id=, queue=),
+             * then first positional string, then resolve constant references. */
+            TSNode args = ts_node_child_by_field_name(node, "arguments", 9);
+            if (!ts_node_is_null(args)) {
+                /* Keyword patterns that indicate URL/topic/key */
+                static const char *url_keywords[] = {"url",        "endpoint", "path", "uri",
+                                                     "target_url", "base_url", NULL};
+                static const char *topic_keywords[] = {"topic",   "topic_id",   "topic_name",
+                                                       "queue",   "queue_name", "queue_id",
+                                                       "subject", "channel",    NULL};
+
+                uint32_t nc = ts_node_named_child_count(args);
+                for (uint32_t ai = 0; ai < nc && !call.first_string_arg; ai++) {
+                    TSNode arg = ts_node_named_child(args, ai);
+                    const char *ak = ts_node_type(arg);
+
+                    /* Check keyword_argument nodes: url="...", topic_id="..." */
+                    if (strcmp(ak, "keyword_argument") == 0 || strcmp(ak, "pair") == 0) {
+                        TSNode key_node = ts_node_child_by_field_name(arg, "name", 4);
+                        TSNode val_node = ts_node_child_by_field_name(arg, "value", 5);
+                        if (ts_node_is_null(key_node)) {
+                            key_node = ts_node_child_by_field_name(arg, "key", 3);
+                        }
+                        if (ts_node_is_null(key_node) || ts_node_is_null(val_node)) {
+                            continue;
+                        }
+
+                        char *key = cbm_node_text(ctx->arena, key_node, ctx->source);
+                        if (!key) {
+                            continue;
+                        }
+
+                        /* Check if key matches URL or topic patterns */
+                        bool is_url_kw = false;
+                        bool is_topic_kw = false;
+                        for (int ki = 0; url_keywords[ki]; ki++) {
+                            if (strcmp(key, url_keywords[ki]) == 0) {
+                                is_url_kw = true;
+                                break;
+                            }
+                        }
+                        if (!is_url_kw) {
+                            for (int ki = 0; topic_keywords[ki]; ki++) {
+                                if (strcmp(key, topic_keywords[ki]) == 0) {
+                                    is_topic_kw = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!is_url_kw && !is_topic_kw) {
+                            continue;
+                        }
+
+                        /* Extract value — string literal or constant reference */
+                        const char *vk = ts_node_type(val_node);
+                        if (strcmp(vk, "string") == 0 || strcmp(vk, "string_literal") == 0 ||
+                            strcmp(vk, "interpreted_string_literal") == 0 ||
+                            strcmp(vk, "raw_string_literal") == 0) {
+                            char *text = cbm_node_text(ctx->arena, val_node, ctx->source);
+                            if (text && text[0]) {
+                                int len = (int)strlen(text);
+                                if (len >= 2 && (text[0] == '"' || text[0] == '\'')) {
+                                    text =
+                                        cbm_arena_strndup(ctx->arena, text + 1, (size_t)(len - 2));
+                                }
+                                if (text && text[0]) {
+                                    call.first_string_arg = text;
+                                }
+                            }
+                        } else if (strcmp(vk, "identifier") == 0) {
+                            /* Constant reference: url=MY_URL_CONSTANT */
+                            char *const_name = cbm_node_text(ctx->arena, val_node, ctx->source);
+                            if (const_name) {
+                                const char *resolved = lookup_string_constant(ctx, const_name);
+                                if (resolved) {
+                                    call.first_string_arg = resolved;
+                                }
+                            }
+                        }
+                        continue;
+                    }
+
+                    /* First positional string argument (fallback) */
+                    if (ai < 3) {
+                        if (strcmp(ak, "string") == 0 || strcmp(ak, "string_literal") == 0 ||
+                            strcmp(ak, "interpreted_string_literal") == 0 ||
+                            strcmp(ak, "raw_string_literal") == 0) {
+                            char *text = cbm_node_text(ctx->arena, arg, ctx->source);
+                            if (text && text[0]) {
+                                int len = (int)strlen(text);
+                                if (len >= 2 && (text[0] == '"' || text[0] == '\'')) {
+                                    text =
+                                        cbm_arena_strndup(ctx->arena, text + 1, (size_t)(len - 2));
+                                    len -= 2;
+                                }
+                                /* Validate printable */
+                                // NOLINTNEXTLINE(readability-implicit-bool-conversion)
+                                bool valid = (text != NULL && len > 0 && len < 512);
+                                for (int vi = 0; vi < len && valid; vi++) {
+                                    if ((unsigned char)text[vi] < 0x20 && text[vi] != '\t') {
+                                        valid = false;
+                                    }
+                                }
+                                if (valid) {
+                                    call.first_string_arg = text;
+                                }
+                            }
+                            break;
+                        }
+                        /* Positional constant reference: create_task(MY_URL) */
+                        if (strcmp(ak, "identifier") == 0) {
+                            char *const_name = cbm_node_text(ctx->arena, arg, ctx->source);
+                            if (const_name) {
+                                const char *resolved = lookup_string_constant(ctx, const_name);
+                                if (resolved) {
+                                    call.first_string_arg = resolved;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
             cbm_calls_push(&ctx->result->calls, ctx->arena, call);
         }
     }
@@ -336,7 +516,7 @@ void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, Walk
             if (!ts_node_is_null(name_node)) {
                 char *name = cbm_node_text(ctx->arena, name_node, ctx->source);
                 if (name && name[0] >= 'A' && name[0] <= 'Z') {
-                    CBMCall call;
+                    CBMCall call = {0};
                     call.callee_name = name;
                     call.enclosing_func_qn = state->enclosing_func_qn;
                     cbm_calls_push(&ctx->result->calls, ctx->arena, call);

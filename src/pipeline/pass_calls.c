@@ -15,6 +15,7 @@
 #include "foundation/log.h"
 #include "foundation/compat.h"
 #include "cbm.h"
+#include "service_patterns.h"
 
 #include "foundation/compat_regex.h"
 
@@ -271,13 +272,87 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
                 continue;
             }
 
-            /* Create CALLS edge with confidence + strategy properties */
-            char props[256];
-            snprintf(props, sizeof(props),
-                     "{\"confidence\":%.2f,\"strategy\":\"%s\",\"candidates\":%d}", res.confidence,
-                     res.strategy ? res.strategy : "unknown", res.candidate_count);
+            /* Classify edge type by library in resolved QN */
+            cbm_svc_kind_t svc = cbm_service_pattern_match(res.qualified_name);
 
-            cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, target_node->id, "CALLS", props);
+            if (svc == CBM_SVC_HTTP || svc == CBM_SVC_ASYNC) {
+                /* HTTP/async call — route through Route node for cross-service traversal.
+                 * Only create Route if string looks like a URL (HTTP) or topic name (async). */
+                const char *url_or_topic = call->first_string_arg;
+                int is_valid_url =
+                    (url_or_topic != NULL && url_or_topic[0] != '\0' &&
+                     (url_or_topic[0] == '/' || strstr(url_or_topic, "://") != NULL));
+                int is_valid_topic = (url_or_topic != NULL && url_or_topic[0] != '\0' &&
+                                      svc == CBM_SVC_ASYNC && strlen(url_or_topic) > 2);
+                if (is_valid_url || is_valid_topic) {
+                    const char *edge_type = (svc == CBM_SVC_HTTP) ? "HTTP_CALLS" : "ASYNC_CALLS";
+                    const char *http_method =
+                        (svc == CBM_SVC_HTTP) ? cbm_service_pattern_http_method(call->callee_name)
+                                              : NULL;
+                    const char *broker = (svc == CBM_SVC_ASYNC)
+                                             ? cbm_service_pattern_broker(res.qualified_name)
+                                             : NULL;
+
+                    /* Build Route QN: __route__METHOD__/path or __route__broker__topic */
+                    char route_qn[CBM_ROUTE_QN_SIZE];
+                    if (svc == CBM_SVC_HTTP) {
+                        snprintf(route_qn, sizeof(route_qn), "__route__%s__%s",
+                                 http_method ? http_method : "ANY", url_or_topic);
+                    } else {
+                        snprintf(route_qn, sizeof(route_qn), "__route__%s__%s",
+                                 broker ? broker : "async", url_or_topic);
+                    }
+
+                    /* Create or find Route node */
+                    int64_t route_id = cbm_gbuf_upsert_node(
+                        ctx->gbuf, "Route", url_or_topic, route_qn, "", 0, 0,
+                        svc == CBM_SVC_HTTP ? (http_method ? http_method : "{}")
+                                            : (broker ? broker : "{}"));
+
+                    /* Edge: caller → Route */
+                    char props[512];
+                    snprintf(props, sizeof(props),
+                             "{\"callee\":\"%s\",\"url_path\":\"%s\"%s%s%s%s%s}", call->callee_name,
+                             url_or_topic, http_method ? ",\"method\":\"" : "",
+                             http_method ? http_method : "", http_method ? "\"" : "",
+                             broker ? ",\"broker\":\"" : "", broker ? broker : "");
+                    if (broker) {
+                        /* Close the broker value quote */
+                        size_t plen = strlen(props);
+                        if (plen > 0 && props[plen - 1] != '}') {
+                            snprintf(props + plen - 1, sizeof(props) - plen + 1, "\"}");
+                        }
+                    }
+                    cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, route_id, edge_type, props);
+                } else {
+                    /* No URL/topic extracted — fall through to normal CALLS edge */
+                    char props[512];
+                    snprintf(props, sizeof(props),
+                             "{\"callee\":\"%s\",\"confidence\":%.2f,\"strategy\":\"%s\","
+                             "\"candidates\":%d}",
+                             call->callee_name, res.confidence,
+                             res.strategy ? res.strategy : "unknown", res.candidate_count);
+                    cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, target_node->id, "CALLS",
+                                         props);
+                }
+            } else if (svc == CBM_SVC_CONFIG) {
+                char props[512];
+                snprintf(props, sizeof(props),
+                         "{\"callee\":\"%s\",\"key\":\"%s\",\"confidence\":%.2f}",
+                         call->callee_name, call->first_string_arg ? call->first_string_arg : "",
+                         res.confidence);
+                cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, target_node->id, "CONFIGURES",
+                                     props);
+            } else {
+                /* Normal CALLS edge */
+                char props[512];
+                snprintf(props, sizeof(props),
+                         "{\"callee\":\"%s\",\"confidence\":%.2f,\"strategy\":\"%s\","
+                         "\"candidates\":%d}",
+                         call->callee_name, res.confidence, res.strategy ? res.strategy : "unknown",
+                         res.candidate_count);
+                cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, target_node->id, "CALLS", props);
+            }
             resolved++;
         }
 

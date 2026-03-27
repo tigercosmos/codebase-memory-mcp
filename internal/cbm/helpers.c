@@ -848,3 +848,111 @@ char *cbm_fqn_folder(CBMArena *a, const char *project, const char *rel_dir) {
     *out = '\0';
     return buf;
 }
+
+/* ── String literal classifier ──────────────────────────────────── */
+
+static bool is_url_like(const char *s, int len) {
+    if (len < 3) {
+        return false;
+    }
+
+    /* Full URL: contains :// */
+    if (strstr(s, "://")) {
+        return true;
+    }
+
+    /* REST path: starts with / + alphanumeric */
+    if (s[0] == '/') {
+        /* Reject file system paths */
+        if (len > 4 && (strncmp(s, "/usr/", 5) == 0 || strncmp(s, "/bin/", 5) == 0 ||
+                        strncmp(s, "/etc/", 5) == 0 || strncmp(s, "/var/", 5) == 0 ||
+                        strncmp(s, "/tmp/", 5) == 0 || strncmp(s, "/opt/", 5) == 0 ||
+                        strncmp(s, "/home/", 6) == 0 || strncmp(s, "/dev/", 5) == 0 ||
+                        strncmp(s, "/sys/", 5) == 0 || strncmp(s, "/proc/", 6) == 0)) {
+            return false;
+        }
+        /* Reject regex patterns */
+        if (len > 1 && s[len - 1] == '/') {
+            return false;
+        }
+        if (s[1] == '^') {
+            return false;
+        }
+
+        /* Reject single / or // */
+        if (len == 1) {
+            return false;
+        }
+        if (len == 2 && s[1] == '/') {
+            return false;
+        }
+
+        /* Reject relative paths ./ ../ */
+        if (s[1] == '.') {
+            return false;
+        }
+
+        /* Must have at least one path segment with alphanumeric */
+        for (int i = 1; i < len && i < 20; i++) {
+            char c = s[i];
+            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    return false;
+}
+
+static bool has_config_extension(const char *s, int len) {
+    static const char *exts[] = {".toml", ".yaml", ".yml",  ".json",       ".ini",
+                                 ".env",  ".cfg",  ".conf", ".properties", NULL};
+    for (int i = 0; exts[i]; i++) {
+        int elen = (int)strlen(exts[i]);
+        if (len > elen && strcmp(s + len - elen, exts[i]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+static bool is_env_var_pattern(const char *s, int len) {
+    if (len < 3 || len > 64) {
+        return false;
+    }
+    bool has_upper = false;
+    bool has_underscore = false;
+    for (int i = 0; i < len; i++) {
+        char c = s[i];
+        if (c >= 'A' && c <= 'Z') {
+            has_upper = true;
+        } else if (c == '_') {
+            has_underscore = true;
+        } else if (c >= '0' && c <= '9') {
+            /* digits ok */
+        } else {
+            return false;
+        }
+    }
+    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
+    return has_upper && has_underscore;
+}
+
+int cbm_classify_string(const char *str, int len) {
+    if (!str || len < 2) {
+        return -1;
+    }
+
+    if (is_url_like(str, len)) {
+        return CBM_STRREF_URL;
+    }
+    if (has_config_extension(str, len)) {
+        return CBM_STRREF_CONFIG;
+    }
+    if (is_env_var_pattern(str, len)) {
+        return CBM_STRREF_CONFIG;
+    }
+
+    return -1;
+}

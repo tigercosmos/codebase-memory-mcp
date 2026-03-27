@@ -9,6 +9,10 @@ char *cbm_node_text(CBMArena *a, TSNode node, const char *source);
 // Check if a string is a language keyword (should be skipped as callee/usage).
 bool cbm_is_keyword(const char *name, CBMLanguage lang);
 
+// Classify a string literal as URL, config, or neither.
+// Returns CBM_STRREF_URL (0), CBM_STRREF_CONFIG (1), or -1 for neither.
+int cbm_classify_string(const char *str, int len);
+
 // Check if a name is exported per language convention.
 bool cbm_is_exported(const char *name, CBMLanguage lang);
 

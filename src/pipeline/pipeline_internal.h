@@ -19,6 +19,9 @@
 /* Maximum byte budget for tree-sitter extraction per file */
 #define CBM_EXTRACT_BUDGET 5000000
 
+/* Route node QN buffer size (must fit __route__METHOD__/full/url/path) */
+#define CBM_ROUTE_QN_SIZE 768
+
 /* Time unit conversions */
 #define CBM_NS_PER_SEC 1000000000LL
 #define CBM_US_PER_SEC 1000000LL
@@ -349,6 +352,11 @@ int cbm_build_registry_from_cache(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t
 int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count,
                          CBMFileResult **result_cache, _Atomic int64_t *shared_ids,
                          int worker_count);
+
+/* Post-merge: create Route nodes for HTTP_CALLS/ASYNC_CALLS edges that
+ * have url_path in properties but point to library functions instead of routes.
+ * Re-targets these edges to Route nodes for cross-service traversal. */
+void cbm_pipeline_create_route_nodes(cbm_gbuf_t *gb);
 
 /* ── Pass function prototypes ────────────────────────────────────── */
 

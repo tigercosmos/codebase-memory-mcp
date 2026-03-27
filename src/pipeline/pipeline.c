@@ -324,6 +324,33 @@ static void *gh_compute_thread_fn(void *arg) {
     return NULL;
 }
 
+/* Extract Route nodes from URL strings found in config files (YAML, HCL, TOML).
+ * These are infrastructure-defined endpoints (Cloud Scheduler, Terraform). */
+static void cbm_pipeline_extract_infra_routes(cbm_gbuf_t *gbuf, const cbm_file_info_t *files,
+                                              CBMFileResult **result_cache, int file_count) {
+    for (int i = 0; i < file_count; i++) {
+        if (!result_cache[i]) {
+            continue;
+        }
+        const char *fp = files[i].rel_path;
+        if (fp == NULL || (strstr(fp, ".yaml") == NULL && strstr(fp, ".yml") == NULL &&
+                           strstr(fp, ".tf") == NULL && strstr(fp, ".hcl") == NULL &&
+                           strstr(fp, ".toml") == NULL)) {
+            continue;
+        }
+        for (int si = 0; si < result_cache[i]->string_refs.count; si++) {
+            const CBMStringRef *sr = &result_cache[i]->string_refs.items[si];
+            if (sr->kind == CBM_STRREF_URL && sr->value != NULL &&
+                strstr(sr->value, "://") != NULL) {
+                char route_qn[CBM_ROUTE_QN_SIZE];
+                snprintf(route_qn, sizeof(route_qn), "__route__infra__%s", sr->value);
+                cbm_gbuf_upsert_node(gbuf, "Route", sr->value, route_qn, fp, 0, 0,
+                                     "{\"source\":\"infra\"}");
+            }
+        }
+    }
+}
+
 /* ── Pipeline run ────────────────────────────────────────────────── */
 
 int cbm_pipeline_run(cbm_pipeline_t *p) {
@@ -545,6 +572,9 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
         /* Sync gbuf ID counter after resolve merge */
         cbm_gbuf_set_next_id(p->gbuf, atomic_load(&shared_ids));
 
+        /* Create Route nodes from infrastructure config URLs */
+        cbm_pipeline_extract_infra_routes(p->gbuf, files, result_cache, file_count);
+
         /* Free cached extraction results */
         for (int i = 0; i < file_count; i++) {
             if (result_cache[i]) {
@@ -743,6 +773,14 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
         cbm_clock_gettime(CLOCK_MONOTONIC, &t);
         cbm_pipeline_pass_configlink(&ctx);
         cbm_log_info("pass.timing", "pass", "configlink", "elapsed_ms",
+                     itoa_buf((int)elapsed_ms(t)));
+    }
+
+    /* Match infra Route URLs (from YAML) to handler Routes (from code) */
+    if (!check_cancel(p)) {
+        cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+        cbm_pipeline_create_route_nodes(p->gbuf);
+        cbm_log_info("pass.timing", "pass", "route_match", "elapsed_ms",
                      itoa_buf((int)elapsed_ms(t)));
     }
 

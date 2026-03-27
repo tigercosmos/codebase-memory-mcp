@@ -119,6 +119,135 @@ static const char *compute_class_qn(CBMExtractCtx *ctx, TSNode node) {
     return cbm_fqn_compute(ctx->arena, ctx->project, ctx->rel_path, name);
 }
 
+/* Forward declaration */
+static bool is_string_node(const char *kind);
+
+// --- Module-level constant collection ---
+
+static void handle_string_constants(CBMExtractCtx *ctx, TSNode node, const WalkState *state) {
+    /* Only collect at module level (not inside functions/classes) */
+    if (state->enclosing_func_qn != NULL && state->enclosing_func_qn != ctx->module_qn) {
+        return;
+    }
+
+    const char *kind = ts_node_type(node);
+
+    /* Python: expression_statement → assignment → identifier = string */
+    /* Go: short_var_declaration, const_spec */
+    /* JS/TS: variable_declarator, lexical_declaration */
+    if (strcmp(kind, "assignment") != 0 && strcmp(kind, "expression_statement") != 0 &&
+        strcmp(kind, "short_var_declaration") != 0 && strcmp(kind, "const_spec") != 0 &&
+        strcmp(kind, "variable_declarator") != 0) {
+        return;
+    }
+
+    /* Find name (left side) and value (right side) */
+    TSNode name_node = ts_node_child_by_field_name(node, "left", 4);
+    TSNode value_node = ts_node_child_by_field_name(node, "right", 5);
+
+    /* Some grammars use "name" + "value" fields */
+    if (ts_node_is_null(name_node)) {
+        name_node = ts_node_child_by_field_name(node, "name", 4);
+    }
+    if (ts_node_is_null(value_node)) {
+        value_node = ts_node_child_by_field_name(node, "value", 5);
+    }
+
+    if (ts_node_is_null(name_node) || ts_node_is_null(value_node)) {
+        return;
+    }
+
+    /* Name must be an identifier */
+    const char *name_kind = ts_node_type(name_node);
+    if (strcmp(name_kind, "identifier") != 0 && strcmp(name_kind, "constant") != 0) {
+        return;
+    }
+
+    /* Value must be a string literal */
+    if (!is_string_node(ts_node_type(value_node))) {
+        return;
+    }
+
+    char *name = cbm_node_text(ctx->arena, name_node, ctx->source);
+    char *value = cbm_node_text(ctx->arena, value_node, ctx->source);
+    if (!name || !name[0] || !value || !value[0]) {
+        return;
+    }
+
+    /* Strip quotes from value */
+    int vlen = (int)strlen(value);
+    if (vlen >= 2 && (value[0] == '"' || value[0] == '\'')) {
+        value = cbm_arena_strndup(ctx->arena, value + 1, (size_t)(vlen - 2));
+        if (!value) {
+            return;
+        }
+    }
+
+    /* Add to constant map */
+    CBMStringConstantMap *map = &ctx->string_constants;
+    if (map->count < CBM_MAX_STRING_CONSTANTS) {
+        map->names[map->count] = name;
+        map->values[map->count] = value;
+        map->count++;
+    }
+}
+
+// --- String literal collection ---
+
+static bool is_string_node(const char *kind) {
+    /* Common string literal node types across tree-sitter grammars */
+    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
+    return (strcmp(kind, "string_literal") == 0 || strcmp(kind, "string") == 0 ||
+            strcmp(kind, "string_content") == 0 ||
+            strcmp(kind, "interpreted_string_literal") == 0 ||
+            strcmp(kind, "raw_string_literal") == 0 || strcmp(kind, "string_value") == 0 ||
+            /* YAML string types */
+            strcmp(kind, "double_quote_scalar") == 0 || strcmp(kind, "single_quote_scalar") == 0);
+}
+
+static void handle_string_refs(CBMExtractCtx *ctx, TSNode node, const WalkState *state) {
+    const char *kind = ts_node_type(node);
+    if (!is_string_node(kind)) {
+        return;
+    }
+
+    /* Extract string content */
+    char *text = cbm_node_text(ctx->arena, node, ctx->source);
+    if (!text || !text[0]) {
+        return;
+    }
+
+    /* Strip quotes if present */
+    int len = (int)strlen(text);
+    const char *content = text;
+    if (len >= 2 && (text[0] == '"' || text[0] == '\'')) {
+        content = text + 1;
+        len -= 2;
+        if (len <= 0) {
+            return;
+        }
+    }
+
+    /* Classify */
+    int kind_val = cbm_classify_string(content, len);
+    if (kind_val < 0) {
+        return;
+    }
+
+    /* Build null-terminated content string in arena */
+    char *val = cbm_arena_strndup(ctx->arena, content, (size_t)len);
+    if (!val) {
+        return;
+    }
+
+    CBMStringRef ref = {
+        .value = val,
+        .enclosing_func_qn = state->enclosing_func_qn ? state->enclosing_func_qn : ctx->module_qn,
+        .kind = (CBMStringRefKind)kind_val,
+    };
+    cbm_stringref_push(&ctx->result->string_refs, ctx->arena, ref);
+}
+
 // --- Main unified cursor walk ---
 
 void cbm_extract_unified(CBMExtractCtx *ctx) {
@@ -143,6 +272,7 @@ void cbm_extract_unified(CBMExtractCtx *ctx) {
         recompute_state(&state, ctx->module_qn);
 
         // 3. Dispatch to all handlers
+        handle_string_constants(ctx, node, &state);
         handle_calls(ctx, node, spec, &state);
         handle_usages(ctx, node, spec, &state);
         handle_throws(ctx, node, spec, &state);
@@ -150,6 +280,7 @@ void cbm_extract_unified(CBMExtractCtx *ctx) {
         handle_type_refs(ctx, node, spec, &state);
         handle_env_accesses(ctx, node, spec, &state);
         handle_type_assigns(ctx, node, spec, &state);
+        handle_string_refs(ctx, node, &state);
 
         // 4. Push scope markers for boundary nodes
         if (spec->function_node_types && cbm_kind_in_set(node, spec->function_node_types)) {

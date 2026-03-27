@@ -60,6 +60,9 @@ static const char *simple_name(const char *qn) {
 
 /* Count common dot-separated prefix segments. */
 static int common_prefix_len(const char *a, const char *b) {
+    if (!a || !b) {
+        return 0;
+    }
     int count = 0;
     while (*a && *b) {
         /* Find next segment in each */

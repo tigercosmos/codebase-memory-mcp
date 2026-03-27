@@ -18,11 +18,13 @@
 #include "foundation/hash_table.h"
 #include "foundation/compat.h"
 #include "foundation/compat_fs.h"
+#include "foundation/platform.h"
 
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <stdatomic.h>
+#include <stdint.h>
 
 /* ── Constants ───────────────────────────────────────────────────── */
 
@@ -157,6 +159,15 @@ static void persist_hashes(cbm_store_t *store, const char *project, cbm_file_inf
     }
 }
 
+/* ── Registry seed visitor ────────────────────────────────────────── */
+
+/* Callback for cbm_gbuf_foreach_node: add each node to the registry
+ * so the resolver can find cross-file symbols during incremental. */
+static void registry_visitor(const cbm_gbuf_node_t *node, void *userdata) {
+    cbm_registry_t *r = (cbm_registry_t *)userdata;
+    cbm_registry_add(r, node->name, node->qualified_name, node->label);
+}
+
 /* ── Incremental pipeline entry point ────────────────────────────── */
 
 int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_file_info_t *files,
@@ -203,25 +214,7 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
 
     cbm_store_free_file_hashes(stored, stored_count);
 
-    /* Delete changed files' nodes from disk DB (edges cascade) */
-    cbm_store_begin(store);
-    for (int i = 0; i < file_count; i++) {
-        if (is_changed[i]) {
-            cbm_store_delete_nodes_by_file(store, project, files[i].rel_path);
-        }
-    }
-
-    /* Delete removed files' nodes + hashes */
-    for (int i = 0; i < deleted_count; i++) {
-        cbm_store_delete_nodes_by_file(store, project, deleted[i]);
-        cbm_store_delete_file_hash(store, project, deleted[i]);
-        cbm_log_info("incremental.removed", "file", deleted[i]);
-        free(deleted[i]);
-    }
-    free(deleted);
-    cbm_store_commit(store);
-
-    /* Build list of changed files only */
+    /* Build list of changed files */
     cbm_file_info_t *changed_files = malloc((size_t)n_changed * sizeof(cbm_file_info_t));
     int ci = 0;
     for (int i = 0; i < file_count; i++) {
@@ -233,65 +226,194 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
 
     cbm_log_info("incremental.reparse", "files", itoa_buf(ci));
 
-    /* Create temp graph buffer + registry for re-parsing changed files */
-    cbm_gbuf_t *gbuf = cbm_gbuf_new(project, cbm_pipeline_repo_path(p));
+    /* ═══════════════════════════════════════════════════════════════
+     * RAM-first incremental pipeline:
+     * 1. Load entire existing DB into a graph buffer (RAM)
+     * 2. Delete stale nodes (changed + removed files) from the gbuf
+     * 3. Parallel extract changed files into a FRESH gbuf
+     * 4. Populate registry from ALL nodes (existing + fresh) for
+     *    cross-file resolution accuracy
+     * 5. Parallel resolve on changed files (using full registry)
+     * 6. Merge fresh gbuf into existing gbuf
+     * 7. Delete old DB, dump merged gbuf to disk
+     * ═══════════════════════════════════════════════════════════════ */
+
+    struct timespec t;
+
+    /* Step 1: Load existing graph into RAM */
+    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+    cbm_gbuf_t *existing = cbm_gbuf_new(project, cbm_pipeline_repo_path(p));
+    int load_rc = cbm_gbuf_load_from_db(existing, db_path, project);
+    cbm_log_info("incremental.load_db", "rc", itoa_buf(load_rc), "nodes",
+                 itoa_buf(cbm_gbuf_node_count(existing)), "edges",
+                 itoa_buf(cbm_gbuf_edge_count(existing)), "elapsed_ms",
+                 itoa_buf((int)elapsed_ms(t)));
+
+    if (load_rc != 0) {
+        cbm_log_error("incremental.err", "msg", "load_db_failed");
+        cbm_gbuf_free(existing);
+        free(changed_files);
+        for (int i = 0; i < deleted_count; i++) {
+            free(deleted[i]);
+        }
+        free(deleted);
+        cbm_store_close(store);
+        return -1;
+    }
+
+    /* Close store — done reading, will delete + rewrite at the end */
+    cbm_store_close(store);
+    store = NULL;
+
+    /* Step 2: Delete changed/removed files' nodes from in-memory graph */
+    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+    cbm_log_info("incremental.pre_purge", "nodes", itoa_buf(cbm_gbuf_node_count(existing)), "edges",
+                 itoa_buf(cbm_gbuf_edge_count(existing)));
+    for (int i = 0; i < ci; i++) {
+        cbm_gbuf_delete_by_file(existing, changed_files[i].rel_path);
+    }
+    cbm_log_info("incremental.post_purge", "nodes", itoa_buf(cbm_gbuf_node_count(existing)),
+                 "edges", itoa_buf(cbm_gbuf_edge_count(existing)));
+    for (int i = 0; i < deleted_count; i++) {
+        cbm_gbuf_delete_by_file(existing, deleted[i]);
+        free(deleted[i]);
+    }
+    free(deleted);
+    cbm_log_info("incremental.purge", "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
+
+    /* Step 3: Extract + resolve directly into EXISTING gbuf.
+     * After purge, existing has all unchanged nodes. New nodes from changed
+     * files go straight in. The resolver sees ALL nodes — both old and new —
+     * so cross-file edges (changed → unchanged AND unchanged → changed) are
+     * created correctly. No separate gbuf, no merge, no blind spots. */
     cbm_registry_t *registry = cbm_registry_new();
+
+    /* Step 4: Populate registry from ALL existing nodes */
+    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+    cbm_gbuf_foreach_node(existing, registry_visitor, registry);
+    cbm_log_info("incremental.registry_seed", "symbols", itoa_buf(cbm_registry_size(registry)),
+                 "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
 
     cbm_pipeline_ctx_t ctx = {
         .project_name = project,
         .repo_path = cbm_pipeline_repo_path(p),
-        .gbuf = gbuf,
+        .gbuf = existing, /* extract + resolve directly into existing */
         .registry = registry,
         .cancelled = cbm_pipeline_cancelled_ptr(p),
     };
 
-    /* Run passes on changed files only */
-    struct timespec t;
-    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-    cbm_pipeline_pass_definitions(&ctx, changed_files, ci);
-    cbm_log_info("pass.timing", "pass", "incr_definitions", "elapsed_ms",
-                 itoa_buf((int)elapsed_ms(t)));
-
-    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-    cbm_pipeline_pass_calls(&ctx, changed_files, ci);
-    cbm_log_info("pass.timing", "pass", "incr_calls", "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
-
-    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-    cbm_pipeline_pass_usages(&ctx, changed_files, ci);
-    cbm_log_info("pass.timing", "pass", "incr_usages", "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
-
-    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-    cbm_pipeline_pass_semantic(&ctx, changed_files, ci);
-    cbm_log_info("pass.timing", "pass", "incr_semantic", "elapsed_ms",
-                 itoa_buf((int)elapsed_ms(t)));
-
-    /* k8s pass runs after semantic (vs. after definitions in the full pipeline) because
-     * incremental has no parallel extraction phase to position it alongside.
-     * Note: File→Resource DEFINES edges and cross-file kustomize IMPORTS edges are not
-     * emitted here — File nodes (from pass_structure) are absent in the incremental gbuf,
-     * and gbuf_find_by_qn only resolves nodes from changed files.  This is a known
-     * structural limitation of the incremental architecture. */
-    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-    if (cbm_pipeline_pass_k8s(&ctx, changed_files, ci) != 0) {
-        cbm_log_info("incremental.warn", "msg", "k8s_pass_failed");
+    /* Create File nodes for changed files (purge deleted them) */
+    for (int i = 0; i < ci; i++) {
+        char *file_qn = cbm_pipeline_fqn_compute(project, changed_files[i].rel_path, "__file__");
+        if (file_qn) {
+            cbm_gbuf_upsert_node(existing, "File", changed_files[i].rel_path, file_qn,
+                                 changed_files[i].rel_path, 0, 0, "{}");
+            free(file_qn);
+        }
     }
-    cbm_log_info("pass.timing", "pass", "incr_k8s", "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
 
-    /* Merge new nodes/edges from gbuf into disk DB */
-    int new_nodes = cbm_gbuf_node_count(gbuf);
-    int new_edges = cbm_gbuf_edge_count(gbuf);
-    cbm_gbuf_merge_into_store(gbuf, store);
+#define MIN_FILES_FOR_PARALLEL_INCR 50
+    int worker_count = cbm_default_worker_count(true);
+    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
+    bool use_parallel = (worker_count > 1 && ci > MIN_FILES_FOR_PARALLEL_INCR);
 
-    cbm_log_info("incremental.merged", "nodes", itoa_buf(new_nodes), "edges", itoa_buf(new_edges));
+    if (use_parallel) {
+        cbm_log_info("incremental.mode", "mode", "parallel", "workers", itoa_buf(worker_count),
+                     "changed", itoa_buf(ci));
 
-    /* Persist updated file hashes for ALL files */
-    persist_hashes(store, project, files, file_count);
+        _Atomic int64_t shared_ids;
+        atomic_init(&shared_ids, cbm_gbuf_next_id(existing));
 
-    /* Cleanup */
-    cbm_gbuf_free(gbuf);
-    cbm_registry_free(registry);
+        CBMFileResult **cache = (CBMFileResult **)calloc(ci, sizeof(CBMFileResult *));
+        if (cache) {
+            cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+            cbm_parallel_extract(&ctx, changed_files, ci, cache, &shared_ids, worker_count);
+            cbm_gbuf_set_next_id(existing, atomic_load(&shared_ids));
+            cbm_log_info("pass.timing", "pass", "incr_extract", "elapsed_ms",
+                         itoa_buf((int)elapsed_ms(t)));
+
+            cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+            cbm_build_registry_from_cache(&ctx, changed_files, ci, cache);
+            cbm_log_info("pass.timing", "pass", "incr_registry", "elapsed_ms",
+                         itoa_buf((int)elapsed_ms(t)));
+
+            cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+            cbm_parallel_resolve(&ctx, changed_files, ci, cache, &shared_ids, worker_count);
+            cbm_gbuf_set_next_id(existing, atomic_load(&shared_ids));
+            cbm_log_info("pass.timing", "pass", "incr_resolve", "elapsed_ms",
+                         itoa_buf((int)elapsed_ms(t)));
+
+            for (int j = 0; j < ci; j++) {
+                if (cache[j]) {
+                    cbm_free_result(cache[j]);
+                }
+            }
+            free(cache);
+        }
+    } else {
+        cbm_log_info("incremental.mode", "mode", "sequential", "changed", itoa_buf(ci));
+        cbm_pipeline_pass_definitions(&ctx, changed_files, ci);
+        cbm_pipeline_pass_calls(&ctx, changed_files, ci);
+        cbm_pipeline_pass_usages(&ctx, changed_files, ci);
+        cbm_pipeline_pass_semantic(&ctx, changed_files, ci);
+    }
+
+    cbm_pipeline_pass_k8s(&ctx, changed_files, ci);
+
+    /* Step 6: Post-passes on the full graph (gbuf-only, no disk reads).
+     * These operate on the merged graph after extraction + resolve.
+     * Unchanged files' post-pass edges were loaded from DB.
+     * Changed files' post-pass edges are created here. */
+
+    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+    cbm_pipeline_pass_tests(&ctx, changed_files, ci);
+    cbm_log_info("pass.timing", "pass", "incr_tests", "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
+
+    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+    cbm_pipeline_pass_decorator_tags(existing, project);
+    cbm_log_info("pass.timing", "pass", "incr_decorator_tags", "elapsed_ms",
+                 itoa_buf((int)elapsed_ms(t)));
+
+    /* Configlink: key_symbol + dep_imports are gbuf-only (safe).
+     * file_refs needs prescan or disk — we set prescan=NULL so it uses
+     * the disk fallback ONLY for config files (typically <10 files). */
+    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+    cbm_pipeline_pass_configlink(&ctx);
+    cbm_log_info("pass.timing", "pass", "incr_configlink", "elapsed_ms",
+                 itoa_buf((int)elapsed_ms(t)));
+
+    /* Httplinks: route discovery uses disk fallback when prescan=NULL.
+     * Only reads source for files with Route/Handler labels (~few files). */
+    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+    cbm_pipeline_pass_httplinks(&ctx);
+    cbm_log_info("pass.timing", "pass", "incr_httplinks", "elapsed_ms",
+                 itoa_buf((int)elapsed_ms(t)));
+
     free(changed_files);
-    cbm_store_close(store);
+    cbm_registry_free(registry);
+
+    /* Step 7: Delete old DB, dump merged graph to disk */
+    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+    cbm_unlink(db_path);
+    char wal[1040];
+    char shm[1040];
+    snprintf(wal, sizeof(wal), "%s-wal", db_path);
+    snprintf(shm, sizeof(shm), "%s-shm", db_path);
+    cbm_unlink(wal);
+    cbm_unlink(shm);
+
+    int dump_rc = cbm_gbuf_dump_to_sqlite(existing, db_path);
+    cbm_log_info("incremental.dump", "rc", itoa_buf(dump_rc), "elapsed_ms",
+                 itoa_buf((int)elapsed_ms(t)));
+
+    /* Persist file hashes for ALL files */
+    cbm_store_t *hash_store = cbm_store_open_path(db_path);
+    if (hash_store) {
+        persist_hashes(hash_store, project, files, file_count);
+        cbm_store_close(hash_store);
+    }
+
+    cbm_gbuf_free(existing);
 
     cbm_log_info("incremental.done", "elapsed_ms", itoa_buf((int)elapsed_ms(t0)));
     return 0;

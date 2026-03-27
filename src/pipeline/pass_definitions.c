@@ -128,8 +128,46 @@ static void append_json_string(char *buf, size_t bufsize, size_t *pos, const cha
     *pos = p;
 }
 
-/* Build properties JSON for a definition node.
- * Includes decorators array, docstring, and signature when present. */
+/* Append a JSON array of strings: ,"key":["a","b","c"] */
+static void append_json_str_array(char *buf, size_t bufsize, size_t *pos, const char *key,
+                                  const char **arr) {
+    if (!arr || !arr[0] || *pos >= bufsize - 10) {
+        return;
+    }
+    size_t p = *pos;
+    int n = snprintf(buf + p, bufsize - p, ",\"%s\":[", key);
+    if (n <= 0 || p + (size_t)n >= bufsize - 2) {
+        return;
+    }
+    p += (size_t)n;
+    for (int i = 0; arr[i]; i++) {
+        if (i > 0 && p < bufsize - 1) {
+            buf[p++] = ',';
+        }
+        if (p < bufsize - 1) {
+            buf[p++] = '"';
+        }
+        for (const char *s = arr[i]; *s && p < bufsize - 2; s++) {
+            if (*s == '"' || *s == '\\') {
+                buf[p++] = '\\';
+                if (p >= bufsize - 2) {
+                    break;
+                }
+            }
+            buf[p++] = *s;
+        }
+        if (p < bufsize - 1) {
+            buf[p++] = '"';
+        }
+    }
+    if (p < bufsize - 1) {
+        buf[p++] = ']';
+    }
+    buf[p] = '\0';
+    *pos = p;
+}
+
+/* Build properties JSON for a definition node. */
 static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def) {
     int n = snprintf(buf, bufsize,
                      "{\"complexity\":%d,\"lines\":%d,\"is_exported\":%s,"
@@ -142,48 +180,12 @@ static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def)
         return;
     }
     size_t pos = (size_t)n;
-
-    /* Append docstring if present */
     append_json_string(buf, bufsize, &pos, "docstring", def->docstring);
-
-    /* Append signature if present */
     append_json_string(buf, bufsize, &pos, "signature", def->signature);
+    append_json_str_array(buf, bufsize, &pos, "decorators", def->decorators);
+    append_json_str_array(buf, bufsize, &pos, "param_names", def->param_names);
+    append_json_str_array(buf, bufsize, &pos, "param_types", def->param_types);
 
-    /* Append decorators array if present */
-    if (def->decorators && def->decorators[0] && pos < bufsize - 2) {
-        const char *prefix = ",\"decorators\":[";
-        size_t plen = strlen(prefix);
-        if (pos + plen < bufsize) {
-            memcpy(buf + pos, prefix, plen);
-            pos += plen;
-        }
-        for (int i = 0; def->decorators[i]; i++) {
-            if (i > 0 && pos < bufsize - 1) {
-                buf[pos++] = ',';
-            }
-            if (pos < bufsize - 1) {
-                buf[pos++] = '"';
-            }
-            for (const char *s = def->decorators[i]; *s && pos < bufsize - 2; s++) {
-                if (*s == '"' || *s == '\\') {
-                    buf[pos++] = '\\';
-                    if (pos >= bufsize - 2) {
-                        break;
-                    }
-                }
-                buf[pos++] = *s;
-            }
-            if (pos < bufsize - 1) {
-                buf[pos++] = '"';
-            }
-        }
-        if (pos < bufsize - 1) {
-            buf[pos++] = ']';
-        }
-        buf[pos] = '\0';
-    }
-
-    /* Close the object */
     if (pos < bufsize - 1) {
         buf[pos] = '}';
         buf[pos + 1] = '\0';

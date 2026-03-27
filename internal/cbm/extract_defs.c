@@ -749,10 +749,16 @@ static const char **extract_param_names(CBMArena *a, TSNode params, const char *
                 name_text = cbm_node_text(a, nm, source);
             }
         }
+        // Python: identifier is a bare parameter name (def f(x, y))
+        else if (strcmp(pk, "identifier") == 0) {
+            name_text = cbm_node_text(a, param, source);
+        }
         // Generic: try "name" field on parameter nodes
         else if (strcmp(pk, "formal_parameter") == 0 || strcmp(pk, "parameter") == 0 ||
                  strcmp(pk, "required_parameter") == 0 || strcmp(pk, "optional_parameter") == 0 ||
-                 strcmp(pk, "simple_parameter") == 0 || strcmp(pk, "typed_parameter") == 0) {
+                 strcmp(pk, "simple_parameter") == 0 || strcmp(pk, "typed_parameter") == 0 ||
+                 strcmp(pk, "default_parameter") == 0 ||
+                 strcmp(pk, "typed_default_parameter") == 0) {
             TSNode nm = ts_node_child_by_field_name(param, "name", 4);
             if (ts_node_is_null(nm)) {
                 nm = ts_node_child_by_field_name(param, "pattern", 7);

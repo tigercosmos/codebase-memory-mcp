@@ -275,6 +275,46 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
             /* Classify edge type by library in resolved QN */
             cbm_svc_kind_t svc = cbm_service_pattern_match(res.qualified_name);
 
+            if (svc == CBM_SVC_ROUTE_REG && call->first_string_arg != NULL &&
+                call->first_string_arg[0] == '/') {
+                /* Route registration: router.GET("/path", handler) → Route + HANDLES */
+                const char *method = cbm_service_pattern_route_method(call->callee_name);
+                char route_qn[CBM_ROUTE_QN_SIZE];
+                snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", method ? method : "ANY",
+                         call->first_string_arg);
+                char route_props[256];
+                snprintf(route_props, sizeof(route_props), "{\"method\":\"%s\"}",
+                         method ? method : "ANY");
+                int64_t route_id = cbm_gbuf_upsert_node(ctx->gbuf, "Route", call->first_string_arg,
+                                                        route_qn, "", 0, 0, route_props);
+
+                char props[512];
+                snprintf(props, sizeof(props),
+                         "{\"callee\":\"%s\",\"url_path\":\"%s\",\"via\":\"route_registration\"}",
+                         call->callee_name, call->first_string_arg);
+                cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, route_id, "CALLS", props);
+
+                /* Resolve handler and create HANDLES edge */
+                if (call->second_arg_name != NULL && call->second_arg_name[0] != '\0') {
+                    cbm_resolution_t hres =
+                        cbm_registry_resolve(ctx->registry, call->second_arg_name, module_qn,
+                                             imp_keys, imp_vals, imp_count);
+                    if (hres.qualified_name != NULL && hres.qualified_name[0] != '\0') {
+                        const cbm_gbuf_node_t *handler =
+                            cbm_gbuf_find_by_qn(ctx->gbuf, hres.qualified_name);
+                        if (handler != NULL) {
+                            char hprops[256];
+                            snprintf(hprops, sizeof(hprops), "{\"handler\":\"%s\"}",
+                                     hres.qualified_name);
+                            cbm_gbuf_insert_edge(ctx->gbuf, handler->id, route_id, "HANDLES",
+                                                 hprops);
+                        }
+                    }
+                }
+                resolved++;
+                continue;
+            }
+
             if (svc == CBM_SVC_HTTP || svc == CBM_SVC_ASYNC) {
                 /* HTTP/async call — route through Route node for cross-service traversal.
                  * Only create Route if string looks like a URL (HTTP) or topic name (async). */

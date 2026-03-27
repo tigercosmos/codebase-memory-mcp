@@ -1246,7 +1246,7 @@ int cbm_pipeline_pass_httplinks(cbm_pipeline_ctx_t *ctx) {
         worker_count = 1;
     }
 
-    /* ── Phase 1: Route collection from prescan or parallel discovery ── */
+    /* ── Phase 1: Route collection from decorator properties + disk ── */
 
     /* Need label_counts for fallback path */
     const char *route_labels[] = {"Function", "Method", "Module"};
@@ -1263,27 +1263,11 @@ int cbm_pipeline_pass_httplinks(cbm_pipeline_ctx_t *ctx) {
     }
     int route_count = 0;
 
-    if (ctx->prescan_cache) {
-        /* Fast path: routes were extracted during the extraction phase.
-         * Zero disk reads, zero JSON parsing, zero node iteration. */
-        for (int fi = 0; fi < ctx->prescan_count; fi++) {
-            const cbm_prescan_t *ps = &ctx->prescan_cache[fi];
-            for (int ri = 0; ri < ps->route_count && route_count < MAX_ROUTES; ri++) {
-                const cbm_prescan_route_t *src = &ps->routes[ri];
-                cbm_route_handler_t *dst = &routes[route_count];
-                snprintf(dst->path, sizeof(dst->path), "%s", src->path);
-                snprintf(dst->method, sizeof(dst->method), "%s", src->method);
-                snprintf(dst->function_name, sizeof(dst->function_name), "%s", src->function_name);
-                snprintf(dst->qualified_name, sizeof(dst->qualified_name), "%s",
-                         src->qualified_name);
-                snprintf(dst->handler_ref, sizeof(dst->handler_ref), "%s", src->handler_ref);
-                dst->resolved_handler_qn[0] = '\0';
-                snprintf(dst->protocol, sizeof(dst->protocol), "%s", src->protocol);
-                route_count++;
-            }
-        }
-    } else {
-        /* Fallback: parallel route discovery from disk (sequential pipeline path) */
+    {
+        /* Route discovery: decorator-based (from gbuf properties) + disk-based
+         * (Go/Express/Laravel/Ktor source reading). AST-based route registration
+         * detection (CBM_SVC_ROUTE_REG) creates Route+HANDLES during resolution,
+         * so this path is primarily for decorator-discovered routes now. */
         int total_route_nodes = 0;
         for (int li = 0; li < 3; li++) {
             total_route_nodes += label_counts[li];
@@ -1353,33 +1337,16 @@ int cbm_pipeline_pass_httplinks(cbm_pipeline_ctx_t *ctx) {
     /* ── Phase 4: Route nodes + HANDLES edges (serial) ────────── */
     int route_nodes = insert_route_nodes(ctx, routes, route_count);
 
-    /* ── Phase 5: Call site collection from prescan cache ────────── */
-    /* During extraction, each file's source was scanned for HTTP/async
-     * keywords and URL paths. Results are in ctx->prescan_cache[file_idx].
-     * This eliminates 2M+ disk reads (the old approach read every function
-     * from disk just to check for keywords, then discarded 99.9%). */
+    /* ── Phase 5: Call site collection ──────────────────────────── */
 
     cbm_http_call_site_t *sites = calloc(MAX_CALL_SITES, sizeof(cbm_http_call_site_t));
     int site_count = 0;
 
-    if (sites && ctx->prescan_cache) {
-        for (int fi = 0; fi < ctx->prescan_count; fi++) {
-            const cbm_prescan_t *ps = &ctx->prescan_cache[fi];
-            for (int si = 0; si < ps->http_site_count && site_count < MAX_CALL_SITES; si++) {
-                const cbm_prescan_http_site_t *src = &ps->http_sites[si];
-                cbm_http_call_site_t *dst = &sites[site_count];
-                snprintf(dst->path, sizeof(dst->path), "%s", src->path);
-                snprintf(dst->method, sizeof(dst->method), "%s", src->method);
-                snprintf(dst->source_name, sizeof(dst->source_name), "%s", src->source_name);
-                snprintf(dst->source_qn, sizeof(dst->source_qn), "%s", src->source_qn);
-                snprintf(dst->source_label, sizeof(dst->source_label), "%s", src->source_label);
-                dst->is_async = src->is_async;
-                site_count++;
-            }
-        }
-    } else if (sites) {
-        /* Fallback: no prescan (sequential pipeline path).
-         * Use the old parallel disk-reading approach. */
+    if (sites) {
+        /* Call site collection: parallel disk-reading approach.
+         * Note: HTTP_CALLS/ASYNC_CALLS edges are now also created during
+         * resolution via service_patterns. This path provides additional
+         * URL-based matching for call sites not caught by QN matching. */
         const char *site_labels[] = {"Function", "Method"};
         const cbm_gbuf_node_t **all_site_nodes = NULL;
         const char **all_site_labels = NULL;

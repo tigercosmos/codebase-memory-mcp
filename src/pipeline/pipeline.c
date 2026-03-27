@@ -501,20 +501,6 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
             goto cleanup;
         }
 
-        /* Allocate prescan cache: HTTP sites + config refs extracted during
-         * extraction phase while source is in memory. Eliminates all disk
-         * re-reads in httplinks (2M+ reads) and configlink (62K+ reads). */
-        cbm_prescan_t *prescan_cache = calloc(file_count, sizeof(cbm_prescan_t));
-        ctx.prescan_cache = prescan_cache;
-        ctx.prescan_count = file_count;
-
-        /* Build path → file_idx map for prescan lookup by rel_path */
-        CBMHashTable *prescan_map = cbm_ht_create(0);
-        for (int i = 0; i < file_count; i++) {
-            cbm_ht_set(prescan_map, files[i].rel_path, (void *)((intptr_t)i + 1));
-        }
-        ctx.prescan_path_map = prescan_map;
-
         /* Phase 3A: Parallel extract + definition nodes */
         cbm_clock_gettime(CLOCK_MONOTONIC, &t);
         rc = cbm_parallel_extract(&ctx, files, file_count, result_cache, &shared_ids, worker_count);
@@ -784,21 +770,6 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
                      itoa_buf((int)elapsed_ms(t)));
     }
 
-    /* Free prescan cache — no longer needed after httplinks + configlink */
-    if (ctx.prescan_cache) {
-        for (int i = 0; i < ctx.prescan_count; i++) {
-            free(ctx.prescan_cache[i].http_sites);
-            free(ctx.prescan_cache[i].config_refs);
-            free(ctx.prescan_cache[i].routes);
-        }
-        free(ctx.prescan_cache);
-        ctx.prescan_cache = NULL;
-    }
-    if (ctx.prescan_path_map) {
-        cbm_ht_free(ctx.prescan_path_map);
-        ctx.prescan_path_map = NULL;
-    }
-
     /* Direct dump: construct B-tree pages in C, fwrite() to .db file.
      * Zero SQLite library involvement — cbm_write_db() builds the binary
      * format directly from flat arrays. Atomic: writes .tmp then renames. */
@@ -864,20 +835,6 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
                  itoa_buf((int)elapsed_ms(t0)));
 
 cleanup:
-    /* Free prescan if not already freed */
-    if (ctx.prescan_cache) {
-        for (int i = 0; i < ctx.prescan_count; i++) {
-            free(ctx.prescan_cache[i].http_sites);
-            free(ctx.prescan_cache[i].config_refs);
-            free(ctx.prescan_cache[i].routes);
-        }
-        free(ctx.prescan_cache);
-        ctx.prescan_cache = NULL;
-    }
-    if (ctx.prescan_path_map) {
-        cbm_ht_free(ctx.prescan_path_map);
-        ctx.prescan_path_map = NULL;
-    }
     cbm_discover_free(files, file_count);
     cbm_gbuf_free(p->gbuf);
     p->gbuf = NULL;

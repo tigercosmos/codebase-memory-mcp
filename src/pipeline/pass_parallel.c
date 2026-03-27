@@ -351,316 +351,10 @@ typedef struct {
     _Atomic int next_worker_id;
 
     CBMFileResult **result_cache;
-    cbm_prescan_t *prescan_cache;
     _Atomic int64_t *shared_ids;
     _Atomic int *cancelled;
     _Atomic int next_file_idx;
 } extract_ctx_t;
-
-/* ── Pre-scan: extract HTTP sites + config refs while source is in memory ── */
-
-/* Extract lines [start_line..end_line] from source buffer as a malloc'd string. */
-static char *extract_lines(const char *source, int source_len, int start_line, int end_line) {
-    if (start_line <= 0 || end_line <= 0 || end_line < start_line) {
-        return NULL;
-    }
-    int line = 1;
-    const char *p = source;
-    const char *end = source + source_len;
-    const char *range_start = NULL;
-    const char *range_end = NULL;
-
-    while (p < end) {
-        if (line == start_line) {
-            range_start = p;
-        }
-        const char *nl = memchr(p, '\n', (size_t)(end - p));
-        if (!nl) {
-            nl = end;
-        }
-        if (line == end_line) {
-            range_end = (nl < end) ? nl + 1 : end;
-            break;
-        }
-        p = nl + 1;
-        line++;
-    }
-    if (!range_start) {
-        return NULL;
-    }
-    if (!range_end) {
-        range_end = end;
-    }
-    size_t len = (size_t)(range_end - range_start);
-    // NOLINTNEXTLINE(clang-analyzer-optin.taint.TaintedAlloc)
-    char *out = malloc(len + 1);
-    if (!out) {
-        return NULL;
-    }
-    memcpy(out, range_start, len);
-    out[len] = '\0';
-    return out;
-}
-
-/* Scan function bodies for HTTP/async keywords, extract URL paths. */
-static void prescan_http_sites(const char *source, int source_len, const CBMFileResult *result,
-                               cbm_prescan_t *ps) {
-    for (int d = 0; d < result->defs.count; d++) {
-        const CBMDefinition *def = &result->defs.items[d];
-        if (!def->qualified_name || !def->name || !def->label) {
-            continue;
-        }
-        if (strcmp(def->label, "Function") != 0 && strcmp(def->label, "Method") != 0) {
-            continue;
-        }
-        if (def->start_line == 0 || def->end_line == 0) {
-            continue;
-        }
-        /* Skip Python dunder methods */
-        size_t nlen = strlen(def->name);
-        if (nlen > 4 && def->name[0] == '_' && def->name[1] == '_' && def->name[nlen - 1] == '_' &&
-            def->name[nlen - 2] == '_') {
-            continue;
-        }
-
-        char *func_src =
-            extract_lines(source, source_len, (int)def->start_line, (int)def->end_line);
-        if (!func_src) {
-            continue;
-        }
-
-        /* Keyword pre-filter */
-        bool has_http = false;
-        for (int k = 0; k < cbm_http_client_keywords_count; k++) {
-            if (strstr(func_src, cbm_http_client_keywords[k])) {
-                has_http = true;
-                break;
-            }
-        }
-        bool has_async = false;
-        for (int k = 0; k < cbm_async_dispatch_keywords_count; k++) {
-            if (strstr(func_src, cbm_async_dispatch_keywords[k])) {
-                has_async = true;
-                break;
-            }
-        }
-
-        if (!has_http && !has_async) {
-            free(func_src);
-            continue;
-        }
-
-        bool is_async = (has_async && !has_http) != 0;
-
-        /* Extract URL paths */
-        char *paths[64];
-        int path_count = cbm_extract_url_paths(func_src, paths, 64);
-
-        for (int p = 0; p < path_count; p++) {
-            cbm_prescan_http_site_t *site =
-                realloc(ps->http_sites,
-                        (size_t)(ps->http_site_count + 1) * sizeof(cbm_prescan_http_site_t));
-            if (!site) {
-                free(paths[p]);
-                continue;
-            }
-            ps->http_sites = site;
-            cbm_prescan_http_site_t *s = &ps->http_sites[ps->http_site_count];
-            snprintf(s->path, sizeof(s->path), "%s", paths[p]);
-            s->method[0] = '\0';
-            snprintf(s->source_name, sizeof(s->source_name), "%s", def->name);
-            snprintf(s->source_qn, sizeof(s->source_qn), "%s", def->qualified_name);
-            snprintf(s->source_label, sizeof(s->source_label), "%s", def->label);
-            s->is_async = is_async;
-            ps->http_site_count++;
-            free(paths[p]);
-        }
-        /* Free any remaining paths we couldn't store */
-        for (int p = path_count; p < path_count; p++) {
-            free(paths[p]);
-        }
-        free(func_src);
-    }
-}
-
-/* Helper: append a route to prescan results. */
-static void prescan_add_route(cbm_prescan_t *ps, const cbm_route_handler_t *rh) {
-    cbm_prescan_route_t *routes =
-        realloc(ps->routes, (size_t)(ps->route_count + 1) * sizeof(cbm_prescan_route_t));
-    if (!routes) {
-        return;
-    }
-    ps->routes = routes;
-    cbm_prescan_route_t *r = &routes[ps->route_count];
-    snprintf(r->path, sizeof(r->path), "%s", rh->path);
-    snprintf(r->method, sizeof(r->method), "%s", rh->method);
-    snprintf(r->function_name, sizeof(r->function_name), "%s", rh->function_name);
-    snprintf(r->qualified_name, sizeof(r->qualified_name), "%s", rh->qualified_name);
-    snprintf(r->handler_ref, sizeof(r->handler_ref), "%s", rh->handler_ref);
-    snprintf(r->protocol, sizeof(r->protocol), "%s", rh->protocol);
-    ps->route_count++;
-}
-
-/* Check file extension for source-based route languages. */
-static bool is_route_source_lang(const char *path) {
-    if (!path) {
-        return false;
-    }
-    size_t len = strlen(path);
-    /* Go */
-    if (len > 3 && strcmp(path + len - 3, ".go") == 0) {
-        return true;
-    }
-    /* JavaScript/TypeScript */
-    if (len > 3 && (strcmp(path + len - 3, ".js") == 0 || strcmp(path + len - 3, ".ts") == 0)) {
-        return true;
-    }
-    if (len > 4 && (strcmp(path + len - 4, ".jsx") == 0 || strcmp(path + len - 4, ".tsx") == 0)) {
-        return true;
-    }
-    /* PHP */
-    if (len > 4 && strcmp(path + len - 4, ".php") == 0) {
-        return true;
-    }
-    /* Kotlin */
-    if (len > 3 && strcmp(path + len - 3, ".kt") == 0) {
-        return true;
-    }
-    if (len > 4 && strcmp(path + len - 4, ".kts") == 0) {
-        return true;
-    }
-    return false;
-}
-
-/* Scan function definitions for HTTP routes (decorator + source-based). */
-static void prescan_routes(const char *source, int source_len, const CBMFileResult *result,
-                           const char *rel_path, cbm_prescan_t *ps) {
-    bool is_route_lang = is_route_source_lang(rel_path);
-
-    for (int d = 0; d < result->defs.count; d++) {
-        const CBMDefinition *def = &result->defs.items[d];
-        if (!def->qualified_name || !def->name) {
-            continue;
-        }
-
-        cbm_route_handler_t routes[16];
-        int total = 0;
-
-        /* Decorator-based routes (Python, Java) */
-        if (def->decorators && def->decorators[0]) {
-            int ndec = 0;
-            while (def->decorators[ndec]) {
-                ndec++;
-            }
-            int nr = cbm_extract_python_routes(def->name, def->qualified_name,
-                                               (const char **)def->decorators, ndec, routes + total,
-                                               16 - total);
-            total += nr;
-            nr = cbm_extract_java_routes(def->name, def->qualified_name,
-                                         (const char **)def->decorators, ndec, routes + total,
-                                         16 - total);
-            total += nr;
-        }
-
-        /* Source-based routes (Go, Express, Laravel, Ktor) — only for matching languages */
-        if (is_route_lang && def->start_line > 0 && def->end_line > 0 && total < 16) {
-            char *func_src =
-                extract_lines(source, source_len, (int)def->start_line, (int)def->end_line);
-            if (func_src) {
-                int nr = cbm_extract_go_routes(def->name, def->qualified_name, func_src,
-                                               routes + total, 16 - total);
-                total += nr;
-                nr = cbm_extract_express_routes(def->name, def->qualified_name, func_src,
-                                                routes + total, 16 - total);
-                total += nr;
-                nr = cbm_extract_laravel_routes(def->name, def->qualified_name, func_src,
-                                                routes + total, 16 - total);
-                total += nr;
-                nr = cbm_extract_ktor_routes(def->name, def->qualified_name, func_src,
-                                             routes + total, 16 - total);
-                total += nr;
-                free(func_src);
-            }
-        }
-
-        for (int r = 0; r < total; r++) {
-            prescan_add_route(ps, &routes[r]);
-        }
-    }
-
-    /* Module-level routes (PHP Laravel, JS/TS Express) */
-    if (is_route_lang && source_len > 0) {
-        size_t plen = strlen(rel_path);
-        bool is_php = (plen > 4 && strcmp(rel_path + plen - 4, ".php") == 0) != 0;
-        bool is_js = ((plen > 3 && (strcmp(rel_path + plen - 3, ".js") == 0 ||
-                                    strcmp(rel_path + plen - 3, ".ts") == 0)) ||
-                      (plen > 4 && (strcmp(rel_path + plen - 4, ".jsx") == 0 ||
-                                    strcmp(rel_path + plen - 4, ".tsx") == 0))) != 0;
-        if (is_php || is_js) {
-            /* Build a module name from rel_path */
-            const char *slash = strrchr(rel_path, '/');
-            const char *basename = slash ? slash + 1 : rel_path;
-            cbm_route_handler_t mod_routes[16];
-            int total = 0;
-            if (is_php) {
-                total += cbm_extract_laravel_routes(basename, "", source, mod_routes + total,
-                                                    16 - total);
-            }
-            if (is_js) {
-                total += cbm_extract_express_routes(basename, "", source, mod_routes + total,
-                                                    16 - total);
-            }
-            for (int r = 0; r < total; r++) {
-                prescan_add_route(ps, &mod_routes[r]);
-            }
-        }
-    }
-}
-
-/* Scan full source for config file path references in string literals. */
-static void prescan_config_refs(const char *source, cbm_prescan_t *ps) {
-    /* Quick reject: no config extension substring in source at all */
-    static const char *exts[] = {".toml", ".yaml", ".yml", ".ini", ".json",
-                                 ".xml",  ".conf", ".cfg", ".env", NULL};
-    bool has_any = false;
-    for (int i = 0; exts[i]; i++) {
-        if (strstr(source, exts[i])) {
-            has_any = true;
-            break;
-        }
-    }
-    if (!has_any) {
-        return;
-    }
-
-    cbm_regex_t re;
-    if (cbm_regcomp(&re, "[\"']([^\"']*\\.(toml|yaml|yml|ini|json|xml|conf|cfg|env))[\"']",
-                    CBM_REG_EXTENDED) != 0) {
-        return;
-    }
-
-    cbm_regmatch_t match[3];
-    const char *cursor = source;
-    while (cbm_regexec(&re, cursor, 3, match, 0) == 0) {
-        int start = match[1].rm_so;
-        int end = match[1].rm_eo;
-        int ref_len = end - start;
-
-        if (ref_len > 0 && ref_len < 256) {
-            cbm_prescan_config_ref_t *refs =
-                realloc(ps->config_refs,
-                        (size_t)(ps->config_ref_count + 1) * sizeof(cbm_prescan_config_ref_t));
-            if (refs) {
-                ps->config_refs = refs;
-                memcpy(refs[ps->config_ref_count].ref_path, cursor + start, (size_t)ref_len);
-                refs[ps->config_ref_count].ref_path[ref_len] = '\0';
-                ps->config_ref_count++;
-            }
-        }
-        cursor += match[0].rm_eo;
-    }
-    cbm_regfree(&re);
-}
 
 static void extract_worker(int worker_id, void *ctx_ptr) {
     extract_ctx_t *ec = ctx_ptr;
@@ -745,17 +439,7 @@ static void extract_worker(int worker_id, void *ctx_ptr) {
          * are released before the slab is bulk-reclaimed. */
         cbm_free_tree(result);
 
-        /* Pre-scan source for HTTP call sites and config file references
-         * while the buffer is still in memory. Eliminates 2M+ disk reads
-         * in httplinks and 62K+ disk reads in configlink. */
-        if (ec->prescan_cache) {
-            cbm_prescan_t *ps = &ec->prescan_cache[file_idx];
-            prescan_routes(source, source_len, result, fi->rel_path, ps);
-            prescan_http_sites(source, source_len, result, ps);
-            prescan_config_refs(source, ps);
-        }
-
-        /* Free source buffer — prescan captured everything needed. */
+        /* Free source buffer — extraction captured everything needed. */
         free_source(source);
 
         /* Cache result (arena + extracted data, no tree) for Phase 3B and Phase 4 */
@@ -840,7 +524,6 @@ int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *files, int fi
         .workers = workers,
         .max_workers = worker_count,
         .result_cache = result_cache,
-        .prescan_cache = ctx->prescan_cache,
         .shared_ids = shared_ids,
         .cancelled = ctx->cancelled,
     };
@@ -1003,9 +686,40 @@ typedef struct {
  * Extracted from resolve_worker to keep cognitive complexity under threshold. */
 static void emit_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
                               const cbm_gbuf_node_t *target, const CBMCall *call,
-                              const cbm_resolution_t *res) {
+                              const cbm_resolution_t *res, const char *module_qn,
+                              const cbm_registry_t *registry, const cbm_gbuf_t *main_gbuf,
+                              const char **imp_keys, const char **imp_vals, int imp_count) {
     cbm_svc_kind_t svc = cbm_service_pattern_match(res->qualified_name);
     const char *arg = call->first_string_arg;
+
+    if (svc == CBM_SVC_ROUTE_REG && arg != NULL && arg[0] == '/') {
+        const char *method = cbm_service_pattern_route_method(call->callee_name);
+        char route_qn[CBM_ROUTE_QN_SIZE];
+        snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", method ? method : "ANY", arg);
+        char route_props[256];
+        snprintf(route_props, sizeof(route_props), "{\"method\":\"%s\"}", method ? method : "ANY");
+        int64_t route_id =
+            cbm_gbuf_upsert_node(gbuf, "Route", arg, route_qn, "", 0, 0, route_props);
+        char props[512];
+        snprintf(props, sizeof(props),
+                 "{\"callee\":\"%s\",\"url_path\":\"%s\",\"via\":\"route_registration\"}",
+                 call->callee_name, arg);
+        cbm_gbuf_insert_edge(gbuf, source->id, route_id, "CALLS", props);
+        if (call->second_arg_name != NULL && call->second_arg_name[0] != '\0') {
+            cbm_resolution_t hres = cbm_registry_resolve(registry, call->second_arg_name, module_qn,
+                                                         imp_keys, imp_vals, imp_count);
+            if (hres.qualified_name != NULL && hres.qualified_name[0] != '\0') {
+                const cbm_gbuf_node_t *handler =
+                    cbm_gbuf_find_by_qn(main_gbuf, hres.qualified_name);
+                if (handler != NULL) {
+                    char hprops[256];
+                    snprintf(hprops, sizeof(hprops), "{\"handler\":\"%s\"}", hres.qualified_name);
+                    cbm_gbuf_insert_edge(gbuf, handler->id, route_id, "HANDLES", hprops);
+                }
+            }
+        }
+        return;
+    }
 
     int has_url = (arg != NULL && arg[0] != '\0' && (arg[0] == '/' || strstr(arg, "://") != NULL));
     int has_topic = (arg != NULL && arg[0] != '\0' && svc == CBM_SVC_ASYNC && strlen(arg) > 2);
@@ -1128,7 +842,8 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
             }
 
             /* Classify and emit edge via helper (keeps resolve_worker complexity down) */
-            emit_service_edge(ws->local_edge_buf, source_node, target_node, call, &res);
+            emit_service_edge(ws->local_edge_buf, source_node, target_node, call, &res, module_qn,
+                              rc->registry, rc->main_gbuf, imp_keys, imp_vals, imp_count);
             ws->calls_resolved++;
         }
 

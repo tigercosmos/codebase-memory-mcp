@@ -353,134 +353,6 @@ static int strategy_dep_imports(cbm_gbuf_t *gb) {
 
 /* ── Strategy 3: Config File Path → Code String Reference ───────── */
 
-/* Prescan-based: config refs were extracted during extraction phase. */
-static int strategy_file_refs_prescan(cbm_gbuf_t *gb, const char *project,
-                                      const cbm_prescan_t *prescan_cache, int prescan_count,
-                                      CBMHashTable *prescan_path_map) {
-    /* Collect config Module nodes for matching */
-    const cbm_gbuf_node_t **modules = NULL;
-    int mod_count = 0;
-    if (cbm_gbuf_find_by_label(gb, "Module", &modules, &mod_count) != 0) {
-        return 0;
-    }
-
-    /* Build basename → Module and fullpath → Module maps */
-    typedef struct {
-        const char *key;
-        int64_t node_id;
-    } path_map_t;
-
-    path_map_t *base_map = calloc((size_t)mod_count, sizeof(path_map_t));
-    path_map_t *full_map = calloc((size_t)mod_count, sizeof(path_map_t));
-    int base_count = 0;
-    int full_count = 0;
-
-    for (int i = 0; i < mod_count; i++) {
-        if (cbm_has_config_extension(modules[i]->file_path)) {
-            const char *slash = strrchr(modules[i]->file_path, '/');
-            base_map[base_count].key = slash ? slash + 1 : modules[i]->file_path;
-            base_map[base_count].node_id = modules[i]->id;
-            base_count++;
-
-            full_map[full_count].key = modules[i]->file_path;
-            full_map[full_count].node_id = modules[i]->id;
-            full_count++;
-        }
-    }
-
-    if (base_count == 0) {
-        free(base_map);
-        free(full_map);
-        return 0;
-    }
-
-    int edge_count = 0;
-
-    /* Iterate prescan results — each file's config refs were extracted during extraction */
-    for (int fi = 0; fi < prescan_count; fi++) {
-        const cbm_prescan_t *ps = &prescan_cache[fi];
-        if (ps->config_ref_count == 0) {
-            continue;
-        }
-
-        /* Find the Module node for this file via prescan_path_map */
-        /* We need to reverse-lookup: file_idx → rel_path → Module QN.
-         * But we don't have the files array here. Instead, iterate modules
-         * and check which ones have prescan data. */
-    }
-
-    /* Alternative approach: iterate non-config modules and check their prescan */
-    for (int i = 0; i < mod_count; i++) {
-        if (cbm_has_config_extension(modules[i]->file_path)) {
-            continue;
-        }
-
-        /* Look up prescan data for this file */
-        void *val = cbm_ht_get(prescan_path_map, modules[i]->file_path);
-        if (!val) {
-            continue;
-        }
-        int file_idx = (int)((intptr_t)val - 1);
-        if (file_idx < 0 || file_idx >= prescan_count) {
-            continue;
-        }
-        const cbm_prescan_t *ps = &prescan_cache[file_idx];
-        if (ps->config_ref_count == 0) {
-            continue;
-        }
-
-        for (int ri = 0; ri < ps->config_ref_count; ri++) {
-            const char *ref_path = ps->config_refs[ri].ref_path;
-
-            int64_t target_id = 0;
-            double confidence = 0.0;
-
-            /* Try full path match */
-            for (int fi2 = 0; fi2 < full_count; fi2++) {
-                if (strcmp(full_map[fi2].key, ref_path) == 0) {
-                    target_id = full_map[fi2].node_id;
-                    confidence = CONF_FILE_FULLPATH;
-                    break;
-                }
-            }
-
-            /* Try basename match */
-            if (target_id == 0) {
-                const char *ref_slash = strrchr(ref_path, '/');
-                const char *ref_base = ref_slash ? ref_slash + 1 : ref_path;
-                for (int bi = 0; bi < base_count; bi++) {
-                    if (strcmp(base_map[bi].key, ref_base) == 0) {
-                        target_id = base_map[bi].node_id;
-                        confidence = CONF_FILE_BASENAME;
-                        break;
-                    }
-                }
-            }
-
-            if (target_id != 0) {
-                char *module_qn = cbm_pipeline_fqn_module(project, modules[i]->file_path);
-                if (module_qn) {
-                    const cbm_gbuf_node_t *src_node = cbm_gbuf_find_by_qn(gb, module_qn);
-                    if (src_node) {
-                        char props[512];
-                        snprintf(props, sizeof(props),
-                                 "{\"strategy\":\"file_reference\",\"confidence\":%.2f,\"ref_"
-                                 "path\":\"%s\"}",
-                                 confidence, ref_path);
-                        cbm_gbuf_insert_edge(gb, src_node->id, target_id, "CONFIGURES", props);
-                        edge_count++;
-                    }
-                    free(module_qn);
-                }
-            }
-        }
-    }
-
-    free(base_map);
-    free(full_map);
-    return edge_count;
-}
-
 /* Disk-based fallback: reads source from disk (sequential pipeline path). */
 // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int strategy_file_refs_disk(cbm_gbuf_t *gb, const char *project, const char *repo_path) {
@@ -646,8 +518,6 @@ static int strategy_file_refs_disk(cbm_gbuf_t *gb, const char *project, const ch
 
 int cbm_pipeline_pass_configlink(cbm_pipeline_ctx_t *ctx) {
     cbm_gbuf_t *gb = ctx->gbuf;
-    const char *project = ctx->project_name;
-    const char *repo_path = ctx->repo_path;
     /* Early exit: check if any config files exist in the project. */
     bool has_config = false;
 
@@ -694,11 +564,8 @@ int cbm_pipeline_pass_configlink(cbm_pipeline_ctx_t *ctx) {
     cbm_log_info("configlinker.strategy", "name", "dep_import", "edges", buf2);
 
     int ref_edges = 0;
-    if (ctx->prescan_cache && ctx->prescan_path_map) {
-        ref_edges = strategy_file_refs_prescan(gb, project, ctx->prescan_cache, ctx->prescan_count,
-                                               ctx->prescan_path_map);
-    } else if (repo_path) {
-        ref_edges = strategy_file_refs_disk(gb, project, repo_path);
+    if (ctx->repo_path) {
+        ref_edges = strategy_file_refs_disk(gb, ctx->project_name, ctx->repo_path);
     }
     snprintf(buf3, sizeof(buf3), "%d", ref_edges);
     cbm_log_info("configlinker.strategy", "name", "file_ref", "edges", buf3);

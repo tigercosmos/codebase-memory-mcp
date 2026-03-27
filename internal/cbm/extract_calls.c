@@ -267,7 +267,7 @@ static void walk_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec)
         if (callee && callee[0]) {
             // Skip keywords
             if (!cbm_is_keyword(callee, ctx->language)) {
-                CBMCall call;
+                CBMCall call = {0};
                 call.callee_name = callee;
                 call.enclosing_func_qn = cbm_enclosing_func_qn_cached(ctx, node);
                 call.first_string_arg = NULL;
@@ -500,6 +500,26 @@ void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, Walk
                                 }
                             }
                         }
+                    }
+                }
+            }
+
+            /* Extract second argument name (handler ref for route registrations).
+             * Pattern: router.GET("/path", handlerFunc) → second_arg_name = "handlerFunc"
+             * Only extracted when first_string_arg looks like a path. */
+            if (call.first_string_arg != NULL && call.first_string_arg[0] == '/' &&
+                !ts_node_is_null(args)) {
+                uint32_t nc2 = ts_node_named_child_count(args);
+                for (uint32_t ai = 1; ai < nc2 && ai < 4 && !call.second_arg_name; ai++) {
+                    TSNode arg2 = ts_node_named_child(args, ai);
+                    const char *ak2 = ts_node_type(arg2);
+                    if (strcmp(ak2, "identifier") == 0) {
+                        call.second_arg_name = cbm_node_text(ctx->arena, arg2, ctx->source);
+                    } else if (strcmp(ak2, "member_expression") == 0 ||
+                               strcmp(ak2, "selector_expression") == 0 ||
+                               strcmp(ak2, "attribute") == 0 ||
+                               strcmp(ak2, "field_expression") == 0) {
+                        call.second_arg_name = cbm_node_text(ctx->arena, arg2, ctx->source);
                     }
                 }
             }

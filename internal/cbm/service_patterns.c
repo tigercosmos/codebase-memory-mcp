@@ -282,12 +282,121 @@ static const lib_pattern_t config_libraries[] = {
     {NULL, CBM_SVC_NONE, NULL},
 };
 
-/* ── HTTP method inference from function/method name suffix ───── */
+/* Route registration frameworks — callee resolves to one of these AND
+ * has an HTTP method suffix → CBM_SVC_ROUTE_REG.
+ * Distinguished from HTTP clients: "gin.GET" registers a handler,
+ * "requests.get" makes an outbound HTTP call. */
+static const lib_pattern_t route_reg_libraries[] = {
+    /* Go */
+    {"gin-gonic/gin", CBM_SVC_ROUTE_REG, NULL},
+    {"gin.", CBM_SVC_ROUTE_REG, NULL},
+    {"go-chi/chi", CBM_SVC_ROUTE_REG, NULL},
+    {"chi.", CBM_SVC_ROUTE_REG, NULL},
+    {"gorilla/mux", CBM_SVC_ROUTE_REG, NULL},
+    {"labstack/echo", CBM_SVC_ROUTE_REG, NULL},
+    {"echo.", CBM_SVC_ROUTE_REG, NULL},
+    {"gofiber/fiber", CBM_SVC_ROUTE_REG, NULL},
+    {"fiber.", CBM_SVC_ROUTE_REG, NULL},
+    {"net/http.ServeMux", CBM_SVC_ROUTE_REG, NULL},
+    {"http.ServeMux", CBM_SVC_ROUTE_REG, NULL},
+    {"httprouter", CBM_SVC_ROUTE_REG, NULL},
 
+    /* JavaScript / TypeScript */
+    {"express", CBM_SVC_ROUTE_REG, NULL},
+    {"fastify", CBM_SVC_ROUTE_REG, NULL},
+    {"koa-router", CBM_SVC_ROUTE_REG, NULL},
+    {"hono", CBM_SVC_ROUTE_REG, NULL},
+    {"hapi", CBM_SVC_ROUTE_REG, NULL},
+
+    /* Python (non-decorator, e.g., Flask add_url_rule) */
+    {"flask", CBM_SVC_ROUTE_REG, NULL},
+    {"FastAPI", CBM_SVC_ROUTE_REG, NULL},
+    {"starlette", CBM_SVC_ROUTE_REG, NULL},
+
+    /* PHP */
+    {"Laravel", CBM_SVC_ROUTE_REG, NULL},
+    {"Illuminate.Routing", CBM_SVC_ROUTE_REG, NULL},
+    {"Symfony.Routing", CBM_SVC_ROUTE_REG, NULL},
+
+    /* Kotlin */
+    {"ktor.server", CBM_SVC_ROUTE_REG, NULL},
+    {"ktor.routing", CBM_SVC_ROUTE_REG, NULL},
+
+    /* Rust */
+    {"actix-web", CBM_SVC_ROUTE_REG, NULL},
+    {"actix_web", CBM_SVC_ROUTE_REG, NULL},
+    {"axum", CBM_SVC_ROUTE_REG, NULL},
+    {"rocket", CBM_SVC_ROUTE_REG, NULL},
+
+    /* Java */
+    {"Spring", CBM_SVC_ROUTE_REG, NULL},
+    {"jakarta.ws.rs", CBM_SVC_ROUTE_REG, NULL},
+
+    /* C# */
+    {"Microsoft.AspNetCore", CBM_SVC_ROUTE_REG, NULL},
+    {"MapGet", CBM_SVC_ROUTE_REG, NULL},
+    {"MapPost", CBM_SVC_ROUTE_REG, NULL},
+
+    /* Ruby */
+    {"ActionDispatch", CBM_SVC_ROUTE_REG, NULL},
+    {"Sinatra", CBM_SVC_ROUTE_REG, NULL},
+
+    /* Elixir */
+    {"Phoenix.Router", CBM_SVC_ROUTE_REG, NULL},
+
+    /* Scala */
+    {"akka.http.scaladsl.server", CBM_SVC_ROUTE_REG, NULL},
+    {"play.api.routing", CBM_SVC_ROUTE_REG, NULL},
+
+    {NULL, CBM_SVC_NONE, NULL},
+};
+
+/* Method suffix type (used by both route registration and HTTP client tables) */
 typedef struct {
     const char *suffix;
     const char *method;
 } method_suffix_t;
+
+/* Route registration method suffixes — matched on callee name.
+ * These are methods on router objects that register handlers. */
+static const method_suffix_t route_reg_suffixes[] = {
+    /* HTTP method registrations */
+    {".GET", "GET"},
+    {".Get", "GET"},
+    {".get", "GET"},
+    {".POST", "POST"},
+    {".Post", "POST"},
+    {".post", "POST"},
+    {".PUT", "PUT"},
+    {".Put", "PUT"},
+    {".put", "PUT"},
+    {".DELETE", "DELETE"},
+    {".Delete", "DELETE"},
+    {".delete", "DELETE"},
+    {".PATCH", "PATCH"},
+    {".Patch", "PATCH"},
+    {".patch", "PATCH"},
+    /* Handle/HandleFunc (Go stdlib, gorilla) */
+    {".Handle", "ANY"},
+    {".HandleFunc", "ANY"},
+    {".handle", "ANY"},
+    /* Framework-specific route registration */
+    {".Route", "ANY"},
+    {".route", "ANY"},
+    {"::get", "GET"},
+    {"::post", "POST"},
+    {"::put", "PUT"},
+    {"::delete", "DELETE"},
+    {"::patch", "PATCH"},
+    /* Minimal API (C# ASP.NET) */
+    {".MapGet", "GET"},
+    {".MapPost", "POST"},
+    {".MapPut", "PUT"},
+    {".MapDelete", "DELETE"},
+    {NULL, NULL},
+};
+
+/* ── HTTP method inference from function/method name suffix ───── */
 
 static const method_suffix_t method_suffixes[] = {
     {".get", "GET"},           {".Get", "GET"},           {".GET", "GET"},
@@ -331,7 +440,14 @@ cbm_svc_kind_t cbm_service_pattern_match(const char *resolved_qn) {
         return CBM_SVC_NONE;
     }
 
-    const lib_pattern_t *p = match_qn(resolved_qn, http_libraries);
+    /* Route registration checked first — prevents gin/echo from matching
+     * as HTTP clients (both have .get/.post suffixes). */
+    const lib_pattern_t *p = match_qn(resolved_qn, route_reg_libraries);
+    if (p) {
+        return p->kind;
+    }
+
+    p = match_qn(resolved_qn, http_libraries);
     if (p) {
         return p->kind;
     }
@@ -358,6 +474,20 @@ const char *cbm_service_pattern_http_method(const char *callee_name) {
         size_t clen = strlen(callee_name);
         if (clen >= slen && strcmp(callee_name + clen - slen, method_suffixes[i].suffix) == 0) {
             return method_suffixes[i].method;
+        }
+    }
+    return NULL;
+}
+
+const char *cbm_service_pattern_route_method(const char *callee_name) {
+    if (!callee_name) {
+        return NULL;
+    }
+    size_t clen = strlen(callee_name);
+    for (int i = 0; route_reg_suffixes[i].suffix != NULL; i++) {
+        size_t slen = strlen(route_reg_suffixes[i].suffix);
+        if (clen >= slen && strcmp(callee_name + clen - slen, route_reg_suffixes[i].suffix) == 0) {
+            return route_reg_suffixes[i].method;
         }
     }
     return NULL;

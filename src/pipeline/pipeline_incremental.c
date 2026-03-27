@@ -374,16 +374,15 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
     cbm_log_info("pass.timing", "pass", "incr_decorator_tags", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(t)));
 
-    /* Configlink: key_symbol + dep_imports are gbuf-only (safe).
-     * file_refs needs prescan or disk — we set prescan=NULL so it uses
-     * the disk fallback ONLY for config files (typically <10 files). */
+    /* Configlink: key_symbol + dep_imports are gbuf-only.
+     * file_refs uses disk fallback for config files (typically <10 files). */
     cbm_clock_gettime(CLOCK_MONOTONIC, &t);
     cbm_pipeline_pass_configlink(&ctx);
     cbm_log_info("pass.timing", "pass", "incr_configlink", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(t)));
 
-    /* Httplinks: route discovery uses disk fallback when prescan=NULL.
-     * Only reads source for files with Route/Handler labels (~few files). */
+    /* Httplinks: decorator-based routes from gbuf properties + disk fallback
+     * for source-based routes. AST-based route registration already ran during resolve. */
     cbm_clock_gettime(CLOCK_MONOTONIC, &t);
     cbm_pipeline_pass_httplinks(&ctx);
     cbm_log_info("pass.timing", "pass", "incr_httplinks", "elapsed_ms",

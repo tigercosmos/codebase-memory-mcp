@@ -111,6 +111,7 @@ typedef struct {
     const char *callee_name;       // raw callee text ("pkg.Func", "foo")
     const char *enclosing_func_qn; // QN of enclosing function (or module QN)
     const char *first_string_arg;  // first string literal argument (URL, topic, key) or NULL
+    const char *second_arg_name;   // second argument identifier (handler ref) or NULL
 } CBMCall;
 
 typedef struct {

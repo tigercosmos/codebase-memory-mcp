@@ -13,10 +13,11 @@
 
 /* Edge type returned by pattern match. */
 typedef enum {
-    CBM_SVC_NONE = 0,   /* Not a service pattern — use normal CALLS */
-    CBM_SVC_HTTP = 1,   /* Synchronous HTTP client call */
-    CBM_SVC_ASYNC = 2,  /* Async dispatch (message broker, task queue) */
-    CBM_SVC_CONFIG = 3, /* Config/env accessor */
+    CBM_SVC_NONE = 0,      /* Not a service pattern — use normal CALLS */
+    CBM_SVC_HTTP = 1,      /* Synchronous HTTP client call */
+    CBM_SVC_ASYNC = 2,     /* Async dispatch (message broker, task queue) */
+    CBM_SVC_CONFIG = 3,    /* Config/env accessor */
+    CBM_SVC_ROUTE_REG = 4, /* Route registration (router.GET, app.get, Route::post) */
 } cbm_svc_kind_t;
 
 /* Initialize the pattern lookup tables. Call once at startup. Thread-safe after init. */
@@ -31,6 +32,11 @@ cbm_svc_kind_t cbm_service_pattern_match(const char *resolved_qn);
 /* Get the HTTP method from the callee name suffix (e.g., ".get" → "GET").
  * Returns NULL if method cannot be inferred. */
 const char *cbm_service_pattern_http_method(const char *callee_name);
+
+/* Get the HTTP method from a route registration callee name suffix
+ * (e.g., "router.GET" → "GET", "app.post" → "POST").
+ * Returns NULL if not a known route registration method. */
+const char *cbm_service_pattern_route_method(const char *callee_name);
 
 /* Get the broker name for an async QN (e.g., "pubsub" from a Pub/Sub QN).
  * Returns NULL if not an async pattern. */

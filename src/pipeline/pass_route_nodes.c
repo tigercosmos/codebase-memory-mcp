@@ -242,6 +242,80 @@ static void match_infra_routes(cbm_gbuf_t *gb) {
     }
 }
 
+/* Phase 3: Create DATA_FLOWS edges by linking callers through Route to handlers.
+ * For each HTTP_CALLS/ASYNC_CALLS edge (caller → Route), find the HANDLES edge
+ * (handler → Route) and create DATA_FLOWS (caller → handler) with route context. */
+static void create_data_flows(cbm_gbuf_t *gb) {
+    const cbm_gbuf_node_t **routes = NULL;
+    int route_count = 0;
+    if (cbm_gbuf_find_by_label(gb, "Route", &routes, &route_count) != 0 || route_count == 0) {
+        return;
+    }
+
+    int flows = 0;
+
+    /* For each Route node, find callers (HTTP_CALLS/ASYNC_CALLS → Route)
+     * and handlers (HANDLES → Route), then create DATA_FLOWS links. */
+    for (int ri = 0; ri < route_count; ri++) {
+        const cbm_gbuf_node_t *route = routes[ri];
+
+        /* Find HTTP_CALLS → Route */
+        const cbm_gbuf_edge_t **http_edges = NULL;
+        int http_count = 0;
+        cbm_gbuf_find_edges_by_target_type(gb, route->id, "HTTP_CALLS", &http_edges, &http_count);
+
+        /* Find ASYNC_CALLS → Route */
+        const cbm_gbuf_edge_t **async_edges = NULL;
+        int async_count = 0;
+        cbm_gbuf_find_edges_by_target_type(gb, route->id, "ASYNC_CALLS", &async_edges,
+                                           &async_count);
+
+        /* Find HANDLES → Route */
+        const cbm_gbuf_edge_t **handles_edges = NULL;
+        int handles_count = 0;
+        cbm_gbuf_find_edges_by_target_type(gb, route->id, "HANDLES", &handles_edges,
+                                           &handles_count);
+
+        /* Collect caller IDs */
+        int64_t callers[64];
+        int n_callers = 0;
+        for (int ei = 0; ei < http_count && n_callers < 64; ei++) {
+            callers[n_callers++] = http_edges[ei]->source_id;
+        }
+        for (int ei = 0; ei < async_count && n_callers < 64; ei++) {
+            callers[n_callers++] = async_edges[ei]->source_id;
+        }
+
+        /* Collect handler IDs */
+        int64_t handlers[16];
+        int n_handlers = 0;
+        for (int ei = 0; ei < handles_count && n_handlers < 16; ei++) {
+            handlers[n_handlers++] = handles_edges[ei]->source_id;
+        }
+
+        /* Create DATA_FLOWS: each caller → each handler through this Route */
+        for (int ci = 0; ci < n_callers; ci++) {
+            for (int hi = 0; hi < n_handlers; hi++) {
+                if (callers[ci] == handlers[hi]) {
+                    continue; /* skip self-links */
+                }
+                char props[512];
+                snprintf(props, sizeof(props), "{\"via_route\":\"%s\",\"route_qn\":\"%s\"}",
+                         route->name ? route->name : "",
+                         route->qualified_name ? route->qualified_name : "");
+                cbm_gbuf_insert_edge(gb, callers[ci], handlers[hi], "DATA_FLOWS", props);
+                flows++;
+            }
+        }
+    }
+
+    if (flows > 0) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d", flows);
+        cbm_log_info("pass.data_flows", "created", buf);
+    }
+}
+
 void cbm_pipeline_create_route_nodes(cbm_gbuf_t *gb) {
     if (!gb) {
         return;
@@ -258,4 +332,7 @@ void cbm_pipeline_create_route_nodes(cbm_gbuf_t *gb) {
 
     /* Phase 2: match infra Routes to handler Routes by URL path */
     match_infra_routes(gb);
+
+    /* Phase 3: create DATA_FLOWS edges through Routes */
+    create_data_flows(gb);
 }

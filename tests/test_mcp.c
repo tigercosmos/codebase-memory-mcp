@@ -133,7 +133,7 @@ TEST(mcp_tools_list) {
     ASSERT_NOT_NULL(strstr(json, "index_repository"));
     ASSERT_NOT_NULL(strstr(json, "search_graph"));
     ASSERT_NOT_NULL(strstr(json, "query_graph"));
-    ASSERT_NOT_NULL(strstr(json, "trace_call_path"));
+    ASSERT_NOT_NULL(strstr(json, "trace_path"));
     ASSERT_NOT_NULL(strstr(json, "get_code_snippet"));
     ASSERT_NOT_NULL(strstr(json, "get_graph_schema"));
     ASSERT_NOT_NULL(strstr(json, "get_architecture"));
@@ -581,7 +581,8 @@ TEST(tool_search_code_no_project) {
                                    "\"project\":\"nonexistent\"}}}");
     ASSERT_NOT_NULL(resp);
     /* No project indexed → error */
-    ASSERT_TRUE(strstr(resp, "not found") || strstr(resp, "not indexed") || strstr(resp, "required"));
+    ASSERT_TRUE(strstr(resp, "not found") || strstr(resp, "not indexed") ||
+                strstr(resp, "required"));
     free(resp);
 
     cbm_mcp_server_free(srv);
@@ -1536,9 +1537,9 @@ TEST(server_handle_tools_call_missing_name) {
     cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
 
     /* tools/call with no tool name in params */
-    char *resp = cbm_mcp_server_handle(
-        srv, "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"tools/call\","
-             "\"params\":{\"arguments\":{}}}");
+    char *resp =
+        cbm_mcp_server_handle(srv, "{\"jsonrpc\":\"2.0\",\"id\":50,\"method\":\"tools/call\","
+                                   "\"params\":{\"arguments\":{}}}");
     ASSERT_NOT_NULL(resp);
     /* Should return error about unknown/missing tool */
     ASSERT_NOT_NULL(strstr(resp, "\"id\":50"));
@@ -1577,11 +1578,10 @@ TEST(mcp_server_run_rapid_messages) {
     ASSERT_EQ(pipe(fds), 0);
 
     /* Write all 3 messages to the write end in one shot */
-    const char *msgs =
-        "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
-        "\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{}}}\n"
-        "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"
-        "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n";
+    const char *msgs = "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"initialize\","
+                       "\"params\":{\"protocolVersion\":\"2025-11-25\",\"capabilities\":{}}}\n"
+                       "{\"jsonrpc\":\"2.0\",\"method\":\"notifications/initialized\"}\n"
+                       "{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\",\"params\":{}}\n";
     ssize_t written = write(fds[1], msgs, strlen(msgs));
     ASSERT_TRUE(written > 0);
     close(fds[1]); /* EOF signals end of input to the server */

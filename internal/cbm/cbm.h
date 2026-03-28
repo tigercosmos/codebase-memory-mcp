@@ -173,6 +173,7 @@ typedef enum {
 typedef struct {
     const char *value;             // the string literal content
     const char *enclosing_func_qn; // QN of enclosing function
+    const char *key_path;          // dotted key path from YAML/JSON nesting (NULL if flat)
     CBMStringRefKind kind;         // URL, CONFIG
 } CBMStringRef;
 

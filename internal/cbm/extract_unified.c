@@ -248,6 +248,116 @@ static void handle_string_refs(CBMExtractCtx *ctx, TSNode node, const WalkState 
     cbm_stringref_push(&ctx->result->string_refs, ctx->arena, ref);
 }
 
+// --- YAML nested field extraction (D2) ---
+
+/* Recursively walk YAML block_mapping_pair nodes, building dotted key paths.
+ * Emits string_refs with key_path for leaf values that are URLs or config values.
+ * Example: body.operational_info.post_url → "https://..." */
+static void walk_yaml_mapping(CBMExtractCtx *ctx, TSNode node, const char *prefix) {
+    uint32_t nc = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode child = ts_node_named_child(node, i);
+        const char *ck = ts_node_type(child);
+
+        if (strcmp(ck, "block_mapping_pair") != 0) {
+            continue;
+        }
+
+        /* Get key */
+        TSNode key = ts_node_child_by_field_name(child, "key", 3);
+        if (ts_node_is_null(key)) {
+            continue;
+        }
+        char *key_text = cbm_node_text(ctx->arena, key, ctx->source);
+        if (!key_text || !key_text[0]) {
+            continue;
+        }
+
+        /* Build dotted path */
+        const char *path =
+            prefix ? cbm_arena_sprintf(ctx->arena, "%s.%s", prefix, key_text) : key_text;
+
+        /* Get value node */
+        TSNode val = ts_node_child_by_field_name(child, "value", 5);
+        if (ts_node_is_null(val)) {
+            continue;
+        }
+        const char *vk = ts_node_type(val);
+
+        /* If value is a nested mapping (block_node → block_mapping), recurse */
+        if (strcmp(vk, "block_node") == 0 || strcmp(vk, "block_mapping") == 0) {
+            /* Walk children for nested block_mapping */
+            uint32_t vnc = ts_node_named_child_count(val);
+            for (uint32_t vi = 0; vi < vnc; vi++) {
+                TSNode vc = ts_node_named_child(val, vi);
+                const char *vctype = ts_node_type(vc);
+                if (strcmp(vctype, "block_mapping") == 0 ||
+                    strcmp(vctype, "block_mapping_pair") == 0) {
+                    walk_yaml_mapping(ctx, vc, path);
+                }
+            }
+            continue;
+        }
+
+        /* Leaf value: extract and classify */
+        char *val_text = cbm_node_text(ctx->arena, val, ctx->source);
+        if (!val_text || !val_text[0]) {
+            continue;
+        }
+
+        /* Strip quotes */
+        int vlen = (int)strlen(val_text);
+        const char *content = val_text;
+        if (vlen >= 2 && (val_text[0] == '"' || val_text[0] == '\'')) {
+            content = val_text + 1;
+            vlen -= 2;
+            if (vlen <= 0) {
+                continue;
+            }
+        }
+
+        int kind_val = cbm_classify_string(content, vlen);
+        if (kind_val < 0) {
+            continue;
+        }
+
+        char *stored = cbm_arena_strndup(ctx->arena, content, (size_t)vlen);
+        if (!stored) {
+            continue;
+        }
+
+        CBMStringRef ref = {
+            .value = stored,
+            .enclosing_func_qn = ctx->module_qn,
+            .key_path = path,
+            .kind = (CBMStringRefKind)kind_val,
+        };
+        cbm_stringref_push(&ctx->result->string_refs, ctx->arena, ref);
+    }
+}
+
+/* Handle YAML files: walk top-level block_mapping recursively */
+static void handle_yaml_nested(CBMExtractCtx *ctx, TSNode node) {
+    if (ctx->language != CBM_LANG_YAML) {
+        return;
+    }
+    const char *kind = ts_node_type(node);
+    if (strcmp(kind, "block_mapping") != 0) {
+        return;
+    }
+    /* Only process root-level block_mapping (depth 0 or 1) */
+    TSNode parent = ts_node_parent(node);
+    if (ts_node_is_null(parent)) {
+        walk_yaml_mapping(ctx, node, NULL);
+    } else {
+        const char *pk = ts_node_type(parent);
+        if (strcmp(pk, "stream") == 0 || strcmp(pk, "document") == 0 ||
+            strcmp(pk, "block_node") == 0) {
+            walk_yaml_mapping(ctx, node, NULL);
+        }
+    }
+}
+
 // --- Main unified cursor walk ---
 
 void cbm_extract_unified(CBMExtractCtx *ctx) {
@@ -281,6 +391,7 @@ void cbm_extract_unified(CBMExtractCtx *ctx) {
         handle_env_accesses(ctx, node, spec, &state);
         handle_type_assigns(ctx, node, spec, &state);
         handle_string_refs(ctx, node, &state);
+        handle_yaml_nested(ctx, node);
 
         // 4. Push scope markers for boundary nodes
         if (spec->function_node_types && cbm_kind_in_set(node, spec->function_node_types)) {

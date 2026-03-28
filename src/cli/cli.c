@@ -346,7 +346,7 @@ static const char skill_tracing_content[] =
     "description: Call chain and dependency expert. ALWAYS invoke this skill when the user "
     "asks who calls a function, what a function calls, needs impact analysis, or traces "
     "dependencies. Do not grep for function names directly — use codebase-memory-mcp "
-    "trace_call_path first.\n"
+    "trace_path first.\n"
     "---\n"
     "\n"
     "# Call Tracing & Impact Analysis\n"
@@ -355,7 +355,7 @@ static const char skill_tracing_content[] =
     "\n"
     "## Workflow\n"
     "1. `search_graph(name_pattern=\".*FuncName.*\")` — find exact function name\n"
-    "2. `trace_call_path(function_name=\"FuncName\", direction=\"both\")` — trace callers + "
+    "2. `trace_path(function_name=\"FuncName\", direction=\"both\")` — trace callers + "
     "callees\n"
     "3. `detect_changes` — find what changed and assess risk_labels\n"
     "\n"
@@ -402,7 +402,7 @@ static const char skill_reference_content[] =
     "- `search_graph` — find nodes by pattern\n"
     "- `search_code` — text search in source\n"
     "- `query_graph` — Cypher query language\n"
-    "- `trace_call_path` — call chain traversal\n"
+    "- `trace_path` — call chain traversal\n"
     "- `get_code_snippet` — read function source\n"
     "- `get_graph_schema` — node/edge type catalog\n"
     "- `get_architecture` — high-level summary\n"
@@ -429,7 +429,7 @@ static const char codex_instructions_content[] =
     "Use the MCP tools to explore and understand the code:\n"
     "\n"
     "- `search_graph` — find functions, classes, routes by pattern\n"
-    "- `trace_call_path` — trace who calls a function or what it calls\n"
+    "- `trace_path` — trace who calls a function or what it calls\n"
     "- `get_code_snippet` — read function source code\n"
     "- `query_graph` — run Cypher queries for complex patterns\n"
     "- `get_architecture` — high-level project summary\n"
@@ -963,7 +963,7 @@ static const char agent_instructions_content[] =
     "\n"
     "## Priority Order\n"
     "1. `search_graph` — find functions, classes, routes, variables by pattern\n"
-    "2. `trace_call_path` — trace who calls a function or what it calls\n"
+    "2. `trace_path` — trace who calls a function or what it calls\n"
     "3. `get_code_snippet` — read specific function/class source code\n"
     "4. `query_graph` — run Cypher queries for complex patterns\n"
     "5. `get_architecture` — high-level project summary\n"
@@ -975,7 +975,7 @@ static const char agent_instructions_content[] =
     "\n"
     "## Examples\n"
     "- Find a handler: `search_graph(name_pattern=\".*OrderHandler.*\")`\n"
-    "- Who calls it: `trace_call_path(function_name=\"OrderHandler\", direction=\"inbound\")`\n"
+    "- Who calls it: `trace_path(function_name=\"OrderHandler\", direction=\"inbound\")`\n"
     "- Read source: `get_code_snippet(qualified_name=\"pkg/orders.OrderHandler\")`\n";
 
 const char *cbm_get_agent_instructions(void) {
@@ -1558,7 +1558,7 @@ static void cbm_install_hook_gate_script(const char *home) {
                "fi\n"
                "touch \"$GATE\"\n"
                "echo 'BLOCKED: For code discovery, use codebase-memory-mcp tools first: "
-               "search_graph(name_pattern) to find functions/classes, trace_call_path() for "
+               "search_graph(name_pattern) to find functions/classes, trace_path() for "
                "call chains, get_code_snippet(qualified_name) to read source. If the graph "
                "is not indexed yet, call index_repository first. Fall back to Grep/Glob/Read "
                "only for text content search. If you need Grep, retry.' >&2\n"
@@ -1574,8 +1574,8 @@ static void cbm_install_hook_gate_script(const char *home) {
 }
 
 #define GEMINI_HOOK_MATCHER "google_search|read_file|grep_search"
-#define GEMINI_HOOK_COMMAND                                                    \
-    "echo 'Reminder: prefer codebase-memory-mcp search_graph/trace_call_path/" \
+#define GEMINI_HOOK_COMMAND                                               \
+    "echo 'Reminder: prefer codebase-memory-mcp search_graph/trace_path/" \
     "get_code_snippet over grep/file search for code discovery.' >&2"
 
 int cbm_upsert_gemini_hooks(const char *settings_path) {

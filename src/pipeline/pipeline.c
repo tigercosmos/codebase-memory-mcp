@@ -344,8 +344,14 @@ static void cbm_pipeline_extract_infra_routes(cbm_gbuf_t *gbuf, const cbm_file_i
                 strstr(sr->value, "://") != NULL) {
                 char route_qn[CBM_ROUTE_QN_SIZE];
                 snprintf(route_qn, sizeof(route_qn), "__route__infra__%s", sr->value);
-                cbm_gbuf_upsert_node(gbuf, "Route", sr->value, route_qn, fp, 0, 0,
-                                     "{\"source\":\"infra\"}");
+                char route_props[512];
+                if (sr->key_path != NULL) {
+                    snprintf(route_props, sizeof(route_props),
+                             "{\"source\":\"infra\",\"key_path\":\"%s\"}", sr->key_path);
+                } else {
+                    snprintf(route_props, sizeof(route_props), "{\"source\":\"infra\"}");
+                }
+                cbm_gbuf_upsert_node(gbuf, "Route", sr->value, route_qn, fp, 0, 0, route_props);
             }
         }
     }

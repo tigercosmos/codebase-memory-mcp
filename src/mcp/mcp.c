@@ -253,14 +253,19 @@ static const tool_def_t TOOLS[] = {
      "\"Optional row limit. Default: unlimited (100k "
      "ceiling)\"}},\"required\":[\"query\",\"project\"]}"},
 
-    {"trace_call_path",
-     "Trace function call paths — who calls a function and what it calls. Use INSTEAD OF grep when "
-     "finding callers, dependencies, or impact analysis.",
+    {"trace_path",
+     "Trace paths through the code graph. Modes: calls (callers/callees), data_flow (value "
+     "propagation with args at each hop), cross_service (through HTTP/async Route nodes). "
+     "Use INSTEAD OF grep for callers, dependencies, impact analysis, or data flow tracing.",
      "{\"type\":\"object\",\"properties\":{\"function_name\":{\"type\":\"string\"},\"project\":{"
      "\"type\":\"string\"},\"direction\":{\"type\":\"string\",\"enum\":[\"inbound\",\"outbound\","
-     "\"both\"],\"default\":\"both\"},\"depth\":{\"type\":\"integer\",\"default\":3},\"edge_"
-     "types\":{\"type\":\"array\",\"items\":{\"type\":\"string\"}}},\"required\":[\"function_"
-     "name\",\"project\"]}"},
+     "\"both\"],\"default\":\"both\"},\"depth\":{\"type\":\"integer\",\"default\":3},\"mode\":{"
+     "\"type\":\"string\",\"enum\":[\"calls\",\"data_flow\",\"cross_service\"],\"default\":"
+     "\"calls\",\"description\":\"calls: follow CALLS edges. data_flow: follow CALLS+DATA_FLOWS "
+     "with arg expressions. cross_service: follow HTTP_CALLS+ASYNC_CALLS+DATA_FLOWS through "
+     "Routes.\"},\"parameter_name\":{\"type\":\"string\",\"description\":\"For data_flow mode: "
+     "scope trace to a specific parameter name\"},\"edge_types\":{\"type\":\"array\",\"items\":{"
+     "\"type\":\"string\"}}},\"required\":[\"function_name\",\"project\"]}"},
 
     {"get_code_snippet",
      "Read source code for a function/class/symbol. IMPORTANT: First call search_graph to find the "
@@ -1223,11 +1228,15 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     char *project = cbm_mcp_get_string_arg(args, "project");
     cbm_store_t *store = resolve_store(srv, project);
     char *direction = cbm_mcp_get_string_arg(args, "direction");
+    char *mode = cbm_mcp_get_string_arg(args, "mode");
+    char *param_name = cbm_mcp_get_string_arg(args, "parameter_name");
     int depth = cbm_mcp_get_int_arg(args, "depth", 3);
 
     if (!func_name) {
         free(project);
         free(direction);
+        free(mode);
+        free(param_name);
         return cbm_mcp_text_result("function_name is required", true);
     }
     if (!store) {
@@ -1237,6 +1246,8 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
         free(func_name);
         free(project);
         free(direction);
+        free(mode);
+        free(param_name);
         return _res;
     }
 
@@ -1245,6 +1256,8 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
         free(func_name);
         free(project);
         free(direction);
+        free(mode);
+        free(param_name);
         return not_indexed;
     }
 
@@ -1261,6 +1274,8 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
         free(func_name);
         free(project);
         free(direction);
+        free(mode);
+        free(param_name);
         cbm_store_free_nodes(nodes, 0);
         return cbm_mcp_text_result("{\"error\":\"function not found\"}", true);
     }
@@ -1271,9 +1286,55 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
 
     yyjson_mut_obj_add_str(doc, root, "function", func_name);
     yyjson_mut_obj_add_str(doc, root, "direction", direction);
+    if (mode) {
+        yyjson_mut_obj_add_str(doc, root, "mode", mode);
+    }
 
-    const char *edge_types[] = {"CALLS"};
-    int edge_type_count = 1;
+    /* Edge types: explicit > mode-based > default */
+    static const char *mode_calls[] = {"CALLS"};
+    static const char *mode_data_flow[] = {"CALLS", "DATA_FLOWS"};
+    static const char *mode_cross_svc[] = {"HTTP_CALLS", "ASYNC_CALLS", "DATA_FLOWS", "CALLS"};
+
+    const char *edge_types[16];
+    int edge_type_count = 0;
+
+    /* Try parsing explicit edge_types array from args */
+    yyjson_doc *et_doc = yyjson_read(args, strlen(args), 0);
+    if (et_doc) {
+        yyjson_val *et_arr = yyjson_obj_get(yyjson_doc_get_root(et_doc), "edge_types");
+        if (et_arr && yyjson_is_arr(et_arr)) {
+            size_t idx2;
+            size_t max2;
+            yyjson_val *val2;
+            yyjson_arr_foreach(et_arr, idx2, max2, val2) {
+                if (yyjson_is_str(val2) && edge_type_count < 16) {
+                    edge_types[edge_type_count++] = yyjson_get_str(val2);
+                }
+            }
+        }
+    }
+
+    yyjson_doc *et_doc_keep = et_doc;
+    if (edge_type_count == 0) {
+        /* Select defaults by mode */
+        const char **defaults = mode_calls;
+        int n_defaults = 1;
+        if (mode && strcmp(mode, "data_flow") == 0) {
+            defaults = mode_data_flow;
+            n_defaults = 2;
+        } else if (mode && strcmp(mode, "cross_service") == 0) {
+            defaults = mode_cross_svc;
+            n_defaults = 4;
+        }
+        for (int i = 0; i < n_defaults; i++) {
+            edge_types[i] = defaults[i];
+        }
+        edge_type_count = n_defaults;
+        if (et_doc_keep) {
+            yyjson_doc_free(et_doc_keep);
+            et_doc_keep = NULL;
+        }
+    }
 
     /* Run BFS for each requested direction.
      * IMPORTANT: yyjson_mut_obj_add_str borrows pointers — we must keep
@@ -1338,6 +1399,11 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     free(func_name);
     free(project);
     free(direction);
+    free(mode);
+    free(param_name);
+    if (et_doc_keep) {
+        yyjson_doc_free(et_doc_keep);
+    }
 
     char *result = cbm_mcp_text_result(json, false);
     free(json);
@@ -2698,7 +2764,7 @@ char *cbm_mcp_handle_tool(cbm_mcp_server_t *srv, const char *tool_name, const ch
     if (strcmp(tool_name, "delete_project") == 0) {
         return handle_delete_project(srv, args_json);
     }
-    if (strcmp(tool_name, "trace_call_path") == 0) {
+    if (strcmp(tool_name, "trace_path") == 0 || strcmp(tool_name, "trace_call_path") == 0) {
         return handle_trace_call_path(srv, args_json);
     }
     if (strcmp(tool_name, "get_architecture") == 0) {

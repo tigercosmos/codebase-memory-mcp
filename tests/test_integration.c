@@ -367,7 +367,7 @@ TEST(integ_mcp_get_architecture) {
     PASS();
 }
 
-TEST(integ_mcp_trace_call_path) {
+TEST(integ_mcp_trace_path) {
     /* Trace outbound calls from Compute → should reach Add and Multiply */
     char args[256];
     snprintf(args, sizeof(args),
@@ -375,7 +375,7 @@ TEST(integ_mcp_trace_call_path) {
              "\"direction\":\"outbound\",\"max_depth\":3}",
              g_project);
 
-    char *resp = call_tool("trace_call_path", args);
+    char *resp = call_tool("trace_path", args);
     ASSERT_NOT_NULL(resp);
     /* Should find the function and show some path */
     /* Either finds the function, or returns not found if name doesn't match exactly */
@@ -554,7 +554,7 @@ SUITE(integration) {
     RUN_TEST(integ_mcp_query_graph_calls);
     RUN_TEST(integ_mcp_get_graph_schema);
     RUN_TEST(integ_mcp_get_architecture);
-    RUN_TEST(integ_mcp_trace_call_path);
+    RUN_TEST(integ_mcp_trace_path);
     RUN_TEST(integ_mcp_index_status);
 
     /* Store query validation */

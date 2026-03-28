@@ -111,14 +111,17 @@ static char *call_tool(const char *tool, const char *args_fmt, ...) {
 
 /* Parse integer from JSON response (handles nested MCP envelope) */
 static int count_in_response(const char *resp, const char *key) {
-    if (!resp) return -1;
+    if (!resp)
+        return -1;
     char pattern[64];
     snprintf(pattern, sizeof(pattern), "\"%s\":", key);
     const char *p = strstr(resp, pattern);
-    if (p) return atoi(p + strlen(pattern));
+    if (p)
+        return atoi(p + strlen(pattern));
     snprintf(pattern, sizeof(pattern), "\\\"%s\\\":", key);
     p = strstr(resp, pattern);
-    if (p) return atoi(p + strlen(pattern));
+    if (p)
+        return atoi(p + strlen(pattern));
     return -1;
 }
 
@@ -130,7 +133,8 @@ static cbm_store_t *open_store(void) {
 
 static int get_node_count(void) {
     cbm_store_t *s = open_store();
-    if (!s) return -1;
+    if (!s)
+        return -1;
     int c = cbm_store_count_nodes(s, g_project);
     cbm_store_close(s);
     return c;
@@ -138,7 +142,8 @@ static int get_node_count(void) {
 
 static int get_edge_count(void) {
     cbm_store_t *s = open_store();
-    if (!s) return -1;
+    if (!s)
+        return -1;
     int c = cbm_store_count_edges(s, g_project);
     cbm_store_close(s);
     return c;
@@ -146,7 +151,8 @@ static int get_edge_count(void) {
 
 static int get_edge_count_by_type(const char *type) {
     cbm_store_t *s = open_store();
-    if (!s) return -1;
+    if (!s)
+        return -1;
     int c = cbm_store_count_edges_by_type(s, g_project, type);
     cbm_store_close(s);
     return c;
@@ -162,8 +168,8 @@ static int has_function(const char *name_pattern) {
 }
 
 static int count_by_label(const char *label) {
-    char *resp = call_tool("search_graph",
-                           "{\"project\":\"%s\",\"label\":\"%s\"}", g_project, label);
+    char *resp =
+        call_tool("search_graph", "{\"project\":\"%s\",\"label\":\"%s\"}", g_project, label);
     int total = count_in_response(resp, "total");
     free(resp);
     return total;
@@ -194,7 +200,8 @@ static int incremental_setup(void) {
         return -1;
 
     const char *home = getenv("HOME");
-    if (!home) home = "/tmp";
+    if (!home)
+        home = "/tmp";
     snprintf(g_dbpath, sizeof(g_dbpath), "%s/.cache/codebase-memory-mcp/%s.db", home, g_project);
 
     char cache_dir[512];
@@ -299,8 +306,8 @@ TEST(incr_full_edge_types) {
     /* CALLS should be the most common edge type */
     ASSERT_GT(calls, imports);
 
-    printf("    [edges] CALLS=%d IMPORTS=%d DEFINES=%d CONTAINS_FILE=%d\n",
-           calls, imports, defines, contains);
+    printf("    [edges] CALLS=%d IMPORTS=%d DEFINES=%d CONTAINS_FILE=%d\n", calls, imports, defines,
+           contains);
 
     PASS();
 }
@@ -341,12 +348,11 @@ TEST(incr_modify_file) {
     snprintf(path, sizeof(path), "%s/fastapi/applications.py", g_repodir);
     FILE *f = fopen(path, "a");
     ASSERT(f != NULL);
-    fprintf(f,
-            "\n\ndef incr_test_injected(x: int) -> int:\n"
-            "    return x * 42\n"
-            "\n"
-            "def incr_test_helper(y: str) -> str:\n"
-            "    return y.upper()\n");
+    fprintf(f, "\n\ndef incr_test_injected(x: int) -> int:\n"
+               "    return x * 42\n"
+               "\n"
+               "def incr_test_helper(y: str) -> str:\n"
+               "    return y.upper()\n");
     fclose(f);
 
     double ms = 0;
@@ -401,8 +407,8 @@ TEST(incr_formatter_run) {
     int calls_diff = abs(get_edge_count_by_type("CALLS") - calls_before);
     ASSERT_LT(calls_diff, calls_before / 4);
 
-    printf("    [perf] reformat 50 files: %.0fms, node_diff=%d edge_diff=%d\n",
-           ms, node_diff, edge_diff);
+    printf("    [perf] reformat 50 files: %.0fms, node_diff=%d edge_diff=%d\n", ms, node_diff,
+           edge_diff);
 
     PASS();
 }
@@ -410,25 +416,24 @@ TEST(incr_formatter_run) {
 TEST(incr_add_file) {
     int nodes_before = get_node_count();
 
-    write_file_at("fastapi/incr_test_new.py",
-                  "\"\"\"New module.\"\"\"\n"
-                  "from fastapi import FastAPI\n"
-                  "\n"
-                  "def incr_new_entry(app: FastAPI) -> None:\n"
-                  "    setup(app)\n"
-                  "\n"
-                  "def setup(app: FastAPI) -> None:\n"
-                  "    pass\n"
-                  "\n"
-                  "def incr_new_validate(data: dict) -> bool:\n"
-                  "    return bool(data)\n"
-                  "\n"
-                  "class IncrNewHandler:\n"
-                  "    def handle(self, req):\n"
-                  "        return incr_new_validate(req)\n"
-                  "\n"
-                  "    def cleanup(self):\n"
-                  "        pass\n");
+    write_file_at("fastapi/incr_test_new.py", "\"\"\"New module.\"\"\"\n"
+                                              "from fastapi import FastAPI\n"
+                                              "\n"
+                                              "def incr_new_entry(app: FastAPI) -> None:\n"
+                                              "    setup(app)\n"
+                                              "\n"
+                                              "def setup(app: FastAPI) -> None:\n"
+                                              "    pass\n"
+                                              "\n"
+                                              "def incr_new_validate(data: dict) -> bool:\n"
+                                              "    return bool(data)\n"
+                                              "\n"
+                                              "class IncrNewHandler:\n"
+                                              "    def handle(self, req):\n"
+                                              "        return incr_new_validate(req)\n"
+                                              "\n"
+                                              "    def cleanup(self):\n"
+                                              "        pass\n");
 
     char *resp = index_repo();
     ASSERT(resp != NULL);
@@ -462,8 +467,7 @@ TEST(incr_delete_file) {
 
 TEST(incr_simultaneous_changes) {
     /* Add */
-    write_file_at("tests/incr_simul_add.py",
-                  "def incr_simul_added():\n    return 'added'\n");
+    write_file_at("tests/incr_simul_add.py", "def incr_simul_added():\n    return 'added'\n");
 
     /* Modify */
     char path[512];
@@ -506,13 +510,12 @@ TEST(incr_empty_file) {
 TEST(incr_syntax_error) {
     int nodes_before = get_node_count();
 
-    write_file_at("fastapi/incr_broken.py",
-                  "def broken(\n"
-                  "    # deliberately broken\n"
-                  "class @#$% {\n"
-                  "   async def nested() -> None\n"
-                  "       yield from broken(\n"
-                  "))))\n");
+    write_file_at("fastapi/incr_broken.py", "def broken(\n"
+                                            "    # deliberately broken\n"
+                                            "class @#$% {\n"
+                                            "   async def nested() -> None\n"
+                                            "       yield from broken(\n"
+                                            "))))\n");
 
     char *resp = index_repo();
     ASSERT(resp != NULL);
@@ -563,7 +566,8 @@ TEST(incr_binary_content) {
     FILE *f = fopen(path, "wb");
     if (f) {
         unsigned char bin[256];
-        for (int i = 0; i < 256; i++) bin[i] = (unsigned char)i;
+        for (int i = 0; i < 256; i++)
+            bin[i] = (unsigned char)i;
         fwrite(bin, 1, sizeof(bin), f);
         fclose(f);
     }
@@ -584,8 +588,7 @@ TEST(incr_large_generated) {
     content[0] = '\0';
     for (int i = 0; i < 300; i++) {
         char line[80];
-        snprintf(line, sizeof(line),
-                 "def incr_gen_%d(x):\n    return x + %d\n\n", i, i);
+        snprintf(line, sizeof(line), "def incr_gen_%d(x):\n    return x + %d\n\n", i, i);
         strcat(content, line);
     }
 
@@ -606,9 +609,8 @@ TEST(incr_large_generated) {
 TEST(incr_new_subdir) {
     /* File in a brand new subdirectory */
     write_file_at("fastapi/newpkg/__init__.py", "");
-    write_file_at("fastapi/newpkg/handler.py",
-                  "def newpkg_handler():\n"
-                  "    return 'from_new_package'\n");
+    write_file_at("fastapi/newpkg/handler.py", "def newpkg_handler():\n"
+                                               "    return 'from_new_package'\n");
 
     char *resp = index_repo();
     ASSERT(resp != NULL);
@@ -646,9 +648,8 @@ TEST(incr_rapid_reindex) {
 }
 
 TEST(incr_replace_file_content) {
-    write_file_at("fastapi/incr_replace.py",
-                  "def replace_original_a():\n    return 'a'\n"
-                  "def replace_original_b():\n    return 'b'\n");
+    write_file_at("fastapi/incr_replace.py", "def replace_original_a():\n    return 'a'\n"
+                                             "def replace_original_b():\n    return 'b'\n");
 
     char *resp = index_repo();
     ASSERT(resp != NULL);
@@ -658,9 +659,8 @@ TEST(incr_replace_file_content) {
     ASSERT(has_function("replace_original_b"));
 
     /* Replace entirely */
-    write_file_at("fastapi/incr_replace.py",
-                  "def replace_new_x():\n    return 'x'\n"
-                  "def replace_new_y():\n    return replace_new_x()\n");
+    write_file_at("fastapi/incr_replace.py", "def replace_new_x():\n    return 'x'\n"
+                                             "def replace_new_y():\n    return replace_new_x()\n");
 
     resp = index_repo();
     ASSERT(resp != NULL);
@@ -741,9 +741,8 @@ TEST(incr_db_deleted_recovery) {
 
 TEST(incr_accuracy_vs_full) {
     /* Modify a file to create a known incremental state */
-    write_file_at("fastapi/incr_accuracy.py",
-                  "def accuracy_a():\n    return 1\n"
-                  "def accuracy_b():\n    return accuracy_a() + 1\n");
+    write_file_at("fastapi/incr_accuracy.py", "def accuracy_a():\n    return 1\n"
+                                              "def accuracy_b():\n    return accuracy_a() + 1\n");
 
     char *resp = index_repo();
     ASSERT(resp != NULL);
@@ -768,8 +767,8 @@ TEST(incr_accuracy_vs_full) {
     ASSERT_LTE(abs(full_edges - incr_edges), 2);
     ASSERT_LTE(abs(full_calls - incr_calls), 2);
 
-    printf("    [accuracy] incr: %d nodes/%d edges, full: %d nodes/%d edges\n",
-           incr_nodes, incr_edges, full_nodes, full_edges);
+    printf("    [accuracy] incr: %d nodes/%d edges, full: %d nodes/%d edges\n", incr_nodes,
+           incr_edges, full_nodes, full_edges);
 
     delete_file_at("fastapi/incr_accuracy.py");
     PASS();
@@ -781,8 +780,7 @@ TEST(incr_accuracy_vs_full) {
 
 TEST(incr_perf_single_file_fast) {
     /* Modifying one file should complete in <2s (not re-parse everything) */
-    write_file_at("fastapi/incr_perf_probe.py",
-                  "def perf_probe():\n    return 42\n");
+    write_file_at("fastapi/incr_perf_probe.py", "def perf_probe():\n    return 42\n");
 
     double ms = 0;
     size_t peak_mb = 0;
@@ -821,7 +819,8 @@ static char *call_tool_timed(const char *tool, double *ms, const char *args_fmt,
 
 /* Check if ALL results have a specific label (validates label filter works) */
 static int all_results_have_label(const char *resp, const char *label) {
-    if (!resp) return 0;
+    if (!resp)
+        return 0;
     /* Every "label":"X" in results must match. Check no other label appears. */
     char pattern[64];
     snprintf(pattern, sizeof(pattern), "\"label\":\"%s\"", label);
@@ -833,7 +832,10 @@ static int all_results_have_label(const char *resp, const char *label) {
         /* Skip the key name — find the value */
         p += 5; /* past "label" */
         const char *val = strstr(p, ":\"");
-        if (!val || val > p + 10) { p++; continue; }
+        if (!val || val > p + 10) {
+            p++;
+            continue;
+        }
         val += 2;
         /* Check this label value matches */
         if (strncmp(val, label, strlen(label)) != 0) {
@@ -841,7 +843,8 @@ static int all_results_have_label(const char *resp, const char *label) {
             const char *eval = strstr(p, ":\\\"");
             if (eval && eval < p + 10) {
                 eval += 3;
-                if (strncmp(eval, label, strlen(label)) != 0) return 0;
+                if (strncmp(eval, label, strlen(label)) != 0)
+                    return 0;
             } else {
                 return 0;
             }
@@ -853,10 +856,12 @@ static int all_results_have_label(const char *resp, const char *label) {
 
 /* Check response contains a specific key (in nested JSON) */
 static int resp_has_key(const char *resp, const char *key) {
-    if (!resp) return 0;
+    if (!resp)
+        return 0;
     char pattern[64];
     snprintf(pattern, sizeof(pattern), "\"%s\"", key);
-    if (strstr(resp, pattern) != NULL) return 1;
+    if (strstr(resp, pattern) != NULL)
+        return 1;
     snprintf(pattern, sizeof(pattern), "\\\"%s\\\"", key);
     return strstr(resp, pattern) != NULL;
 }
@@ -867,15 +872,14 @@ static int resp_lacks_key(const char *resp, const char *key) {
 }
 
 /* Helper: assert tool call succeeds within timeout */
-#define TOOL_OK(resp, ms)            \
-    do {                             \
-        ASSERT((resp) != NULL);      \
+#define TOOL_OK(resp, ms)                  \
+    do {                                   \
+        ASSERT((resp) != NULL);            \
         ASSERT_LT((int)(ms), MAX_TOOL_MS); \
     } while (0)
 
 /* Helper: assert response is not an error */
-#define NOT_ERROR(resp) \
-    ASSERT(strstr((resp), "\"isError\":true") == NULL)
+#define NOT_ERROR(resp) ASSERT(strstr((resp), "\"isError\":true") == NULL)
 
 /* ── list_projects ─────────────────────────────────────────────── */
 
@@ -904,8 +908,7 @@ TEST(tool_list_projects_has_current) {
 
 TEST(tool_index_status_basic) {
     double ms;
-    char *r = call_tool_timed("index_status", &ms,
-                              "{\"project\":\"%s\"}", g_project);
+    char *r = call_tool_timed("index_status", &ms, "{\"project\":\"%s\"}", g_project);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "nodes") != NULL || strstr(r, "indexed") != NULL);
     free(r);
@@ -914,8 +917,7 @@ TEST(tool_index_status_basic) {
 
 TEST(tool_index_status_nonexistent) {
     double ms;
-    char *r = call_tool_timed("index_status", &ms,
-                              "{\"project\":\"does-not-exist-xyz\"}");
+    char *r = call_tool_timed("index_status", &ms, "{\"project\":\"does-not-exist-xyz\"}");
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "not") != NULL || strstr(r, "error") != NULL);
     free(r);
@@ -926,8 +928,7 @@ TEST(tool_index_status_nonexistent) {
 
 TEST(tool_schema_has_labels) {
     double ms;
-    char *r = call_tool_timed("get_graph_schema", &ms,
-                              "{\"project\":\"%s\"}", g_project);
+    char *r = call_tool_timed("get_graph_schema", &ms, "{\"project\":\"%s\"}", g_project);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "Function") != NULL);
     ASSERT(strstr(r, "Method") != NULL);
@@ -939,8 +940,7 @@ TEST(tool_schema_has_labels) {
 
 TEST(tool_schema_has_edge_types) {
     double ms;
-    char *r = call_tool_timed("get_graph_schema", &ms,
-                              "{\"project\":\"%s\"}", g_project);
+    char *r = call_tool_timed("get_graph_schema", &ms, "{\"project\":\"%s\"}", g_project);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "CALLS") != NULL);
     ASSERT(strstr(r, "IMPORTS") != NULL);
@@ -985,8 +985,8 @@ TEST(tool_sg_label_method) {
 
 TEST(tool_sg_label_module) {
     double ms;
-    char *r = call_tool_timed("search_graph", &ms,
-                              "{\"project\":\"%s\",\"label\":\"Module\"}", g_project);
+    char *r = call_tool_timed("search_graph", &ms, "{\"project\":\"%s\",\"label\":\"Module\"}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 200);
@@ -996,8 +996,8 @@ TEST(tool_sg_label_module) {
 
 TEST(tool_sg_label_variable) {
     double ms;
-    char *r = call_tool_timed("search_graph", &ms,
-                              "{\"project\":\"%s\",\"label\":\"Variable\"}", g_project);
+    char *r = call_tool_timed("search_graph", &ms, "{\"project\":\"%s\",\"label\":\"Variable\"}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 0);
@@ -1007,8 +1007,8 @@ TEST(tool_sg_label_variable) {
 
 TEST(tool_sg_label_class) {
     double ms;
-    char *r = call_tool_timed("search_graph", &ms,
-                              "{\"project\":\"%s\",\"label\":\"Class\"}", g_project);
+    char *r =
+        call_tool_timed("search_graph", &ms, "{\"project\":\"%s\",\"label\":\"Class\"}", g_project);
     TOOL_OK(r, ms);
     /* FastAPI has classes */
     int total = count_in_response(r, "total");
@@ -1019,8 +1019,8 @@ TEST(tool_sg_label_class) {
 
 TEST(tool_sg_label_route) {
     double ms;
-    char *r = call_tool_timed("search_graph", &ms,
-                              "{\"project\":\"%s\",\"label\":\"Route\"}", g_project);
+    char *r =
+        call_tool_timed("search_graph", &ms, "{\"project\":\"%s\",\"label\":\"Route\"}", g_project);
     TOOL_OK(r, ms);
     /* May or may not have routes */
     ASSERT(strstr(r, "total") != NULL || strstr(r, "results") != NULL);
@@ -1030,8 +1030,8 @@ TEST(tool_sg_label_route) {
 
 TEST(tool_sg_label_nonexistent) {
     double ms;
-    char *r = call_tool_timed("search_graph", &ms,
-                              "{\"project\":\"%s\",\"label\":\"Nonexistent\"}", g_project);
+    char *r = call_tool_timed("search_graph", &ms, "{\"project\":\"%s\",\"label\":\"Nonexistent\"}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_EQ(total, 0);
@@ -1045,7 +1045,8 @@ TEST(tool_sg_name_exact) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
-                              "\"name_pattern\":\"incr_test_injected\"}", g_project);
+                              "\"name_pattern\":\"incr_test_injected\"}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_EQ(total, 1);
@@ -1057,7 +1058,8 @@ TEST(tool_sg_name_regex) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
-                              "\"name_pattern\":\".*test.*\"}", g_project);
+                              "\"name_pattern\":\".*test.*\"}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 0);
@@ -1069,7 +1071,8 @@ TEST(tool_sg_name_no_match) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
-                              "\"name_pattern\":\"zzz_nonexistent_zzz\"}", g_project);
+                              "\"name_pattern\":\"zzz_nonexistent_zzz\"}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_EQ(total, 0);
@@ -1083,7 +1086,8 @@ TEST(tool_sg_min_degree) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
-                              "\"min_degree\":10}", g_project);
+                              "\"min_degree\":10}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 0);
@@ -1095,7 +1099,8 @@ TEST(tool_sg_max_degree_zero) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
-                              "\"max_degree\":0}", g_project);
+                              "\"max_degree\":0}",
+                              g_project);
     TOOL_OK(r, ms);
     /* Isolated functions (no edges) */
     int total = count_in_response(r, "total");
@@ -1108,7 +1113,8 @@ TEST(tool_sg_degree_range) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
-                              "\"min_degree\":2,\"max_degree\":5}", g_project);
+                              "\"min_degree\":2,\"max_degree\":5}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 0);
@@ -1122,7 +1128,8 @@ TEST(tool_sg_limit) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
-                              "\"limit\":3}", g_project);
+                              "\"limit\":3}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     /* total should show real count (much more than 3) */
@@ -1137,7 +1144,8 @@ TEST(tool_sg_offset) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
-                              "\"limit\":5,\"offset\":10}", g_project);
+                              "\"limit\":5,\"offset\":10}",
+                              g_project);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "results") != NULL);
     free(r);
@@ -1151,7 +1159,8 @@ TEST(tool_sg_file_pattern) {
     /* file_pattern is glob (converted to SQL LIKE), not regex */
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
-                              "\"file_pattern\":\"*fastapi*\",\"limit\":5}", g_project);
+                              "\"file_pattern\":\"*fastapi*\",\"limit\":5}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 0);
@@ -1166,7 +1175,8 @@ TEST(tool_sg_include_connected) {
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
                               "\"name_pattern\":\"incr_test_injected\","
-                              "\"include_connected\":true}", g_project);
+                              "\"include_connected\":true}",
+                              g_project);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "connected") != NULL || strstr(r, "results") != NULL);
     free(r);
@@ -1179,7 +1189,8 @@ TEST(tool_sg_relationship) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
-                              "\"relationship\":\"CALLS\",\"min_degree\":1}", g_project);
+                              "\"relationship\":\"CALLS\",\"min_degree\":1}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 0);
@@ -1193,7 +1204,8 @@ TEST(tool_sg_qn_pattern) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\","
-                              "\"qn_pattern\":\".*fastapi.*applications.*\"}", g_project);
+                              "\"qn_pattern\":\".*fastapi.*applications.*\"}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 0);
@@ -1208,7 +1220,8 @@ TEST(tool_sg_combined_filters) {
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
                               "\"name_pattern\":\".*__init__.*\","
-                              "\"min_degree\":1,\"limit\":5}", g_project);
+                              "\"min_degree\":1,\"limit\":5}",
+                              g_project);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "results") != NULL);
     free(r);
@@ -1219,8 +1232,7 @@ TEST(tool_sg_combined_filters) {
 
 TEST(tool_sg_project_only) {
     double ms;
-    char *r = call_tool_timed("search_graph", &ms,
-                              "{\"project\":\"%s\"}", g_project);
+    char *r = call_tool_timed("search_graph", &ms, "{\"project\":\"%s\"}", g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 1000);
@@ -1247,7 +1259,8 @@ TEST(tool_qg_match_nodes) {
     double ms;
     char *r = call_tool_timed("query_graph", &ms,
                               "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (n:Function) RETURN n.name LIMIT 10\"}", g_project);
+                              "\"query\":\"MATCH (n:Function) RETURN n.name LIMIT 10\"}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 0);
@@ -1258,10 +1271,11 @@ TEST(tool_qg_match_nodes) {
 
 TEST(tool_qg_match_edges) {
     double ms;
-    char *r = call_tool_timed("query_graph", &ms,
-                              "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (a)-[r:CALLS]->(b) RETURN a.name, b.name LIMIT 10\"}",
-                              g_project);
+    char *r =
+        call_tool_timed("query_graph", &ms,
+                        "{\"project\":\"%s\","
+                        "\"query\":\"MATCH (a)-[r:CALLS]->(b) RETURN a.name, b.name LIMIT 10\"}",
+                        g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 0);
@@ -1271,10 +1285,11 @@ TEST(tool_qg_match_edges) {
 
 TEST(tool_qg_match_imports) {
     double ms;
-    char *r = call_tool_timed("query_graph", &ms,
-                              "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (a)-[r:IMPORTS]->(b) RETURN a.name, b.name LIMIT 10\"}",
-                              g_project);
+    char *r =
+        call_tool_timed("query_graph", &ms,
+                        "{\"project\":\"%s\","
+                        "\"query\":\"MATCH (a)-[r:IMPORTS]->(b) RETURN a.name, b.name LIMIT 10\"}",
+                        g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 0);
@@ -1284,10 +1299,11 @@ TEST(tool_qg_match_imports) {
 
 TEST(tool_qg_match_defines) {
     double ms;
-    char *r = call_tool_timed("query_graph", &ms,
-                              "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (a)-[r:DEFINES]->(b) RETURN a.name, b.name LIMIT 10\"}",
-                              g_project);
+    char *r =
+        call_tool_timed("query_graph", &ms,
+                        "{\"project\":\"%s\","
+                        "\"query\":\"MATCH (a)-[r:DEFINES]->(b) RETURN a.name, b.name LIMIT 10\"}",
+                        g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 0);
@@ -1297,10 +1313,11 @@ TEST(tool_qg_match_defines) {
 
 TEST(tool_qg_match_contains) {
     double ms;
-    char *r = call_tool_timed("query_graph", &ms,
-                              "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (a)-[r:CONTAINS_FILE]->(b) RETURN a.name, b.name LIMIT 5\"}",
-                              g_project);
+    char *r = call_tool_timed(
+        "query_graph", &ms,
+        "{\"project\":\"%s\","
+        "\"query\":\"MATCH (a)-[r:CONTAINS_FILE]->(b) RETURN a.name, b.name LIMIT 5\"}",
+        g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 0);
@@ -1312,10 +1329,11 @@ TEST(tool_qg_match_contains) {
 
 TEST(tool_qg_where_name) {
     double ms;
-    char *r = call_tool_timed("query_graph", &ms,
-                              "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (n:Function) WHERE n.name = 'incr_test_injected' RETURN n.name\"}",
-                              g_project);
+    char *r = call_tool_timed(
+        "query_graph", &ms,
+        "{\"project\":\"%s\","
+        "\"query\":\"MATCH (n:Function) WHERE n.name = 'incr_test_injected' RETURN n.name\"}",
+        g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_EQ(total, 1);
@@ -1329,7 +1347,8 @@ TEST(tool_qg_two_hop) {
     double ms;
     char *r = call_tool_timed("query_graph", &ms,
                               "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (a)-[:CALLS]->(b)-[:CALLS]->(c) RETURN a.name, b.name, c.name LIMIT 5\"}",
+                              "\"query\":\"MATCH (a)-[:CALLS]->(b)-[:CALLS]->(c) RETURN a.name, "
+                              "b.name, c.name LIMIT 5\"}",
                               g_project);
     TOOL_OK(r, ms);
     /* May have 2-hop call chains */
@@ -1355,7 +1374,8 @@ TEST(tool_qg_max_rows) {
     char *r2 = call_tool_timed("query_graph", &ms,
                                "{\"project\":\"%s\","
                                "\"query\":\"MATCH (n:Function) RETURN n.name\","
-                               "\"max_rows\":3}", g_project);
+                               "\"max_rows\":3}",
+                               g_project);
     TOOL_OK(r2, ms);
     int total_limited = count_in_response(r2, "total");
     ASSERT_LTE(total_limited, 3);
@@ -1513,7 +1533,8 @@ TEST(tool_snippet_short_name) {
     double ms;
     char *r = call_tool_timed("get_code_snippet", &ms,
                               "{\"project\":\"%s\","
-                              "\"qualified_name\":\"incr_test_injected\"}", g_project);
+                              "\"qualified_name\":\"incr_test_injected\"}",
+                              g_project);
     TOOL_OK(r, ms);
     /* Should return source or suggestions */
     ASSERT(strstr(r, "def") != NULL || strstr(r, "return") != NULL ||
@@ -1526,7 +1547,8 @@ TEST(tool_snippet_nonexistent) {
     double ms;
     char *r = call_tool_timed("get_code_snippet", &ms,
                               "{\"project\":\"%s\","
-                              "\"qualified_name\":\"nonexistent_func_xyz\"}", g_project);
+                              "\"qualified_name\":\"nonexistent_func_xyz\"}",
+                              g_project);
     TOOL_OK(r, ms);
     /* Should return not found or suggestions, not crash */
     free(r);
@@ -1542,7 +1564,8 @@ TEST(tool_snippet_include_neighbors) {
     char *r = call_tool_timed("get_code_snippet", &ms,
                               "{\"project\":\"%s\","
                               "\"qualified_name\":\"incr_test_injected\","
-                              "\"include_neighbors\":true}", g_project);
+                              "\"include_neighbors\":true}",
+                              g_project);
     TOOL_OK(r, ms);
     /* Must have source code */
     ASSERT(resp_has_key(r, "source"));
@@ -1552,14 +1575,15 @@ TEST(tool_snippet_include_neighbors) {
     PASS();
 }
 
-/* ── trace_call_path ───────────────────────────────────────────── */
+/* ── trace_path ───────────────────────────────────────────── */
 
 TEST(tool_trace_outbound) {
     double ms;
-    char *r = call_tool_timed("trace_call_path", &ms,
+    char *r = call_tool_timed("trace_path", &ms,
                               "{\"project\":\"%s\","
                               "\"function_name\":\"incr_test_injected\","
-                              "\"direction\":\"outbound\"}", g_project);
+                              "\"direction\":\"outbound\"}",
+                              g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     /* direction=outbound → response has "callees", no "callers" */
@@ -1572,10 +1596,11 @@ TEST(tool_trace_outbound) {
 
 TEST(tool_trace_inbound) {
     double ms;
-    char *r = call_tool_timed("trace_call_path", &ms,
+    char *r = call_tool_timed("trace_path", &ms,
                               "{\"project\":\"%s\","
                               "\"function_name\":\"incr_test_injected\","
-                              "\"direction\":\"inbound\"}", g_project);
+                              "\"direction\":\"inbound\"}",
+                              g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     /* direction=inbound → response has "callers", no "callees" */
@@ -1587,10 +1612,11 @@ TEST(tool_trace_inbound) {
 
 TEST(tool_trace_both) {
     double ms;
-    char *r = call_tool_timed("trace_call_path", &ms,
+    char *r = call_tool_timed("trace_path", &ms,
                               "{\"project\":\"%s\","
                               "\"function_name\":\"incr_test_injected\","
-                              "\"direction\":\"both\",\"depth\":5}", g_project);
+                              "\"direction\":\"both\",\"depth\":5}",
+                              g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     /* direction=both → response has both "callers" and "callees" */
@@ -1602,10 +1628,11 @@ TEST(tool_trace_both) {
 
 TEST(tool_trace_depth_1) {
     double ms;
-    char *r = call_tool_timed("trace_call_path", &ms,
+    char *r = call_tool_timed("trace_path", &ms,
                               "{\"project\":\"%s\","
                               "\"function_name\":\"incr_test_injected\","
-                              "\"direction\":\"both\",\"depth\":1}", g_project);
+                              "\"direction\":\"both\",\"depth\":1}",
+                              g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     free(r);
@@ -1614,10 +1641,11 @@ TEST(tool_trace_depth_1) {
 
 TEST(tool_trace_nonexistent) {
     double ms;
-    char *r = call_tool_timed("trace_call_path", &ms,
+    char *r = call_tool_timed("trace_path", &ms,
                               "{\"project\":\"%s\","
                               "\"function_name\":\"no_such_function_xyz\","
-                              "\"direction\":\"both\"}", g_project);
+                              "\"direction\":\"both\"}",
+                              g_project);
     TOOL_OK(r, ms);
     /* Should return not found or empty, not crash */
     free(r);
@@ -1626,11 +1654,12 @@ TEST(tool_trace_nonexistent) {
 
 TEST(tool_trace_edge_types) {
     double ms;
-    char *r = call_tool_timed("trace_call_path", &ms,
+    char *r = call_tool_timed("trace_path", &ms,
                               "{\"project\":\"%s\","
                               "\"function_name\":\"incr_test_injected\","
                               "\"direction\":\"both\","
-                              "\"edge_types\":[\"CALLS\"]}", g_project);
+                              "\"edge_types\":[\"CALLS\"]}",
+                              g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     free(r);
@@ -1651,8 +1680,8 @@ TEST(tool_arch_structure) {
 
 TEST(tool_arch_all) {
     double ms;
-    char *r = call_tool_timed("get_architecture", &ms,
-                              "{\"project\":\"%s\",\"aspects\":[\"all\"]}", g_project);
+    char *r = call_tool_timed("get_architecture", &ms, "{\"project\":\"%s\",\"aspects\":[\"all\"]}",
+                              g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     free(r);
@@ -1661,8 +1690,7 @@ TEST(tool_arch_all) {
 
 TEST(tool_arch_no_aspects) {
     double ms;
-    char *r = call_tool_timed("get_architecture", &ms,
-                              "{\"project\":\"%s\"}", g_project);
+    char *r = call_tool_timed("get_architecture", &ms, "{\"project\":\"%s\"}", g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     free(r);
@@ -1673,8 +1701,7 @@ TEST(tool_arch_no_aspects) {
 
 TEST(tool_detect_changes_default) {
     double ms;
-    char *r = call_tool_timed("detect_changes", &ms,
-                              "{\"project\":\"%s\"}", g_project);
+    char *r = call_tool_timed("detect_changes", &ms, "{\"project\":\"%s\"}", g_project);
     TOOL_OK(r, ms);
     /* Must have changed_files array and changed_count */
     ASSERT(resp_has_key(r, "changed_files"));
@@ -1697,8 +1724,7 @@ TEST(tool_detect_changes_custom_branch) {
 
 TEST(tool_detect_changes_depth) {
     double ms;
-    char *r = call_tool_timed("detect_changes", &ms,
-                              "{\"project\":\"%s\",\"depth\":5}", g_project);
+    char *r = call_tool_timed("detect_changes", &ms, "{\"project\":\"%s\",\"depth\":5}", g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -1708,8 +1734,8 @@ TEST(tool_detect_changes_depth) {
 
 TEST(tool_adr_get) {
     double ms;
-    char *r = call_tool_timed("manage_adr", &ms,
-                              "{\"project\":\"%s\",\"mode\":\"get\"}", g_project);
+    char *r =
+        call_tool_timed("manage_adr", &ms, "{\"project\":\"%s\",\"mode\":\"get\"}", g_project);
     TOOL_OK(r, ms);
     /* May return empty if no ADR exists yet */
     free(r);
@@ -1718,8 +1744,8 @@ TEST(tool_adr_get) {
 
 TEST(tool_adr_sections) {
     double ms;
-    char *r = call_tool_timed("manage_adr", &ms,
-                              "{\"project\":\"%s\",\"mode\":\"sections\"}", g_project);
+    char *r =
+        call_tool_timed("manage_adr", &ms, "{\"project\":\"%s\",\"mode\":\"sections\"}", g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -1729,8 +1755,8 @@ TEST(tool_adr_sections) {
 
 TEST(tool_ingest_traces_empty) {
     double ms;
-    char *r = call_tool_timed("ingest_traces", &ms,
-                              "{\"project\":\"%s\",\"traces\":[]}", g_project);
+    char *r =
+        call_tool_timed("ingest_traces", &ms, "{\"project\":\"%s\",\"traces\":[]}", g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -1738,9 +1764,9 @@ TEST(tool_ingest_traces_empty) {
 
 TEST(tool_ingest_traces_basic) {
     double ms;
-    char *r = call_tool_timed("ingest_traces", &ms,
-                              "{\"project\":\"%s\",\"traces\":[{\"caller\":\"a\",\"callee\":\"b\"}]}",
-                              g_project);
+    char *r = call_tool_timed(
+        "ingest_traces", &ms,
+        "{\"project\":\"%s\",\"traces\":[{\"caller\":\"a\",\"callee\":\"b\"}]}", g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -1761,8 +1787,7 @@ TEST(tool_err_query_bad_project) {
 
 TEST(tool_err_search_code_bad_project) {
     double ms;
-    char *r = call_tool_timed("search_code", &ms,
-                              "{\"project\":\"xxx\",\"pattern\":\"test\"}");
+    char *r = call_tool_timed("search_code", &ms, "{\"project\":\"xxx\",\"pattern\":\"test\"}");
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -1779,7 +1804,7 @@ TEST(tool_err_snippet_bad_project) {
 
 TEST(tool_err_trace_bad_project) {
     double ms;
-    char *r = call_tool_timed("trace_call_path", &ms,
+    char *r = call_tool_timed("trace_path", &ms,
                               "{\"project\":\"xxx\","
                               "\"function_name\":\"test\",\"direction\":\"both\"}");
     TOOL_OK(r, ms);
@@ -1789,8 +1814,7 @@ TEST(tool_err_trace_bad_project) {
 
 TEST(tool_err_arch_bad_project) {
     double ms;
-    char *r = call_tool_timed("get_architecture", &ms,
-                              "{\"project\":\"xxx\"}");
+    char *r = call_tool_timed("get_architecture", &ms, "{\"project\":\"xxx\"}");
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -1798,8 +1822,7 @@ TEST(tool_err_arch_bad_project) {
 
 TEST(tool_err_detect_bad_project) {
     double ms;
-    char *r = call_tool_timed("detect_changes", &ms,
-                              "{\"project\":\"xxx\"}");
+    char *r = call_tool_timed("detect_changes", &ms, "{\"project\":\"xxx\"}");
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -1807,8 +1830,7 @@ TEST(tool_err_detect_bad_project) {
 
 TEST(tool_err_delete_nonexistent) {
     double ms;
-    char *r = call_tool_timed("delete_project", &ms,
-                              "{\"project\":\"xxx-nonexistent\"}");
+    char *r = call_tool_timed("delete_project", &ms, "{\"project\":\"xxx-nonexistent\"}");
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -1818,8 +1840,8 @@ TEST(tool_err_delete_nonexistent) {
 
 TEST(tool_index_mode_fast) {
     double ms;
-    char *r = call_tool_timed("index_repository", &ms,
-                              "{\"repo_path\":\"%s\",\"mode\":\"fast\"}", g_repodir);
+    char *r = call_tool_timed("index_repository", &ms, "{\"repo_path\":\"%s\",\"mode\":\"fast\"}",
+                              g_repodir);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "indexed") != NULL);
     free(r);
@@ -1828,8 +1850,7 @@ TEST(tool_index_mode_fast) {
 
 TEST(tool_index_invalid_path) {
     double ms;
-    char *r = call_tool_timed("index_repository", &ms,
-                              "{\"repo_path\":\"/nonexistent/path/xyz\"}");
+    char *r = call_tool_timed("index_repository", &ms, "{\"repo_path\":\"/nonexistent/path/xyz\"}");
     TOOL_OK(r, ms);
     /* Should fail gracefully */
     free(r);
@@ -1923,7 +1944,8 @@ TEST(tool_qg_count_functions) {
     char *r = call_tool_timed("query_graph", &ms,
                               "{\"project\":\"%s\","
                               "\"query\":\"MATCH (n:Function) RETURN n.name LIMIT 200\","
-                              "\"max_rows\":200}", g_project);
+                              "\"max_rows\":200}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 50);
@@ -1933,10 +1955,11 @@ TEST(tool_qg_count_functions) {
 
 TEST(tool_qg_edge_properties) {
     double ms;
-    char *r = call_tool_timed("query_graph", &ms,
-                              "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (a)-[r:CALLS]->(b) RETURN a.name, b.name, r.callee LIMIT 5\"}",
-                              g_project);
+    char *r = call_tool_timed(
+        "query_graph", &ms,
+        "{\"project\":\"%s\","
+        "\"query\":\"MATCH (a)-[r:CALLS]->(b) RETURN a.name, b.name, r.callee LIMIT 5\"}",
+        g_project);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "columns") != NULL || strstr(r, "rows") != NULL);
     free(r);
@@ -1947,7 +1970,8 @@ TEST(tool_qg_node_file_path) {
     double ms;
     char *r = call_tool_timed("query_graph", &ms,
                               "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (n:Function) WHERE n.name = 'incr_test_injected' RETURN n.name, n.file_path, n.start_line\"}",
+                              "\"query\":\"MATCH (n:Function) WHERE n.name = 'incr_test_injected' "
+                              "RETURN n.name, n.file_path, n.start_line\"}",
                               g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
@@ -1959,10 +1983,11 @@ TEST(tool_qg_node_file_path) {
 TEST(tool_qg_match_module_defines) {
     double ms;
     /* DEFINES edges connect modules to their symbols */
-    char *r = call_tool_timed("query_graph", &ms,
-                              "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (a)-[:DEFINES]->(b) RETURN a.name, b.name LIMIT 10\"}",
-                              g_project);
+    char *r =
+        call_tool_timed("query_graph", &ms,
+                        "{\"project\":\"%s\","
+                        "\"query\":\"MATCH (a)-[:DEFINES]->(b) RETURN a.name, b.name LIMIT 10\"}",
+                        g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_GT(total, 0);
@@ -1975,7 +2000,8 @@ TEST(tool_qg_max_rows_1) {
     char *r = call_tool_timed("query_graph", &ms,
                               "{\"project\":\"%s\","
                               "\"query\":\"MATCH (n:Function) RETURN n.name\","
-                              "\"max_rows\":1}", g_project);
+                              "\"max_rows\":1}",
+                              g_project);
     TOOL_OK(r, ms);
     int total = count_in_response(r, "total");
     ASSERT_EQ(total, 1);
@@ -1989,7 +2015,8 @@ TEST(tool_sc_limit_1) {
     double ms;
     char *r = call_tool_timed("search_code", &ms,
                               "{\"project\":\"%s\","
-                              "\"pattern\":\"def \",\"limit\":1}", g_project);
+                              "\"pattern\":\"def \",\"limit\":1}",
+                              g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     free(r);
@@ -2000,7 +2027,8 @@ TEST(tool_sc_limit_50) {
     double ms;
     char *r = call_tool_timed("search_code", &ms,
                               "{\"project\":\"%s\","
-                              "\"pattern\":\"import\",\"limit\":50}", g_project);
+                              "\"pattern\":\"import\",\"limit\":50}",
+                              g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     free(r);
@@ -2017,7 +2045,8 @@ TEST(tool_sc_combined) {
                               "\"mode\":\"compact\","
                               "\"file_pattern\":\"*.py\","
                               "\"path_filter\":\"fastapi/\","
-                              "\"limit\":5,\"context\":2}", g_project);
+                              "\"limit\":5,\"context\":2}",
+                              g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     free(r);
@@ -2042,9 +2071,11 @@ TEST(tool_snippet_full_qn) {
         if (qn_start) {
             qn_start += 2; /* skip :" */
             /* Handle escaped quotes in JSON */
-            if (*qn_start == '\\') qn_start += 2;
+            if (*qn_start == '\\')
+                qn_start += 2;
             const char *qn_end = strchr(qn_start, '"');
-            if (!qn_end) qn_end = strchr(qn_start, '\\');
+            if (!qn_end)
+                qn_end = strchr(qn_start, '\\');
             if (qn_end && qn_end > qn_start) {
                 char qn[512];
                 int len = (int)(qn_end - qn_start);
@@ -2101,9 +2132,10 @@ TEST(tool_arch_routes) {
 
 TEST(tool_arch_multi_aspects) {
     double ms;
-    char *r = call_tool_timed("get_architecture", &ms,
-                              "{\"project\":\"%s\",\"aspects\":[\"structure\",\"dependencies\",\"entry_points\"]}",
-                              g_project);
+    char *r = call_tool_timed(
+        "get_architecture", &ms,
+        "{\"project\":\"%s\",\"aspects\":[\"structure\",\"dependencies\",\"entry_points\"]}",
+        g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     free(r);
@@ -2114,8 +2146,8 @@ TEST(tool_arch_multi_aspects) {
 
 TEST(tool_detect_changes_scope) {
     double ms;
-    char *r = call_tool_timed("detect_changes", &ms,
-                              "{\"project\":\"%s\",\"scope\":\"fastapi/\"}", g_project);
+    char *r = call_tool_timed("detect_changes", &ms, "{\"project\":\"%s\",\"scope\":\"fastapi/\"}",
+                              g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2133,8 +2165,7 @@ TEST(tool_adr_update) {
     free(r);
 
     /* Verify it was stored */
-    r = call_tool_timed("manage_adr", &ms,
-                        "{\"project\":\"%s\",\"mode\":\"get\"}", g_project);
+    r = call_tool_timed("manage_adr", &ms, "{\"project\":\"%s\",\"mode\":\"get\"}", g_project);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "Test ADR") != NULL);
     free(r);
@@ -2161,17 +2192,18 @@ TEST(tool_ingest_traces_multiple) {
                               "{\"caller\":\"funcA\",\"callee\":\"funcB\",\"count\":5},"
                               "{\"caller\":\"funcB\",\"callee\":\"funcC\",\"count\":3},"
                               "{\"caller\":\"funcC\",\"callee\":\"funcD\",\"count\":1}"
-                              "]}", g_project);
+                              "]}",
+                              g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
 }
 
-/* ── trace_call_path: more edge_types combos ───────────────────── */
+/* ── trace_path: more edge_types combos ───────────────────── */
 
 TEST(tool_trace_imports_only) {
     double ms;
-    char *r = call_tool_timed("trace_call_path", &ms,
+    char *r = call_tool_timed("trace_path", &ms,
                               "{\"project\":\"%s\","
                               "\"function_name\":\"incr_test_injected\","
                               "\"direction\":\"both\","
@@ -2185,7 +2217,7 @@ TEST(tool_trace_imports_only) {
 
 TEST(tool_trace_calls_and_imports) {
     double ms;
-    char *r = call_tool_timed("trace_call_path", &ms,
+    char *r = call_tool_timed("trace_path", &ms,
                               "{\"project\":\"%s\","
                               "\"function_name\":\"incr_test_injected\","
                               "\"direction\":\"both\","
@@ -2199,7 +2231,7 @@ TEST(tool_trace_calls_and_imports) {
 
 TEST(tool_trace_deep) {
     double ms;
-    char *r = call_tool_timed("trace_call_path", &ms,
+    char *r = call_tool_timed("trace_path", &ms,
                               "{\"project\":\"%s\","
                               "\"function_name\":\"incr_test_injected\","
                               "\"direction\":\"outbound\",\"depth\":10}",
@@ -2220,7 +2252,8 @@ TEST(tool_sg_rel_imports) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Module\","
-                              "\"relationship\":\"IMPORTS\",\"min_degree\":1}", g_project);
+                              "\"relationship\":\"IMPORTS\",\"min_degree\":1}",
+                              g_project);
     TOOL_OK(r, ms);
     int t = count_in_response(r, "total");
     ASSERT_GT(t, 0);
@@ -2232,7 +2265,8 @@ TEST(tool_sg_rel_defines) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Module\","
-                              "\"relationship\":\"DEFINES\",\"min_degree\":1}", g_project);
+                              "\"relationship\":\"DEFINES\",\"min_degree\":1}",
+                              g_project);
     TOOL_OK(r, ms);
     int t = count_in_response(r, "total");
     ASSERT_GT(t, 0);
@@ -2244,7 +2278,8 @@ TEST(tool_sg_rel_contains_file) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Folder\","
-                              "\"relationship\":\"CONTAINS_FILE\",\"min_degree\":1}", g_project);
+                              "\"relationship\":\"CONTAINS_FILE\",\"min_degree\":1}",
+                              g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2254,8 +2289,8 @@ TEST(tool_sg_rel_contains_file) {
 
 TEST(tool_sg_label_file) {
     double ms;
-    char *r = call_tool_timed("search_graph", &ms,
-                              "{\"project\":\"%s\",\"label\":\"File\"}", g_project);
+    char *r =
+        call_tool_timed("search_graph", &ms, "{\"project\":\"%s\",\"label\":\"File\"}", g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2263,8 +2298,8 @@ TEST(tool_sg_label_file) {
 
 TEST(tool_sg_label_folder) {
     double ms;
-    char *r = call_tool_timed("search_graph", &ms,
-                              "{\"project\":\"%s\",\"label\":\"Folder\"}", g_project);
+    char *r = call_tool_timed("search_graph", &ms, "{\"project\":\"%s\",\"label\":\"Folder\"}",
+                              g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2272,8 +2307,8 @@ TEST(tool_sg_label_folder) {
 
 TEST(tool_sg_label_package) {
     double ms;
-    char *r = call_tool_timed("search_graph", &ms,
-                              "{\"project\":\"%s\",\"label\":\"Package\"}", g_project);
+    char *r = call_tool_timed("search_graph", &ms, "{\"project\":\"%s\",\"label\":\"Package\"}",
+                              g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2286,7 +2321,8 @@ TEST(tool_sg_include_connected_false) {
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
                               "\"name_pattern\":\"incr_test_injected\","
-                              "\"include_connected\":false}", g_project);
+                              "\"include_connected\":false}",
+                              g_project);
     TOOL_OK(r, ms);
     int t = count_in_response(r, "total");
     ASSERT_EQ(t, 1);
@@ -2300,7 +2336,8 @@ TEST(tool_sg_qn_and_label) {
     double ms;
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
-                              "\"qn_pattern\":\".*applications.*\"}", g_project);
+                              "\"qn_pattern\":\".*applications.*\"}",
+                              g_project);
     TOOL_OK(r, ms);
     int t = count_in_response(r, "total");
     ASSERT_GT(t, 0);
@@ -2315,7 +2352,8 @@ TEST(tool_sg_file_and_name) {
     char *r = call_tool_timed("search_graph", &ms,
                               "{\"project\":\"%s\",\"label\":\"Function\","
                               "\"file_pattern\":\"*fastapi*\","
-                              "\"name_pattern\":\".*\",\"limit\":5}", g_project);
+                              "\"name_pattern\":\".*\",\"limit\":5}",
+                              g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2325,10 +2363,11 @@ TEST(tool_sg_file_and_name) {
 
 TEST(tool_qg_configures) {
     double ms;
-    char *r = call_tool_timed("query_graph", &ms,
-                              "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (a)-[r:CONFIGURES]->(b) RETURN a.name, b.name LIMIT 5\"}",
-                              g_project);
+    char *r = call_tool_timed(
+        "query_graph", &ms,
+        "{\"project\":\"%s\","
+        "\"query\":\"MATCH (a)-[r:CONFIGURES]->(b) RETURN a.name, b.name LIMIT 5\"}",
+        g_project);
     TOOL_OK(r, ms);
     /* May have 0 results if no CONFIGURES edges in FastAPI */
     ASSERT(strstr(r, "columns") != NULL || strstr(r, "rows") != NULL);
@@ -2340,10 +2379,11 @@ TEST(tool_qg_configures) {
 
 TEST(tool_qg_handles) {
     double ms;
-    char *r = call_tool_timed("query_graph", &ms,
-                              "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (a)-[r:HANDLES]->(b) RETURN a.name, b.name LIMIT 5\"}",
-                              g_project);
+    char *r =
+        call_tool_timed("query_graph", &ms,
+                        "{\"project\":\"%s\","
+                        "\"query\":\"MATCH (a)-[r:HANDLES]->(b) RETURN a.name, b.name LIMIT 5\"}",
+                        g_project);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "columns") != NULL || strstr(r, "rows") != NULL);
     free(r);
@@ -2356,7 +2396,8 @@ TEST(tool_qg_defines_method) {
     double ms;
     char *r = call_tool_timed("query_graph", &ms,
                               "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (c:Class)-[r:DEFINES_METHOD]->(m:Method) RETURN c.name, m.name LIMIT 5\"}",
+                              "\"query\":\"MATCH (c:Class)-[r:DEFINES_METHOD]->(m:Method) RETURN "
+                              "c.name, m.name LIMIT 5\"}",
                               g_project);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "columns") != NULL || strstr(r, "rows") != NULL);
@@ -2368,10 +2409,11 @@ TEST(tool_qg_defines_method) {
 
 TEST(tool_qg_no_limit) {
     double ms;
-    char *r = call_tool_timed("query_graph", &ms,
-                              "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (n:Function) WHERE n.name = 'incr_test_injected' RETURN n.name\"}",
-                              g_project);
+    char *r = call_tool_timed(
+        "query_graph", &ms,
+        "{\"project\":\"%s\","
+        "\"query\":\"MATCH (n:Function) WHERE n.name = 'incr_test_injected' RETURN n.name\"}",
+        g_project);
     TOOL_OK(r, ms);
     int t = count_in_response(r, "total");
     ASSERT_GT(t, 0);
@@ -2383,10 +2425,11 @@ TEST(tool_qg_no_limit) {
 
 TEST(tool_qg_empty_result) {
     double ms;
-    char *r = call_tool_timed("query_graph", &ms,
-                              "{\"project\":\"%s\","
-                              "\"query\":\"MATCH (n:Function) WHERE n.name = 'zzz_no_exist_zzz' RETURN n.name\"}",
-                              g_project);
+    char *r = call_tool_timed(
+        "query_graph", &ms,
+        "{\"project\":\"%s\","
+        "\"query\":\"MATCH (n:Function) WHERE n.name = 'zzz_no_exist_zzz' RETURN n.name\"}",
+        g_project);
     TOOL_OK(r, ms);
     int t = count_in_response(r, "total");
     ASSERT_EQ(t, 0);
@@ -2443,7 +2486,8 @@ TEST(tool_snippet_neighbors_false) {
     char *r = call_tool_timed("get_code_snippet", &ms,
                               "{\"project\":\"%s\","
                               "\"qualified_name\":\"incr_test_injected\","
-                              "\"include_neighbors\":false}", g_project);
+                              "\"include_neighbors\":false}",
+                              g_project);
     TOOL_OK(r, ms);
     /* include_neighbors=false should NOT have "caller_names" field */
     ASSERT(resp_lacks_key(r, "caller_names"));
@@ -2460,35 +2504,38 @@ TEST(tool_snippet_class) {
     double ms;
     char *r = call_tool_timed("get_code_snippet", &ms,
                               "{\"project\":\"%s\","
-                              "\"qualified_name\":\"FastAPI\"}", g_project);
+                              "\"qualified_name\":\"FastAPI\"}",
+                              g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
 }
 
-/* ── trace_call_path: depth=0 ──────────────────────────────────── */
+/* ── trace_path: depth=0 ──────────────────────────────────── */
 
 TEST(tool_trace_depth_0) {
     double ms;
-    char *r = call_tool_timed("trace_call_path", &ms,
+    char *r = call_tool_timed("trace_path", &ms,
                               "{\"project\":\"%s\","
                               "\"function_name\":\"incr_test_injected\","
-                              "\"direction\":\"both\",\"depth\":0}", g_project);
+                              "\"direction\":\"both\",\"depth\":0}",
+                              g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     free(r);
     PASS();
 }
 
-/* ── trace_call_path: edge_types=[DEFINES] ─────────────────────── */
+/* ── trace_path: edge_types=[DEFINES] ─────────────────────── */
 
 TEST(tool_trace_defines_only) {
     double ms;
-    char *r = call_tool_timed("trace_call_path", &ms,
+    char *r = call_tool_timed("trace_path", &ms,
                               "{\"project\":\"%s\","
                               "\"function_name\":\"incr_test_injected\","
                               "\"direction\":\"inbound\","
-                              "\"edge_types\":[\"DEFINES\"]}", g_project);
+                              "\"edge_types\":[\"DEFINES\"]}",
+                              g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     free(r);
@@ -2501,7 +2548,8 @@ TEST(tool_detect_nonexistent_branch) {
     double ms;
     char *r = call_tool_timed("detect_changes", &ms,
                               "{\"project\":\"%s\","
-                              "\"base_branch\":\"nonexistent-branch-xyz\"}", g_project);
+                              "\"base_branch\":\"nonexistent-branch-xyz\"}",
+                              g_project);
     TOOL_OK(r, ms);
     /* Should handle gracefully — git diff may fail or return empty */
     free(r);
@@ -2512,8 +2560,7 @@ TEST(tool_detect_nonexistent_branch) {
 
 TEST(tool_detect_depth_1) {
     double ms;
-    char *r = call_tool_timed("detect_changes", &ms,
-                              "{\"project\":\"%s\",\"depth\":1}", g_project);
+    char *r = call_tool_timed("detect_changes", &ms, "{\"project\":\"%s\",\"depth\":1}", g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2523,8 +2570,7 @@ TEST(tool_detect_depth_1) {
 
 TEST(tool_adr_default_mode) {
     double ms;
-    char *r = call_tool_timed("manage_adr", &ms,
-                              "{\"project\":\"%s\"}", g_project);
+    char *r = call_tool_timed("manage_adr", &ms, "{\"project\":\"%s\"}", g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2536,7 +2582,8 @@ TEST(tool_adr_update_empty) {
     double ms;
     char *r = call_tool_timed("manage_adr", &ms,
                               "{\"project\":\"%s\",\"mode\":\"update\","
-                              "\"content\":\"\"}", g_project);
+                              "\"content\":\"\"}",
+                              g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2546,9 +2593,9 @@ TEST(tool_adr_update_empty) {
 
 TEST(tool_ingest_traces_partial) {
     double ms;
-    char *r = call_tool_timed("ingest_traces", &ms,
-                              "{\"project\":\"%s\",\"traces\":[{\"caller\":\"onlyA\"}]}",
-                              g_project);
+    char *r =
+        call_tool_timed("ingest_traces", &ms,
+                        "{\"project\":\"%s\",\"traces\":[{\"caller\":\"onlyA\"}]}", g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2558,8 +2605,7 @@ TEST(tool_ingest_traces_partial) {
 
 TEST(tool_err_schema_bad_project) {
     double ms;
-    char *r = call_tool_timed("get_graph_schema", &ms,
-                              "{\"project\":\"nonexistent-xyz\"}");
+    char *r = call_tool_timed("get_graph_schema", &ms, "{\"project\":\"nonexistent-xyz\"}");
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2579,8 +2625,8 @@ TEST(tool_err_index_status_no_project) {
 
 TEST(tool_err_adr_bad_project) {
     double ms;
-    char *r = call_tool_timed("manage_adr", &ms,
-                              "{\"project\":\"nonexistent-xyz\",\"mode\":\"get\"}");
+    char *r =
+        call_tool_timed("manage_adr", &ms, "{\"project\":\"nonexistent-xyz\",\"mode\":\"get\"}");
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2590,8 +2636,8 @@ TEST(tool_err_adr_bad_project) {
 
 TEST(tool_err_ingest_bad_project) {
     double ms;
-    char *r = call_tool_timed("ingest_traces", &ms,
-                              "{\"project\":\"nonexistent-xyz\",\"traces\":[]}");
+    char *r =
+        call_tool_timed("ingest_traces", &ms, "{\"project\":\"nonexistent-xyz\",\"traces\":[]}");
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2601,8 +2647,7 @@ TEST(tool_err_ingest_bad_project) {
 
 TEST(tool_err_ingest_no_traces) {
     double ms;
-    char *r = call_tool_timed("ingest_traces", &ms,
-                              "{\"project\":\"%s\"}", g_project);
+    char *r = call_tool_timed("ingest_traces", &ms, "{\"project\":\"%s\"}", g_project);
     TOOL_OK(r, ms);
     free(r);
     PASS();
@@ -2612,8 +2657,8 @@ TEST(tool_err_ingest_no_traces) {
 
 TEST(tool_index_mode_full) {
     double ms;
-    char *r = call_tool_timed("index_repository", &ms,
-                              "{\"repo_path\":\"%s\",\"mode\":\"full\"}", g_repodir);
+    char *r = call_tool_timed("index_repository", &ms, "{\"repo_path\":\"%s\",\"mode\":\"full\"}",
+                              g_repodir);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "indexed") != NULL);
     free(r);
@@ -2624,8 +2669,8 @@ TEST(tool_index_mode_full) {
 
 TEST(tool_arch_empty_aspects) {
     double ms;
-    char *r = call_tool_timed("get_architecture", &ms,
-                              "{\"project\":\"%s\",\"aspects\":[]}", g_project);
+    char *r =
+        call_tool_timed("get_architecture", &ms, "{\"project\":\"%s\",\"aspects\":[]}", g_project);
     TOOL_OK(r, ms);
     NOT_ERROR(r);
     free(r);
@@ -2643,11 +2688,13 @@ TEST(tool_delete_and_verify) {
     char pypath[512];
     snprintf(pypath, sizeof(pypath), "%s/dummy.py", tmpdir2);
     FILE *f = fopen(pypath, "w");
-    if (f) { fprintf(f, "def throwaway():\n    pass\n"); fclose(f); }
+    if (f) {
+        fprintf(f, "def throwaway():\n    pass\n");
+        fclose(f);
+    }
 
     double ms;
-    char *r = call_tool_timed("index_repository", &ms,
-                              "{\"repo_path\":\"%s\"}", tmpdir2);
+    char *r = call_tool_timed("index_repository", &ms, "{\"repo_path\":\"%s\"}", tmpdir2);
     TOOL_OK(r, ms);
     free(r);
 
@@ -2655,21 +2702,18 @@ TEST(tool_delete_and_verify) {
     ASSERT(throwaway_project != NULL);
 
     /* Verify it exists */
-    r = call_tool_timed("index_status", &ms,
-                        "{\"project\":\"%s\"}", throwaway_project);
+    r = call_tool_timed("index_status", &ms, "{\"project\":\"%s\"}", throwaway_project);
     TOOL_OK(r, ms);
     free(r);
 
     /* Delete it */
-    r = call_tool_timed("delete_project", &ms,
-                        "{\"project\":\"%s\"}", throwaway_project);
+    r = call_tool_timed("delete_project", &ms, "{\"project\":\"%s\"}", throwaway_project);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "deleted") != NULL);
     free(r);
 
     /* Verify it's gone */
-    r = call_tool_timed("index_status", &ms,
-                        "{\"project\":\"%s\"}", throwaway_project);
+    r = call_tool_timed("index_status", &ms, "{\"project\":\"%s\"}", throwaway_project);
     TOOL_OK(r, ms);
     ASSERT(strstr(r, "not") != NULL || strstr(r, "error") != NULL);
     free(r);
@@ -2782,7 +2826,7 @@ SUITE(incremental) {
     RUN_TEST(tool_snippet_nonexistent);
     RUN_TEST(tool_snippet_include_neighbors);
 
-    /* Phase 13: trace_call_path — directions + params */
+    /* Phase 13: trace_path — directions + params */
     RUN_TEST(tool_trace_outbound);
     RUN_TEST(tool_trace_inbound);
     RUN_TEST(tool_trace_both);
@@ -2860,7 +2904,7 @@ SUITE(incremental) {
     /* Phase 27: ingest_traces multiple */
     RUN_TEST(tool_ingest_traces_multiple);
 
-    /* Phase 28: trace_call_path edge_types combos */
+    /* Phase 28: trace_path edge_types combos */
     RUN_TEST(tool_trace_imports_only);
     RUN_TEST(tool_trace_calls_and_imports);
     RUN_TEST(tool_trace_deep);
@@ -2896,7 +2940,7 @@ SUITE(incremental) {
     RUN_TEST(tool_snippet_neighbors_false);
     RUN_TEST(tool_snippet_class);
 
-    /* Phase 35: trace_call_path remaining */
+    /* Phase 35: trace_path remaining */
     RUN_TEST(tool_trace_depth_0);
     RUN_TEST(tool_trace_defines_only);
 

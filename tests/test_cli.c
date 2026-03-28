@@ -174,7 +174,8 @@ TEST(cli_version_get_set) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 TEST(cli_detect_shell_rc_zsh) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-rc-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-rc-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -197,7 +198,8 @@ TEST(cli_detect_shell_rc_zsh) {
 }
 
 TEST(cli_detect_shell_rc_bash) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-rc-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-rc-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -221,7 +223,8 @@ TEST(cli_detect_shell_rc_bash) {
 
 TEST(cli_detect_shell_rc_bash_with_bashrc) {
     /* Port of TestDetectShellRC_BashWithBashrc */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-rc-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-rc-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -248,7 +251,8 @@ TEST(cli_detect_shell_rc_bash_with_bashrc) {
 }
 
 TEST(cli_detect_shell_rc_fish) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-rc-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-rc-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -269,7 +273,8 @@ TEST(cli_detect_shell_rc_fish) {
 }
 
 TEST(cli_detect_shell_rc_default) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-rc-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-rc-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -295,7 +300,8 @@ TEST(cli_detect_shell_rc_default) {
 
 TEST(cli_find_cli_not_found) {
     /* Port of TestFindCLI_NotFound */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-find-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-find-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -319,7 +325,8 @@ TEST(cli_find_cli_on_path) {
     SKIP("PATH search differs on Windows");
 #endif
     /* Port of TestFindCLI_FoundOnPATH */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-find-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-find-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -350,7 +357,8 @@ TEST(cli_find_cli_fallback_paths) {
     SKIP("shell scripts + chmod not available on Windows");
 #endif
     /* Port of TestFindCLI_FallbackPaths */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-find-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-find-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -403,7 +411,8 @@ TEST(cli_dry_run_flags) {
 
 TEST(cli_skill_creation) {
     /* Port of TestInstallSkillCreation */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-skill-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-skill-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -433,7 +442,8 @@ TEST(cli_skill_creation) {
 
 TEST(cli_skill_idempotent) {
     /* Port of TestInstallIdempotent */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-skill-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-skill-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -462,7 +472,8 @@ TEST(cli_skill_idempotent) {
 
 TEST(cli_skill_force_overwrite) {
     /* Port of TestCLI_InstallForceOverwrites */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-skill-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-skill-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -481,7 +492,8 @@ TEST(cli_skill_force_overwrite) {
 
 TEST(cli_uninstall_removes_skills) {
     /* Port of TestUninstallRemovesSkills */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-skill-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-skill-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -507,7 +519,8 @@ TEST(cli_uninstall_removes_skills) {
 
 TEST(cli_remove_old_monolithic_skill) {
     /* Port of TestRemoveOldMonolithicSkill */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-skill-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-skill-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -548,7 +561,7 @@ TEST(cli_skill_files_content) {
         }
         if (strcmp(sk[i].name, "codebase-memory-tracing") == 0) {
             found_tracing = true;
-            ASSERT(strstr(sk[i].content, "trace_call_path") != NULL);
+            ASSERT(strstr(sk[i].content, "trace_path") != NULL);
             ASSERT(strstr(sk[i].content, "direction") != NULL);
             ASSERT(strstr(sk[i].content, "detect_changes") != NULL);
         }
@@ -576,7 +589,7 @@ TEST(cli_codex_instructions) {
     const char *instr = cbm_get_codex_instructions();
     ASSERT_NOT_NULL(instr);
     ASSERT(strstr(instr, "Codebase Knowledge Graph") != NULL);
-    ASSERT(strstr(instr, "trace_call_path") != NULL);
+    ASSERT(strstr(instr, "trace_path") != NULL);
     PASS();
 }
 
@@ -586,7 +599,8 @@ TEST(cli_codex_instructions) {
 
 TEST(cli_editor_mcp_install) {
     /* Port of TestEditorMCPInstall */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -608,7 +622,8 @@ TEST(cli_editor_mcp_install) {
 
 TEST(cli_editor_mcp_idempotent) {
     /* Port of TestEditorMCPInstallIdempotent */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -638,7 +653,8 @@ TEST(cli_editor_mcp_idempotent) {
 
 TEST(cli_editor_mcp_preserves_others) {
     /* Port of TestEditorMCPPreservesOtherServers */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -666,7 +682,8 @@ TEST(cli_editor_mcp_preserves_others) {
 
 TEST(cli_editor_mcp_uninstall) {
     /* Port of TestEditorMCPUninstall */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -688,7 +705,8 @@ TEST(cli_editor_mcp_uninstall) {
 
 TEST(cli_gemini_mcp_install) {
     /* Port of TestGeminiMCPInstall */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -714,7 +732,8 @@ TEST(cli_gemini_mcp_install) {
 
 TEST(cli_vscode_mcp_install) {
     /* Port of TestVSCodeMCPInstall */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -738,7 +757,8 @@ TEST(cli_vscode_mcp_install) {
 
 TEST(cli_vscode_mcp_uninstall) {
     /* Port of TestVSCodeMCPUninstall */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -763,7 +783,8 @@ TEST(cli_vscode_mcp_uninstall) {
 
 TEST(cli_zed_mcp_install) {
     /* Port of TestZedMCPInstall */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -787,7 +808,8 @@ TEST(cli_zed_mcp_install) {
 
 TEST(cli_zed_mcp_preserves_settings) {
     /* Port of TestZedMCPPreservesSettings */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -817,7 +839,8 @@ TEST(cli_zed_mcp_preserves_settings) {
 
 TEST(cli_zed_mcp_uninstall) {
     /* Port of TestZedMCPUninstall */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -838,7 +861,8 @@ TEST(cli_zed_mcp_uninstall) {
 
 TEST(cli_zed_mcp_jsonc_comments) {
     /* Issue #24: Zed settings.json uses JSONC (comments + trailing commas) */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-mcp-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -849,14 +873,13 @@ TEST(cli_zed_mcp_jsonc_comments) {
     test_mkdirp(dir);
 
     /* JSONC with comments and trailing commas — must not fail */
-    write_test_file(configpath,
-        "// Zed settings\n"
-        "{\n"
-        "  \"theme\": \"One Dark\",\n"
-        "  /* multi-line\n"
-        "     comment */\n"
-        "  \"vim_mode\": true,\n"  /* trailing comma */
-        "}\n");
+    write_test_file(configpath, "// Zed settings\n"
+                                "{\n"
+                                "  \"theme\": \"One Dark\",\n"
+                                "  /* multi-line\n"
+                                "     comment */\n"
+                                "  \"vim_mode\": true,\n" /* trailing comma */
+                                "}\n");
 
     int rc = cbm_install_zed_mcp("/usr/local/bin/codebase-memory-mcp", configpath);
     ASSERT_EQ(rc, 0);
@@ -880,7 +903,8 @@ TEST(cli_zed_mcp_jsonc_comments) {
 
 TEST(cli_ensure_path_append) {
     /* Port of TestCLI_InstallPATHAppend */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-path-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-path-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -899,7 +923,8 @@ TEST(cli_ensure_path_append) {
 }
 
 TEST(cli_ensure_path_already_present) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-path-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-path-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -915,7 +940,8 @@ TEST(cli_ensure_path_already_present) {
 }
 
 TEST(cli_ensure_path_dry_run) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-path-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-path-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -940,7 +966,8 @@ TEST(cli_ensure_path_dry_run) {
 
 TEST(cli_copy_file) {
     /* Port of TestCopyFile */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-copy-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-copy-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -962,7 +989,8 @@ TEST(cli_copy_file) {
 
 TEST(cli_copy_file_source_not_found) {
     /* Port of TestCopyFile_SourceNotFound */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-copy-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-copy-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -1040,21 +1068,29 @@ static unsigned char *create_test_zip_stored(const char *filename, const unsigne
     int eocd_sz = 22;
     int total = local_hdr_sz + content_len + cd_hdr_sz + eocd_sz;
     unsigned char *zip = calloc(1, (size_t)total);
-    if (!zip) return NULL;
+    if (!zip)
+        return NULL;
     int pos = 0;
 
     /* Local file header */
-    zip[pos] = 0x50; zip[pos+1] = 0x4B; zip[pos+2] = 0x03; zip[pos+3] = 0x04; /* signature */
-    zip[pos+4] = 20; zip[pos+5] = 0; /* version needed = 2.0 */
-    zip[pos+8] = 0; zip[pos+9] = 0; /* compression = stored */
-    zip[pos+18] = (unsigned char)(content_len & 0xFF);
-    zip[pos+19] = (unsigned char)((content_len >> 8) & 0xFF);
-    zip[pos+20] = (unsigned char)((content_len >> 16) & 0xFF);
-    zip[pos+21] = (unsigned char)((content_len >> 24) & 0xFF);
-    zip[pos+22] = zip[pos+18]; zip[pos+23] = zip[pos+19];
-    zip[pos+24] = zip[pos+20]; zip[pos+25] = zip[pos+21];
-    zip[pos+26] = (unsigned char)(name_len & 0xFF);
-    zip[pos+27] = (unsigned char)((name_len >> 8) & 0xFF);
+    zip[pos] = 0x50;
+    zip[pos + 1] = 0x4B;
+    zip[pos + 2] = 0x03;
+    zip[pos + 3] = 0x04; /* signature */
+    zip[pos + 4] = 20;
+    zip[pos + 5] = 0; /* version needed = 2.0 */
+    zip[pos + 8] = 0;
+    zip[pos + 9] = 0; /* compression = stored */
+    zip[pos + 18] = (unsigned char)(content_len & 0xFF);
+    zip[pos + 19] = (unsigned char)((content_len >> 8) & 0xFF);
+    zip[pos + 20] = (unsigned char)((content_len >> 16) & 0xFF);
+    zip[pos + 21] = (unsigned char)((content_len >> 24) & 0xFF);
+    zip[pos + 22] = zip[pos + 18];
+    zip[pos + 23] = zip[pos + 19];
+    zip[pos + 24] = zip[pos + 20];
+    zip[pos + 25] = zip[pos + 21];
+    zip[pos + 26] = (unsigned char)(name_len & 0xFF);
+    zip[pos + 27] = (unsigned char)((name_len >> 8) & 0xFF);
     memcpy(zip + pos + 30, filename, (size_t)name_len);
     pos += 30 + name_len;
     memcpy(zip + pos, content, (size_t)content_len);
@@ -1062,27 +1098,36 @@ static unsigned char *create_test_zip_stored(const char *filename, const unsigne
 
     int cd_start = pos;
     /* Central directory header */
-    zip[pos] = 0x50; zip[pos+1] = 0x4B; zip[pos+2] = 0x01; zip[pos+3] = 0x02;
-    zip[pos+10] = 0; zip[pos+11] = 0; /* compression = stored */
-    zip[pos+20] = (unsigned char)(content_len & 0xFF);
-    zip[pos+21] = (unsigned char)((content_len >> 8) & 0xFF);
-    zip[pos+22] = (unsigned char)((content_len >> 16) & 0xFF);
-    zip[pos+23] = (unsigned char)((content_len >> 24) & 0xFF);
-    zip[pos+24] = zip[pos+20]; zip[pos+25] = zip[pos+21];
-    zip[pos+26] = zip[pos+22]; zip[pos+27] = zip[pos+23];
-    zip[pos+28] = (unsigned char)(name_len & 0xFF);
-    zip[pos+29] = (unsigned char)((name_len >> 8) & 0xFF);
+    zip[pos] = 0x50;
+    zip[pos + 1] = 0x4B;
+    zip[pos + 2] = 0x01;
+    zip[pos + 3] = 0x02;
+    zip[pos + 10] = 0;
+    zip[pos + 11] = 0; /* compression = stored */
+    zip[pos + 20] = (unsigned char)(content_len & 0xFF);
+    zip[pos + 21] = (unsigned char)((content_len >> 8) & 0xFF);
+    zip[pos + 22] = (unsigned char)((content_len >> 16) & 0xFF);
+    zip[pos + 23] = (unsigned char)((content_len >> 24) & 0xFF);
+    zip[pos + 24] = zip[pos + 20];
+    zip[pos + 25] = zip[pos + 21];
+    zip[pos + 26] = zip[pos + 22];
+    zip[pos + 27] = zip[pos + 23];
+    zip[pos + 28] = (unsigned char)(name_len & 0xFF);
+    zip[pos + 29] = (unsigned char)((name_len >> 8) & 0xFF);
     pos += 46 + name_len;
 
     /* EOCD */
-    zip[pos] = 0x50; zip[pos+1] = 0x4B; zip[pos+2] = 0x05; zip[pos+3] = 0x06;
-    zip[pos+8] = 1; /* num entries this disk */
-    zip[pos+10] = 1; /* total entries */
+    zip[pos] = 0x50;
+    zip[pos + 1] = 0x4B;
+    zip[pos + 2] = 0x05;
+    zip[pos + 3] = 0x06;
+    zip[pos + 8] = 1;  /* num entries this disk */
+    zip[pos + 10] = 1; /* total entries */
     int cd_size = pos - cd_start;
-    zip[pos+12] = (unsigned char)(cd_size & 0xFF);
-    zip[pos+13] = (unsigned char)((cd_size >> 8) & 0xFF);
-    zip[pos+16] = (unsigned char)(cd_start & 0xFF);
-    zip[pos+17] = (unsigned char)((cd_start >> 8) & 0xFF);
+    zip[pos + 12] = (unsigned char)(cd_size & 0xFF);
+    zip[pos + 13] = (unsigned char)((cd_size >> 8) & 0xFF);
+    zip[pos + 16] = (unsigned char)(cd_start & 0xFF);
+    zip[pos + 17] = (unsigned char)((cd_start >> 8) & 0xFF);
 
     *out_len = total;
     return zip;
@@ -1091,9 +1136,8 @@ static unsigned char *create_test_zip_stored(const char *filename, const unsigne
 TEST(cli_extract_binary_from_zip) {
     const char *content = "#!/bin/sh\necho test\n";
     int zip_len = 0;
-    unsigned char *zip =
-        create_test_zip_stored("codebase-memory-mcp", (const unsigned char *)content,
-                               (int)strlen(content), &zip_len);
+    unsigned char *zip = create_test_zip_stored(
+        "codebase-memory-mcp", (const unsigned char *)content, (int)strlen(content), &zip_len);
     ASSERT_NOT_NULL(zip);
 
     int out_len = 0;
@@ -1109,9 +1153,8 @@ TEST(cli_extract_binary_from_zip) {
 TEST(cli_extract_binary_from_zip_not_found) {
     const char *content = "data";
     int zip_len = 0;
-    unsigned char *zip =
-        create_test_zip_stored("other-file.txt", (const unsigned char *)content,
-                               (int)strlen(content), &zip_len);
+    unsigned char *zip = create_test_zip_stored("other-file.txt", (const unsigned char *)content,
+                                                (int)strlen(content), &zip_len);
     ASSERT_NOT_NULL(zip);
 
     int out_len = 0;
@@ -1150,7 +1193,8 @@ TEST(cli_extract_binary_from_zip_invalid) {
 
 TEST(cli_install_dry_run) {
     /* Port of TestCLI_InstallDryRun */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-dry-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-dry-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -1175,7 +1219,8 @@ TEST(cli_install_dry_run) {
 
 TEST(cli_uninstall_dry_run) {
     /* Port of TestCLI_UninstallDryRun */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-dry-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-dry-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -1205,7 +1250,8 @@ TEST(cli_uninstall_dry_run) {
 
 TEST(cli_install_and_uninstall) {
     /* Port of TestCLI_InstallAndUninstall */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-full-XXXXXX");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-full-XXXXXX");
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
@@ -1341,8 +1387,10 @@ TEST(cli_yaml_has) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 TEST(cli_detect_agents_finds_claude) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char dir[512];
     snprintf(dir, sizeof(dir), "%s/.claude", tmpdir);
@@ -1356,8 +1404,10 @@ TEST(cli_detect_agents_finds_claude) {
 }
 
 TEST(cli_detect_agents_finds_codex) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char dir[512];
     snprintf(dir, sizeof(dir), "%s/.codex", tmpdir);
@@ -1371,8 +1421,10 @@ TEST(cli_detect_agents_finds_codex) {
 }
 
 TEST(cli_detect_agents_finds_gemini) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char dir[512];
     snprintf(dir, sizeof(dir), "%s/.gemini", tmpdir);
@@ -1386,8 +1438,10 @@ TEST(cli_detect_agents_finds_gemini) {
 }
 
 TEST(cli_detect_agents_finds_zed) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char dir[512];
 #ifdef __APPLE__
@@ -1405,8 +1459,10 @@ TEST(cli_detect_agents_finds_zed) {
 }
 
 TEST(cli_detect_agents_finds_antigravity) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char dir[512];
     snprintf(dir, sizeof(dir), "%s/.gemini/antigravity", tmpdir);
@@ -1421,12 +1477,13 @@ TEST(cli_detect_agents_finds_antigravity) {
 }
 
 TEST(cli_detect_agents_finds_kilocode) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char dir[512];
-    snprintf(dir, sizeof(dir),
-             "%s/.config/Code/User/globalStorage/kilocode.kilo-code", tmpdir);
+    snprintf(dir, sizeof(dir), "%s/.config/Code/User/globalStorage/kilocode.kilo-code", tmpdir);
     test_mkdirp(dir);
 
     cbm_detected_agents_t agents = cbm_detect_agents(tmpdir);
@@ -1437,8 +1494,10 @@ TEST(cli_detect_agents_finds_kilocode) {
 }
 
 TEST(cli_detect_agents_none_found) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-detect-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     /* Empty home dir → no config dirs → no directory-based agents detected.
      * Note: opencode/aider may still be detected via system fallback paths
@@ -1460,8 +1519,10 @@ TEST(cli_detect_agents_none_found) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 TEST(cli_upsert_codex_mcp_fresh) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-codex-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-codex-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/config.toml", tmpdir);
@@ -1479,8 +1540,10 @@ TEST(cli_upsert_codex_mcp_fresh) {
 }
 
 TEST(cli_upsert_codex_mcp_existing) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-codex-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-codex-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/config.toml", tmpdir);
@@ -1502,16 +1565,17 @@ TEST(cli_upsert_codex_mcp_existing) {
 }
 
 TEST(cli_upsert_codex_mcp_replace) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-codex-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-codex-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/config.toml", tmpdir);
-    write_test_file(configpath,
-        "[mcp_servers.codebase-memory-mcp]\n"
-        "command = \"/old/path/codebase-memory-mcp\"\n"
-        "\n"
-        "[other_setting]\nfoo = \"bar\"\n");
+    write_test_file(configpath, "[mcp_servers.codebase-memory-mcp]\n"
+                                "command = \"/old/path/codebase-memory-mcp\"\n"
+                                "\n"
+                                "[other_setting]\nfoo = \"bar\"\n");
 
     int rc = cbm_upsert_codex_mcp("/new/path/codebase-memory-mcp", configpath);
     ASSERT_EQ(rc, 0);
@@ -1534,8 +1598,10 @@ TEST(cli_upsert_codex_mcp_replace) {
 
 TEST(cli_zed_mcp_uses_args_format) {
     /* Verify Zed uses args:[""] NOT source:"custom" */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-zed-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-zed-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/settings.json", tmpdir);
@@ -1557,8 +1623,10 @@ TEST(cli_zed_mcp_uses_args_format) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 TEST(cli_upsert_opencode_mcp_fresh) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-ocode-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-ocode-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/opencode.json", tmpdir);
@@ -1574,15 +1642,18 @@ TEST(cli_upsert_opencode_mcp_fresh) {
     /* command must be emitted as an array, not a string */
     ASSERT(strstr(data, "\"command\":[") != NULL || strstr(data, "\"command\": [") != NULL);
     /* type must be explicitly set to \"local\" */
-    ASSERT(strstr(data, "\"type\":\"local\"") != NULL || strstr(data, "\"type\": \"local\"") != NULL);
+    ASSERT(strstr(data, "\"type\":\"local\"") != NULL ||
+           strstr(data, "\"type\": \"local\"") != NULL);
 
     test_rmdir_r(tmpdir);
     PASS();
 }
 
 TEST(cli_upsert_opencode_mcp_existing) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-ocode-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-ocode-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/opencode.json", tmpdir);
@@ -1605,8 +1676,10 @@ TEST(cli_upsert_opencode_mcp_existing) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 TEST(cli_upsert_antigravity_mcp_fresh) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-anti-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-anti-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/mcp_config.json", tmpdir);
@@ -1623,13 +1696,15 @@ TEST(cli_upsert_antigravity_mcp_fresh) {
 }
 
 TEST(cli_upsert_antigravity_mcp_replace) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-anti-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-anti-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char configpath[512];
     snprintf(configpath, sizeof(configpath), "%s/mcp_config.json", tmpdir);
     write_test_file(configpath,
-        "{\"mcpServers\":{\"codebase-memory-mcp\":{\"command\":\"/old/path\"}}}");
+                    "{\"mcpServers\":{\"codebase-memory-mcp\":{\"command\":\"/old/path\"}}}");
 
     int rc = cbm_upsert_antigravity_mcp("/new/path/codebase-memory-mcp", configpath);
     ASSERT_EQ(rc, 0);
@@ -1648,8 +1723,10 @@ TEST(cli_upsert_antigravity_mcp_replace) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 TEST(cli_upsert_instructions_fresh) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-instr-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-instr-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char filepath[512];
     snprintf(filepath, sizeof(filepath), "%s/AGENTS.md", tmpdir);
@@ -1668,8 +1745,10 @@ TEST(cli_upsert_instructions_fresh) {
 }
 
 TEST(cli_upsert_instructions_existing) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-instr-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-instr-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char filepath[512];
     snprintf(filepath, sizeof(filepath), "%s/AGENTS.md", tmpdir);
@@ -1692,17 +1771,18 @@ TEST(cli_upsert_instructions_existing) {
 }
 
 TEST(cli_upsert_instructions_replace) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-instr-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-instr-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char filepath[512];
     snprintf(filepath, sizeof(filepath), "%s/AGENTS.md", tmpdir);
-    write_test_file(filepath,
-        "# Rules\n"
-        "<!-- codebase-memory-mcp:start -->\n"
-        "OLD CONTENT\n"
-        "<!-- codebase-memory-mcp:end -->\n"
-        "# Other stuff\n");
+    write_test_file(filepath, "# Rules\n"
+                              "<!-- codebase-memory-mcp:start -->\n"
+                              "OLD CONTENT\n"
+                              "<!-- codebase-memory-mcp:end -->\n"
+                              "# Other stuff\n");
 
     int rc = cbm_upsert_instructions(filepath, "NEW CONTENT\n");
     ASSERT_EQ(rc, 0);
@@ -1721,8 +1801,10 @@ TEST(cli_upsert_instructions_replace) {
 }
 
 TEST(cli_upsert_instructions_no_duplicate) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-instr-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-instr-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char filepath[512];
     snprintf(filepath, sizeof(filepath), "%s/AGENTS.md", tmpdir);
@@ -1736,7 +1818,10 @@ TEST(cli_upsert_instructions_no_duplicate) {
     /* Only one start marker */
     int count = 0;
     const char *p = data;
-    while ((p = strstr(p, "codebase-memory-mcp:start")) != NULL) { count++; p += 25; }
+    while ((p = strstr(p, "codebase-memory-mcp:start")) != NULL) {
+        count++;
+        p += 25;
+    }
     ASSERT_EQ(count, 1);
     /* Latest content */
     ASSERT(strstr(data, "Content v2") != NULL);
@@ -1747,17 +1832,18 @@ TEST(cli_upsert_instructions_no_duplicate) {
 }
 
 TEST(cli_remove_instructions) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-instr-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-instr-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char filepath[512];
     snprintf(filepath, sizeof(filepath), "%s/AGENTS.md", tmpdir);
-    write_test_file(filepath,
-        "# Rules\n"
-        "<!-- codebase-memory-mcp:start -->\n"
-        "CMM Content\n"
-        "<!-- codebase-memory-mcp:end -->\n"
-        "# Other\n");
+    write_test_file(filepath, "# Rules\n"
+                              "<!-- codebase-memory-mcp:start -->\n"
+                              "CMM Content\n"
+                              "<!-- codebase-memory-mcp:end -->\n"
+                              "# Other\n");
 
     int rc = cbm_remove_instructions(filepath);
     ASSERT_EQ(rc, 0);
@@ -1777,7 +1863,7 @@ TEST(cli_agent_instructions_content) {
     const char *instr = cbm_get_agent_instructions();
     ASSERT_NOT_NULL(instr);
     ASSERT(strstr(instr, "search_graph") != NULL);
-    ASSERT(strstr(instr, "trace_call_path") != NULL);
+    ASSERT(strstr(instr, "trace_path") != NULL);
     ASSERT(strstr(instr, "get_code_snippet") != NULL);
     PASS();
 }
@@ -1787,8 +1873,10 @@ TEST(cli_agent_instructions_content) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 TEST(cli_upsert_claude_hook_fresh) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-hook-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-hook-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char settingspath[512];
     snprintf(settingspath, sizeof(settingspath), "%s/settings.json", tmpdir);
@@ -1807,15 +1895,17 @@ TEST(cli_upsert_claude_hook_fresh) {
 }
 
 TEST(cli_upsert_claude_hook_existing) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-hook-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-hook-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char settingspath[512];
     snprintf(settingspath, sizeof(settingspath), "%s/settings.json", tmpdir);
     /* Pre-existing settings with other hooks */
     write_test_file(settingspath,
-        "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
-        "\"hooks\":[{\"type\":\"command\",\"command\":\"echo firewall\"}]}]}}");
+                    "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
+                    "\"hooks\":[{\"type\":\"command\",\"command\":\"echo firewall\"}]}]}}");
 
     int rc = cbm_upsert_claude_hooks(settingspath);
     ASSERT_EQ(rc, 0);
@@ -1833,15 +1923,17 @@ TEST(cli_upsert_claude_hook_existing) {
 }
 
 TEST(cli_upsert_claude_hook_replace) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-hook-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-hook-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char settingspath[512];
     snprintf(settingspath, sizeof(settingspath), "%s/settings.json", tmpdir);
     /* Pre-existing CMM hook with old message */
     write_test_file(settingspath,
-        "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Grep|Glob|Read\","
-        "\"hooks\":[{\"type\":\"command\",\"command\":\"echo old-cmm-message\"}]}]}}");
+                    "{\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Grep|Glob|Read\","
+                    "\"hooks\":[{\"type\":\"command\",\"command\":\"echo old-cmm-message\"}]}]}}");
 
     int rc = cbm_upsert_claude_hooks(settingspath);
     ASSERT_EQ(rc, 0);
@@ -1857,15 +1949,17 @@ TEST(cli_upsert_claude_hook_replace) {
 }
 
 TEST(cli_upsert_claude_hook_preserves_others) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-hook-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-hook-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char settingspath[512];
     snprintf(settingspath, sizeof(settingspath), "%s/settings.json", tmpdir);
     write_test_file(settingspath,
-        "{\"apiKey\":\"sk-123\","
-        "\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
-        "\"hooks\":[{\"type\":\"command\",\"command\":\"echo guard\"}]}]}}");
+                    "{\"apiKey\":\"sk-123\","
+                    "\"hooks\":{\"PreToolUse\":[{\"matcher\":\"Bash\","
+                    "\"hooks\":[{\"type\":\"command\",\"command\":\"echo guard\"}]}]}}");
 
     cbm_upsert_claude_hooks(settingspath);
 
@@ -1883,8 +1977,10 @@ TEST(cli_upsert_claude_hook_preserves_others) {
 }
 
 TEST(cli_remove_claude_hooks) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-hook-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-hook-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char settingspath[512];
     snprintf(settingspath, sizeof(settingspath), "%s/settings.json", tmpdir);
@@ -1907,8 +2003,10 @@ TEST(cli_remove_claude_hooks) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 TEST(cli_upsert_gemini_hook_fresh) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-ghook-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-ghook-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char settingspath[512];
     snprintf(settingspath, sizeof(settingspath), "%s/settings.json", tmpdir);
@@ -1926,14 +2024,16 @@ TEST(cli_upsert_gemini_hook_fresh) {
 }
 
 TEST(cli_upsert_gemini_hook_existing) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-ghook-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-ghook-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char settingspath[512];
     snprintf(settingspath, sizeof(settingspath), "%s/settings.json", tmpdir);
     write_test_file(settingspath,
-        "{\"hooks\":{\"BeforeTool\":[{\"matcher\":\"shell\","
-        "\"hooks\":[{\"type\":\"command\",\"command\":\"echo guard\"}]}]}}");
+                    "{\"hooks\":{\"BeforeTool\":[{\"matcher\":\"shell\","
+                    "\"hooks\":[{\"type\":\"command\",\"command\":\"echo guard\"}]}]}}");
 
     int rc = cbm_upsert_gemini_hooks(settingspath);
     ASSERT_EQ(rc, 0);
@@ -1950,12 +2050,15 @@ TEST(cli_upsert_gemini_hook_existing) {
 }
 
 TEST(cli_upsert_gemini_hook_replace) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-ghook-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-ghook-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char settingspath[512];
     snprintf(settingspath, sizeof(settingspath), "%s/settings.json", tmpdir);
-    write_test_file(settingspath,
+    write_test_file(
+        settingspath,
         "{\"hooks\":{\"BeforeTool\":[{\"matcher\":\"google_search|read_file|grep_search\","
         "\"hooks\":[{\"type\":\"command\",\"command\":\"echo old-cmm\"}]}]}}");
 
@@ -1972,8 +2075,10 @@ TEST(cli_upsert_gemini_hook_replace) {
 }
 
 TEST(cli_remove_gemini_hooks) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-ghook-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-ghook-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     char settingspath[512];
     snprintf(settingspath, sizeof(settingspath), "%s/settings.json", tmpdir);
@@ -2009,8 +2114,10 @@ TEST(cli_skill_descriptions_directive) {
  * ═══════════════════════════════════════════════════════════════════ */
 
 TEST(cli_config_open_close) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-cfg-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-cfg-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     cbm_config_t *cfg = cbm_config_open(tmpdir);
     ASSERT_NOT_NULL(cfg);
@@ -2027,8 +2134,10 @@ TEST(cli_config_open_close) {
 }
 
 TEST(cli_config_get_set) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-cfg-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-cfg-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     cbm_config_t *cfg = cbm_config_open(tmpdir);
     ASSERT_NOT_NULL(cfg);
@@ -2050,8 +2159,10 @@ TEST(cli_config_get_set) {
 }
 
 TEST(cli_config_get_bool) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-cfg-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-cfg-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     cbm_config_t *cfg = cbm_config_open(tmpdir);
     ASSERT_NOT_NULL(cfg);
@@ -2080,8 +2191,10 @@ TEST(cli_config_get_bool) {
 }
 
 TEST(cli_config_get_int) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-cfg-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-cfg-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     cbm_config_t *cfg = cbm_config_open(tmpdir);
     ASSERT_NOT_NULL(cfg);
@@ -2101,8 +2214,10 @@ TEST(cli_config_get_int) {
 }
 
 TEST(cli_config_delete) {
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-cfg-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-cfg-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     cbm_config_t *cfg = cbm_config_open(tmpdir);
     ASSERT_NOT_NULL(cfg);
@@ -2120,8 +2235,10 @@ TEST(cli_config_delete) {
 
 TEST(cli_config_persists) {
     /* Values survive close + reopen */
-    char tmpdir[256]; snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-cfg-XXXXXX");
-    if (!cbm_mkdtemp(tmpdir)) SKIP("cbm_mkdtemp failed");
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cli-cfg-XXXXXX");
+    if (!cbm_mkdtemp(tmpdir))
+        SKIP("cbm_mkdtemp failed");
 
     cbm_config_t *cfg = cbm_config_open(tmpdir);
     ASSERT_NOT_NULL(cfg);

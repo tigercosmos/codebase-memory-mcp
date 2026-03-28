@@ -606,6 +606,9 @@ static uint32_t pb_build_interior(PageBuilder *pb, bool is_index) {
 
     uint32_t root = children ? children[0].page_num : 0;
     if (children != pb->leaves) {
+        for (int j = 0; j < child_count; j++) {
+            free(children[j].sep_cell);
+        }
         free(children);
     }
     return root;

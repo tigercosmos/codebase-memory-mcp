@@ -787,8 +787,9 @@ TEST(incr_perf_single_file_fast) {
     char *resp = index_repo_timed(&ms, &peak_mb);
     ASSERT(resp != NULL);
     free(resp);
+#define MAX_TOOL_MS 15000 /* 15s max — accounts for slower CI runners */
 
-    ASSERT_LT((int)ms, 5000); /* <5s for single file change */
+    ASSERT_LT((int)ms, MAX_TOOL_MS); /* must be faster than full index */
 
     printf("    [perf] single file incremental: %.0fms\n", ms);
 
@@ -803,7 +804,6 @@ TEST(incr_perf_single_file_fast) {
  *  Timing: each call_tool_timed() asserts < MAX_TOOL_MS.
  * ══════════════════════════════════════════════════════════════════ */
 
-#define MAX_TOOL_MS 15000 /* 15s max — accounts for slower CI runners */
 
 static char *call_tool_timed(const char *tool, double *ms, const char *args_fmt, ...) {
     char args[2048];

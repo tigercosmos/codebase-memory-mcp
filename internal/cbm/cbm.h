@@ -177,6 +177,15 @@ typedef struct {
     CBMStringRefKind kind;         // URL, CONFIG
 } CBMStringRef;
 
+/* Infrastructure binding: topic/queue → endpoint URL.
+ * Extracted from YAML/HCL/JSON subscription/scheduler configs.
+ * Used by pass_route_nodes to connect async Route nodes to handler services. */
+typedef struct {
+    const char *source_name; // topic, queue, or schedule name
+    const char *target_url;  // push_endpoint, uri, or http_target URL
+    const char *broker;      // "pubsub", "cloud_tasks", "cloud_scheduler", "sqs", "kafka"
+} CBMInfraBinding;
+
 // Rust: impl Trait for Struct
 typedef struct {
     const char *trait_name;  // trait name (raw text)
@@ -260,6 +269,12 @@ typedef struct {
 } CBMStringRefArray;
 
 typedef struct {
+    CBMInfraBinding *items;
+    int count;
+    int cap;
+} CBMInfraBindingArray;
+
+typedef struct {
     CBMImplTrait *items;
     int count;
     int cap;
@@ -281,6 +296,7 @@ typedef struct {
     CBMImplTraitArray impl_traits;       // Rust: impl Trait for Struct pairs
     CBMResolvedCallArray resolved_calls; // LSP-resolved calls (high confidence)
     CBMStringRefArray string_refs;       // URL/config string literals from AST
+    CBMInfraBindingArray infra_bindings; // topic→URL pairs from IaC configs
 
     const char *module_qn;    // module qualified name
     const char **exports;     // NULL-terminated (NULL if none)
@@ -391,6 +407,7 @@ void cbm_typerefs_push(CBMTypeRefArray *arr, CBMArena *a, CBMTypeRef tr);
 void cbm_envaccess_push(CBMEnvAccessArray *arr, CBMArena *a, CBMEnvAccess ea);
 void cbm_typeassign_push(CBMTypeAssignArray *arr, CBMArena *a, CBMTypeAssign ta);
 void cbm_stringref_push(CBMStringRefArray *arr, CBMArena *a, CBMStringRef sr);
+void cbm_infrabinding_push(CBMInfraBindingArray *arr, CBMArena *a, CBMInfraBinding ib);
 void cbm_impltrait_push(CBMImplTraitArray *arr, CBMArena *a, CBMImplTrait it);
 void cbm_resolvedcall_push(CBMResolvedCallArray *arr, CBMArena *a, CBMResolvedCall rc);
 

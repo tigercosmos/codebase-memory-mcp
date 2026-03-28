@@ -336,6 +336,171 @@ static void walk_yaml_mapping(CBMExtractCtx *ctx, TSNode node, const char *prefi
     }
 }
 
+/* ── Infrastructure binding extraction ─────────────────────────────
+ * Scan YAML/JSON/HCL list items for topic→URL pairs.
+ * Patterns detected:
+ *   YAML: {topic: X, config: {push_endpoint: URL}} (Pub/Sub subscription)
+ *   YAML: {uri: URL, body: ...} (Cloud Scheduler)
+ *   YAML: {queue: X, uri: URL} (Cloud Tasks)
+ *   HCL: resource "google_pubsub_subscription" { topic=X, push_config{push_endpoint=URL} }
+ *
+ * Works by collecting key-value pairs in each mapping, then checking for
+ * known source+target patterns. Language-agnostic: the key names are the signal. */
+
+/* Source key names (topic/queue/schedule identifier) */
+static int is_source_key(const char *key) {
+    return (strcmp(key, "topic") == 0 || strcmp(key, "queue") == 0 ||
+            strcmp(key, "queue_name") == 0 || strcmp(key, "subscription") == 0 ||
+            strcmp(key, "subject") == 0 || strcmp(key, "channel") == 0 ||
+            strcmp(key, "stream") == 0);
+}
+
+/* Target key names (endpoint URL) */
+static int is_target_key(const char *key) {
+    return (strcmp(key, "push_endpoint") == 0 || strcmp(key, "uri") == 0 ||
+            strcmp(key, "url") == 0 || strcmp(key, "endpoint") == 0 ||
+            strcmp(key, "http_target") == 0 || strcmp(key, "target_url") == 0 ||
+            strcmp(key, "webhook_url") == 0 || strcmp(key, "callback_url") == 0);
+}
+
+/* Infer broker type from surrounding context */
+static const char *infer_broker(const char *file_path, const char *source_key) {
+    if (strstr(file_path, "pubsub") || strstr(file_path, "pub-sub") ||
+        strstr(file_path, "pub_sub")) {
+        return "pubsub";
+    }
+    if (strstr(file_path, "scheduler") || strstr(file_path, "schedule") ||
+        strstr(file_path, "cron")) {
+        return "cloud_scheduler";
+    }
+    if (strstr(file_path, "task") || strcmp(source_key, "queue") == 0 ||
+        strcmp(source_key, "queue_name") == 0) {
+        return "cloud_tasks";
+    }
+    if (strstr(file_path, "kafka") || strcmp(source_key, "stream") == 0) {
+        return "kafka";
+    }
+    if (strstr(file_path, "sqs") || strstr(file_path, "sns")) {
+        return "sqs";
+    }
+    return "async";
+}
+
+/* Scan a YAML mapping for source+target key pairs.
+ * Collects all key-value pairs at this level and one level deep (for nested config:). */
+static void scan_mapping_for_bindings(CBMExtractCtx *ctx, TSNode mapping) {
+    const char *sources[8] = {NULL};
+    const char *source_keys[8] = {NULL};
+    int n_sources = 0;
+    const char *targets[8] = {NULL};
+    int n_targets = 0;
+
+    uint32_t nc = ts_node_named_child_count(mapping);
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode pair = ts_node_named_child(mapping, i);
+        if (strcmp(ts_node_type(pair), "block_mapping_pair") != 0) {
+            continue;
+        }
+        TSNode key = ts_node_child_by_field_name(pair, "key", 3);
+        TSNode val = ts_node_child_by_field_name(pair, "value", 5);
+        if (ts_node_is_null(key) || ts_node_is_null(val)) {
+            continue;
+        }
+        char *k = cbm_node_text(ctx->arena, key, ctx->source);
+        if (!k) {
+            continue;
+        }
+
+        /* Check if this is a source or target key with a scalar value */
+        const char *vtype = ts_node_type(val);
+        if (strcmp(vtype, "block_node") != 0 && strcmp(vtype, "block_mapping") != 0) {
+            char *v = cbm_node_text(ctx->arena, val, ctx->source);
+            if (v && v[0]) {
+                /* Strip quotes */
+                int vlen = (int)strlen(v);
+                if (vlen >= 2 && (v[0] == '"' || v[0] == '\'')) {
+                    v = cbm_arena_strndup(ctx->arena, v + 1, (size_t)(vlen - 2));
+                }
+                if (is_source_key(k) && n_sources < 8) {
+                    sources[n_sources] = v;
+                    source_keys[n_sources] = k;
+                    n_sources++;
+                }
+                if (is_target_key(k) && n_targets < 8 && v && strstr(v, "://")) {
+                    targets[n_targets++] = v;
+                }
+            }
+        } else {
+            /* Nested mapping (e.g., config: {push_endpoint: URL}) — scan one level */
+            uint32_t vnc = ts_node_named_child_count(val);
+            for (uint32_t vi = 0; vi < vnc; vi++) {
+                TSNode vc = ts_node_named_child(val, vi);
+                const char *vck = ts_node_type(vc);
+                if (strcmp(vck, "block_mapping") == 0) {
+                    /* Scan nested mapping for target keys */
+                    uint32_t mnc = ts_node_named_child_count(vc);
+                    for (uint32_t mi = 0; mi < mnc; mi++) {
+                        TSNode mp = ts_node_named_child(vc, mi);
+                        if (strcmp(ts_node_type(mp), "block_mapping_pair") != 0) {
+                            continue;
+                        }
+                        TSNode mk = ts_node_child_by_field_name(mp, "key", 3);
+                        TSNode mv = ts_node_child_by_field_name(mp, "value", 5);
+                        if (ts_node_is_null(mk) || ts_node_is_null(mv)) {
+                            continue;
+                        }
+                        char *mktext = cbm_node_text(ctx->arena, mk, ctx->source);
+                        if (mktext && is_target_key(mktext) && n_targets < 8) {
+                            char *mvtext = cbm_node_text(ctx->arena, mv, ctx->source);
+                            if (mvtext && mvtext[0]) {
+                                int mvlen = (int)strlen(mvtext);
+                                if (mvlen >= 2 && (mvtext[0] == '"' || mvtext[0] == '\'')) {
+                                    mvtext = cbm_arena_strndup(ctx->arena, mvtext + 1,
+                                                               (size_t)(mvlen - 2));
+                                }
+                                if (mvtext && strstr(mvtext, "://")) {
+                                    targets[n_targets++] = mvtext;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Emit bindings for each source × target pair */
+    for (int si = 0; si < n_sources; si++) {
+        for (int ti = 0; ti < n_targets; ti++) {
+            if (!sources[si] || !targets[ti]) {
+                continue;
+            }
+            CBMInfraBinding ib = {
+                .source_name = sources[si],
+                .target_url = targets[ti],
+                .broker = infer_broker(ctx->rel_path, source_keys[si]),
+            };
+            cbm_infrabinding_push(&ctx->result->infra_bindings, ctx->arena, ib);
+        }
+    }
+}
+
+/* Walk a YAML block_sequence looking for list items with infra bindings */
+static void scan_yaml_for_infra_bindings(CBMExtractCtx *ctx, TSNode node) {
+    const char *kind = ts_node_type(node);
+
+    /* List items are block_sequence → block_sequence_item → block_mapping */
+    if (strcmp(kind, "block_mapping") == 0) {
+        scan_mapping_for_bindings(ctx, node);
+    }
+
+    /* Recurse into children */
+    uint32_t nc = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < nc; i++) {
+        scan_yaml_for_infra_bindings(ctx, ts_node_named_child(node, i));
+    }
+}
+
 /* Handle YAML files: walk top-level block_mapping recursively */
 static void handle_yaml_nested(CBMExtractCtx *ctx, TSNode node) {
     if (ctx->language != CBM_LANG_YAML) {
@@ -392,6 +557,15 @@ void cbm_extract_unified(CBMExtractCtx *ctx) {
         handle_type_assigns(ctx, node, spec, &state);
         handle_string_refs(ctx, node, &state);
         handle_yaml_nested(ctx, node);
+
+        /* Scan YAML/JSON for infra bindings (topic→URL pairs) */
+        if (ctx->language == CBM_LANG_YAML || ctx->language == CBM_LANG_JSON) {
+            const char *nk = ts_node_type(node);
+            if (strcmp(nk, "block_sequence") == 0 || strcmp(nk, "block_mapping") == 0 ||
+                strcmp(nk, "array") == 0 || strcmp(nk, "document") == 0) {
+                scan_yaml_for_infra_bindings(ctx, node);
+            }
+        }
 
         // 4. Push scope markers for boundary nodes
         if (spec->function_node_types && cbm_kind_in_set(node, spec->function_node_types)) {

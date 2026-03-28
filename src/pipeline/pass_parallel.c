@@ -764,33 +764,102 @@ static void emit_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
     cbm_svc_kind_t svc = cbm_service_pattern_match(res->qualified_name);
     const char *arg = call->first_string_arg;
 
-    if (svc == CBM_SVC_ROUTE_REG && arg != NULL && arg[0] == '/') {
-        const char *method = cbm_service_pattern_route_method(call->callee_name);
-        char route_qn[CBM_ROUTE_QN_SIZE];
-        snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", method ? method : "ANY", arg);
-        char route_props[256];
-        snprintf(route_props, sizeof(route_props), "{\"method\":\"%s\"}", method ? method : "ANY");
-        int64_t route_id =
-            cbm_gbuf_upsert_node(gbuf, "Route", arg, route_qn, "", 0, 0, route_props);
-        char props[512];
-        snprintf(props, sizeof(props),
-                 "{\"callee\":\"%s\",\"url_path\":\"%s\",\"via\":\"route_registration\"}",
-                 call->callee_name, arg);
-        cbm_gbuf_insert_edge(gbuf, source->id, route_id, "CALLS", props);
-        if (call->second_arg_name != NULL && call->second_arg_name[0] != '\0') {
-            cbm_resolution_t hres = cbm_registry_resolve(registry, call->second_arg_name, module_qn,
-                                                         imp_keys, imp_vals, imp_count);
-            if (hres.qualified_name != NULL && hres.qualified_name[0] != '\0') {
-                const cbm_gbuf_node_t *handler =
-                    cbm_gbuf_find_by_qn(main_gbuf, hres.qualified_name);
-                if (handler != NULL) {
-                    char hprops[256];
-                    snprintf(hprops, sizeof(hprops), "{\"handler\":\"%s\"}", hres.qualified_name);
-                    cbm_gbuf_insert_edge(gbuf, handler->id, route_id, "HANDLES", hprops);
+    /* Also detect route registration by callee name suffix alone (handles unresolved
+     * local variables like app.include_router where QN resolution fails). */
+    if (svc == CBM_SVC_NONE && cbm_service_pattern_route_method(call->callee_name) != NULL) {
+        svc = CBM_SVC_ROUTE_REG;
+    }
+
+    if (svc == CBM_SVC_ROUTE_REG) {
+        /* Generalized route registration: find URL path from ANY argument.
+         * Handles: router.GET("/path", handler), app.include_router(r, prefix="/path"),
+         * app.add_url_rule("/path", view_func=h), app.mount("/path", sub_app), etc.
+         * Language-agnostic: any call to a router framework with a path arg. */
+        const char *route_path = NULL;
+        const char *handler_ref = NULL;
+
+        /* 1. Check first_string_arg (covers router.GET("/path", handler)) */
+        if (arg != NULL && arg[0] == '/') {
+            route_path = arg;
+            handler_ref = call->second_arg_name;
+        }
+
+        /* 2. Scan keyword args for path-like values (prefix=, path=, route=, pattern=) */
+        if (!route_path) {
+            static const char *path_keywords[] = {"prefix",     "path",     "route", "pattern",
+                                                  "url",        "endpoint", "rule",  "mount_path",
+                                                  "route_path", "url_path", NULL};
+            for (int ai = 0; ai < call->arg_count && !route_path; ai++) {
+                const CBMCallArg *ca = &call->args[ai];
+                const char *val = ca->value ? ca->value : ca->expr;
+                if (!val || val[0] != '/') {
+                    continue;
+                }
+                if (ca->keyword) {
+                    for (const char **kw = path_keywords; *kw; kw++) {
+                        if (strcmp(ca->keyword, *kw) == 0) {
+                            route_path = val;
+                            break;
+                        }
+                    }
+                } else if (ca->index == 0) {
+                    /* First positional arg starting with / is likely a path */
+                    route_path = val;
                 }
             }
         }
-        return;
+
+        /* 3. Find handler reference from args (first identifier/attribute arg) */
+        if (!handler_ref) {
+            for (int ai = 0; ai < call->arg_count && !handler_ref; ai++) {
+                const CBMCallArg *ca = &call->args[ai];
+                if (!ca->expr || ca->expr[0] == '/' || ca->expr[0] == '"' || ca->expr[0] == '\'') {
+                    continue;
+                }
+                /* Skip known non-handler keywords */
+                if (ca->keyword &&
+                    (strcmp(ca->keyword, "prefix") == 0 || strcmp(ca->keyword, "name") == 0 ||
+                     strcmp(ca->keyword, "tags") == 0)) {
+                    continue;
+                }
+                handler_ref = ca->expr;
+            }
+        }
+
+        if (route_path) {
+            const char *method = cbm_service_pattern_route_method(call->callee_name);
+            char route_qn[CBM_ROUTE_QN_SIZE];
+            snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", method ? method : "ANY",
+                     route_path);
+            char route_props[256];
+            snprintf(route_props, sizeof(route_props), "{\"method\":\"%s\"}",
+                     method ? method : "ANY");
+            int64_t route_id =
+                cbm_gbuf_upsert_node(gbuf, "Route", route_path, route_qn, "", 0, 0, route_props);
+            char props[512];
+            snprintf(props, sizeof(props),
+                     "{\"callee\":\"%s\",\"url_path\":\"%s\",\"via\":\"route_registration\"}",
+                     call->callee_name, route_path);
+            cbm_gbuf_insert_edge(gbuf, source->id, route_id, "CALLS", props);
+
+            /* Resolve handler and create HANDLES edge */
+            if (handler_ref && handler_ref[0]) {
+                cbm_resolution_t hres = cbm_registry_resolve(registry, handler_ref, module_qn,
+                                                             imp_keys, imp_vals, imp_count);
+                if (hres.qualified_name != NULL && hres.qualified_name[0] != '\0') {
+                    const cbm_gbuf_node_t *handler =
+                        cbm_gbuf_find_by_qn(main_gbuf, hres.qualified_name);
+                    if (handler != NULL) {
+                        char hprops[256];
+                        snprintf(hprops, sizeof(hprops), "{\"handler\":\"%s\"}",
+                                 hres.qualified_name);
+                        cbm_gbuf_insert_edge(gbuf, handler->id, route_id, "HANDLES", hprops);
+                    }
+                }
+            }
+            return;
+        }
+        /* No path found — fall through to normal CALLS edge */
     }
 
     int has_url = (arg != NULL && arg[0] != '\0' && (arg[0] == '/' || strstr(arg, "://") != NULL));
@@ -927,6 +996,17 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
             cbm_resolution_t res = cbm_registry_resolve(rc->registry, call->callee_name, module_qn,
                                                         imp_keys, imp_vals, imp_count);
             if (!res.qualified_name || res.qualified_name[0] == '\0') {
+                /* Unresolved call — still check for route registration by callee suffix.
+                 * Handles patterns like app.include_router(r, prefix="/path") where
+                 * "app" is a local variable that the resolver can't follow. */
+                if (cbm_service_pattern_route_method(call->callee_name) != NULL) {
+                    cbm_resolution_t fake_res = {.qualified_name = call->callee_name,
+                                                 .confidence = 0.5,
+                                                 .strategy = "callee_suffix"};
+                    emit_service_edge(ws->local_edge_buf, source_node, source_node, call, &fake_res,
+                                      module_qn, rc->registry, rc->main_gbuf, imp_keys, imp_vals,
+                                      imp_count);
+                }
                 continue;
             }
 

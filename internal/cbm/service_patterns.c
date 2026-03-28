@@ -393,6 +393,16 @@ static const method_suffix_t route_reg_suffixes[] = {
     {".MapPost", "POST"},
     {".MapPut", "PUT"},
     {".MapDelete", "DELETE"},
+    /* Router mounting / prefix registration (any method) */
+    {".include_router", "ANY"},
+    {".mount", "ANY"},
+    {".add_url_rule", "ANY"},
+    {".register_blueprint", "ANY"},
+    {".use", "ANY"},
+    {".register", "ANY"},
+    {".add_route", "ANY"},
+    {".add_api_route", "ANY"},
+    {".add_api_websocket_route", "ANY"},
     {NULL, NULL},
 };
 

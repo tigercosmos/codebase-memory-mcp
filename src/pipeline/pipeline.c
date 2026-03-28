@@ -326,6 +326,53 @@ static void *gh_compute_thread_fn(void *arg) {
 
 /* Extract Route nodes from URL strings found in config files (YAML, HCL, TOML).
  * These are infrastructure-defined endpoints (Cloud Scheduler, Terraform). */
+/* Process infra bindings: topic→URL pairs from IaC configs.
+ * Creates Route nodes for endpoints and HANDLES edges linking
+ * topic Routes to endpoint Routes (bridging the gap). */
+static void cbm_pipeline_process_infra_bindings(cbm_gbuf_t *gbuf, const cbm_file_info_t *files,
+                                                CBMFileResult **result_cache, int file_count) {
+    int bindings = 0;
+    for (int i = 0; i < file_count; i++) {
+        if (!result_cache[i]) {
+            continue;
+        }
+        for (int bi = 0; bi < result_cache[i]->infra_bindings.count; bi++) {
+            const CBMInfraBinding *ib = &result_cache[i]->infra_bindings.items[bi];
+            if (!ib->source_name || !ib->target_url) {
+                continue;
+            }
+
+            /* Create or find the endpoint Route node */
+            char url_route_qn[CBM_ROUTE_QN_SIZE];
+            snprintf(url_route_qn, sizeof(url_route_qn), "__route__infra__%s", ib->target_url);
+            int64_t url_route_id =
+                cbm_gbuf_upsert_node(gbuf, "Route", ib->target_url, url_route_qn, files[i].rel_path,
+                                     0, 0, "{\"source\":\"infra\"}");
+
+            /* Find the topic/queue Route node created by code-side ASYNC_CALLS */
+            char topic_route_qn[CBM_ROUTE_QN_SIZE];
+            snprintf(topic_route_qn, sizeof(topic_route_qn), "__route__%s__%s",
+                     ib->broker ? ib->broker : "async", ib->source_name);
+            const cbm_gbuf_node_t *topic_route = cbm_gbuf_find_by_qn(gbuf, topic_route_qn);
+
+            if (topic_route) {
+                /* Bridge: topic Route → endpoint Route via INFRA_MAPS edge */
+                char props[512];
+                snprintf(props, sizeof(props),
+                         "{\"broker\":\"%s\",\"topic\":\"%s\",\"endpoint\":\"%s\"}",
+                         ib->broker ? ib->broker : "async", ib->source_name, ib->target_url);
+                cbm_gbuf_insert_edge(gbuf, topic_route->id, url_route_id, "INFRA_MAPS", props);
+                bindings++;
+            }
+        }
+    }
+    if (bindings > 0) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d", bindings);
+        cbm_log_info("pass.infra_bindings", "linked", buf);
+    }
+}
+
 static void cbm_pipeline_extract_infra_routes(cbm_gbuf_t *gbuf, const cbm_file_info_t *files,
                                               CBMFileResult **result_cache, int file_count) {
     for (int i = 0; i < file_count; i++) {
@@ -566,6 +613,9 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
 
         /* Create Route nodes from infrastructure config URLs */
         cbm_pipeline_extract_infra_routes(p->gbuf, files, result_cache, file_count);
+
+        /* Process infra bindings: link topic Routes to endpoint URLs */
+        cbm_pipeline_process_infra_bindings(p->gbuf, files, result_cache, file_count);
 
         /* Free cached extraction results */
         for (int i = 0; i < file_count; i++) {

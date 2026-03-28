@@ -155,14 +155,41 @@ static const char *extract_service_name(const char *url, char *buf, int bufsz) {
     memcpy(tmp, host_start, (size_t)hlen);
     tmp[hlen] = '\0';
 
-    /* Cloud Run hostname format: service-name-REVHASH-LOCHASH.region.run.app
-     * Strip last two dash-separated segments (revision + location hashes).
-     * Hash segments are typically 2-12 alphanumeric characters. */
+    /* Cloud Run hostname formats:
+     * Old: service-name-REVHASH-LOCHASH.region.run.app (strip 2 segments)
+     * New: service-name-PROJECTNUM.region.run.app (strip 1 segment)
+     * Hash/project-num segments: short alphanumeric or all-numeric.
+     * Never strip a segment that looks like a meaningful word (>3 chars, has letters). */
     for (int strip = 0; strip < 2; strip++) {
         char *last_dash = strrchr(tmp, '-');
-        if (last_dash && strlen(last_dash + 1) <= 12) {
-            *last_dash = '\0';
+        if (!last_dash) {
+            break;
         }
+        const char *seg = last_dash + 1;
+        size_t slen = strlen(seg);
+        if (slen > 12 || slen == 0) {
+            break;
+        }
+        /* Check if segment is all-numeric (GCP project number) or short alphanumeric (hash) */
+        int all_alnum = 1;
+        int has_letter = 0;
+        for (size_t si = 0; si < slen; si++) {
+            if (!((seg[si] >= '0' && seg[si] <= '9') || (seg[si] >= 'a' && seg[si] <= 'z'))) {
+                all_alnum = 0;
+                break;
+            }
+            if (seg[si] >= 'a' && seg[si] <= 'z') {
+                has_letter = 1;
+            }
+        }
+        if (!all_alnum) {
+            break;
+        }
+        /* Don't strip meaningful words (>=3 chars with letters like "api", "endpoint") */
+        if (has_letter && slen >= 3) {
+            break;
+        }
+        *last_dash = '\0';
     }
 
     snprintf(buf, (size_t)bufsz, "%s", tmp);
@@ -201,13 +228,25 @@ static void match_infra_routes(cbm_gbuf_t *gb) {
          * and whose route path matches the infra URL path */
         for (int j = 0; j < route_count; j++) {
             const cbm_gbuf_node_t *handler_route = all_routes[j];
-            /* Skip infra routes */
-            if (handler_route->qualified_name &&
-                strncmp(handler_route->qualified_name, "__route__", 9) == 0) {
+            /* Skip infra/async/broker Route nodes — match only handler/prefix Routes */
+            const char *hqn = handler_route->qualified_name;
+            if (hqn &&
+                (strstr(hqn, "__route__infra__") == hqn ||
+                 strstr(hqn, "__route__pubsub__") == hqn ||
+                 strstr(hqn, "__route__cloud_tasks__") == hqn ||
+                 strstr(hqn, "__route__async__") == hqn ||
+                 strstr(hqn, "__route__cloud_scheduler__") == hqn ||
+                 strstr(hqn, "__route__kafka__") == hqn || strstr(hqn, "__route__sqs__") == hqn)) {
                 continue;
             }
-            /* Handler route must be in the matching service directory */
-            if (!handler_route->file_path || !strstr(handler_route->file_path, svc_name)) {
+            /* Handler route must be in the matching service directory.
+             * Prefix Routes from include_router have no file_path — match by path only. */
+            int file_matches = (handler_route->file_path != NULL &&
+                                strstr(handler_route->file_path, svc_name) != NULL);
+            int is_prefix_route =
+                (handler_route->qualified_name != NULL &&
+                 strncmp(handler_route->qualified_name, "__route__ANY__", 14) == 0);
+            if (!file_matches && !is_prefix_route) {
                 continue;
             }
 
@@ -223,14 +262,27 @@ static void match_infra_routes(cbm_gbuf_t *gb) {
                 continue;
             }
 
-            /* Match: infra path starts with handler path or handler path contains infra path */
-            if (strstr(infra_path, handler_path) != NULL ||
-                strstr(handler_path, infra_path) != NULL) {
-                /* Create HANDLES edge: infra Route → handler Route (connecting them) */
-                cbm_gbuf_insert_edge(gb, infra->id, handler_route->id, "HANDLES",
-                                     "{\"source\":\"infra_match\"}");
+            /* Match: infra path contains handler path, handler path contains infra path,
+             * OR handler is root "/" and service name matches (microservice pattern:
+             * each service has one handler at "/", differentiated by hostname). */
+            int path_match =
+                (strlen(handler_path) > 1 && (strstr(infra_path, handler_path) != NULL ||
+                                              strstr(handler_path, infra_path) != NULL));
+            int root_svc_match = (strcmp(handler_path, "/") == 0);
+            if (path_match || root_svc_match) {
+                /* Find the handler Function that HANDLES this decorator Route */
+                const cbm_gbuf_edge_t **fn_handles = NULL;
+                int fn_hcount = 0;
+                cbm_gbuf_find_edges_by_target_type(gb, handler_route->id, "HANDLES", &fn_handles,
+                                                   &fn_hcount);
+                for (int fh = 0; fh < fn_hcount; fh++) {
+                    /* Create HANDLES: handler Function → infra Route
+                     * This bridges the gap so DATA_FLOWS can find the handler */
+                    cbm_gbuf_insert_edge(gb, fn_handles[fh]->source_id, infra->id, "HANDLES",
+                                         "{\"source\":\"infra_match\"}");
+                }
                 matched++;
-                break; /* One match per infra route is enough */
+                break;
             }
         }
     }
@@ -342,11 +394,32 @@ static void create_data_flows(cbm_gbuf_t *gb) {
             n_callers++;
         }
 
-        /* Collect handler nodes (HANDLES → Route) */
+        /* Collect handler nodes: direct HANDLES → Route, plus HANDLES on
+         * endpoint Routes reachable via INFRA_MAPS (topic → endpoint → handler) */
         const cbm_gbuf_edge_t **handles_edges = NULL;
         int handles_count = 0;
         cbm_gbuf_find_edges_by_target_type(gb, route->id, "HANDLES", &handles_edges,
                                            &handles_count);
+
+        /* Also follow INFRA_MAPS: topic Route → endpoint Route → HANDLES
+         * This bridges async topic Routes to their push endpoint handlers. */
+        const cbm_gbuf_edge_t **infra_edges = NULL;
+        int infra_count = 0;
+        cbm_gbuf_find_edges_by_source_type(gb, route->id, "INFRA_MAPS", &infra_edges, &infra_count);
+
+        /* Extra handlers found via INFRA_MAPS chain */
+        int64_t extra_handlers[32];
+        int n_extra = 0;
+        for (int ie = 0; ie < infra_count; ie++) {
+            int64_t endpoint_id = infra_edges[ie]->target_id;
+            /* Find HANDLES edges on the endpoint Route */
+            const cbm_gbuf_edge_t **ep_handles = NULL;
+            int ep_hcount = 0;
+            cbm_gbuf_find_edges_by_target_type(gb, endpoint_id, "HANDLES", &ep_handles, &ep_hcount);
+            for (int eh = 0; eh < ep_hcount && n_extra < 32; eh++) {
+                extra_handlers[n_extra++] = ep_handles[eh]->source_id;
+            }
+        }
 
         for (int ci = 0; ci < n_callers; ci++) {
             for (int hi = 0; hi < handles_count; hi++) {
@@ -403,6 +476,58 @@ static void create_data_flows(cbm_gbuf_t *gb) {
                         }
                     }
 
+                    if (pos < sizeof(props) - 1) {
+                        props[pos] = '}';
+                        props[pos + 1] = '\0';
+                    }
+                }
+                cbm_gbuf_insert_edge(gb, caller_id, handler_id, "DATA_FLOWS", props);
+                flows++;
+            }
+
+            /* Also check handlers found via INFRA_MAPS chain */
+            for (int xi = 0; xi < n_extra; xi++) {
+                int64_t caller_id = caller_edges[ci].source_id;
+                int64_t handler_id = extra_handlers[xi];
+                if (caller_id == handler_id) {
+                    continue;
+                }
+                if (has_direct_call(gb, caller_id, handler_id)) {
+                    skipped++;
+                    continue;
+                }
+                const char *args_json = find_args_in_props(caller_edges[ci].props);
+                const cbm_gbuf_node_t *handler_node = cbm_gbuf_find_by_id(gb, handler_id);
+                char handler_params[512];
+                extract_param_names(handler_node, handler_params, sizeof(handler_params));
+
+                char props[2048];
+                int n = snprintf(props, sizeof(props),
+                                 "{\"via\":\"%s\",\"route\":\"%s\",\"edge_type\":\"%s\","
+                                 "\"via_infra\":true",
+                                 route->name ? route->name : "",
+                                 route->qualified_name ? route->qualified_name : "",
+                                 caller_edges[ci].edge_type);
+                if (n > 0 && (size_t)n < sizeof(props) - 100) {
+                    size_t pos = (size_t)n;
+                    if (handler_params[0]) {
+                        int w = snprintf(props + pos, sizeof(props) - pos,
+                                         ",\"handler_params\":[%s]", handler_params);
+                        if (w > 0) {
+                            pos += (size_t)w;
+                        }
+                    }
+                    if (args_json) {
+                        int w = snprintf(props + pos, sizeof(props) - pos, ",\"caller_args\":[%.*s",
+                                         400, args_json);
+                        if (w > 0) {
+                            pos += (size_t)w;
+                            char *close = strchr(props + (pos - (size_t)w) + 14, ']');
+                            if (close && close < props + sizeof(props) - 2) {
+                                pos = (size_t)(close - props) + 1;
+                            }
+                        }
+                    }
                     if (pos < sizeof(props) - 1) {
                         props[pos] = '}';
                         props[pos + 1] = '\0';

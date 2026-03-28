@@ -245,6 +245,60 @@ static void match_infra_routes(cbm_gbuf_t *gb) {
 /* Phase 3: Create DATA_FLOWS edges by linking callers through Route to handlers.
  * For each HTTP_CALLS/ASYNC_CALLS edge (caller → Route), find the HANDLES edge
  * (handler → Route) and create DATA_FLOWS (caller → handler) with route context. */
+/* Check if a direct CALLS edge already exists between two nodes */
+static int has_direct_call(const cbm_gbuf_t *gb, int64_t source, int64_t target) {
+    const cbm_gbuf_edge_t **edges = NULL;
+    int count = 0;
+    cbm_gbuf_find_edges_by_source_type(gb, source, "CALLS", &edges, &count);
+    for (int i = 0; i < count; i++) {
+        if (edges[i]->target_id == target) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+/* Extract param_names from a node's properties_json.
+ * Returns a comma-separated string in buf, or empty string. */
+static void extract_param_names(const cbm_gbuf_node_t *node, char *buf, int bufsize) {
+    buf[0] = '\0';
+    if (!node || !node->properties_json) {
+        return;
+    }
+    const char *p = strstr(node->properties_json, "\"param_names\":");
+    if (!p) {
+        return;
+    }
+    p = strchr(p, '[');
+    if (!p) {
+        return;
+    }
+    p++; /* skip '[' */
+    const char *end = strchr(p, ']');
+    if (!end || end <= p) {
+        return;
+    }
+    int len = (int)(end - p);
+    if (len >= bufsize) {
+        len = bufsize - 1;
+    }
+    memcpy(buf, p, (size_t)len);
+    buf[len] = '\0';
+}
+
+/* Extract the "args" JSON fragment from an edge's properties.
+ * Returns pointer into the properties string (not copied). */
+static const char *find_args_in_props(const char *props) {
+    if (!props) {
+        return NULL;
+    }
+    const char *p = strstr(props, "\"args\":[");
+    if (!p) {
+        return NULL;
+    }
+    return p + 7; /* skip "args":[ , points to first { or ] */
+}
+
 static void create_data_flows(cbm_gbuf_t *gb) {
     const cbm_gbuf_node_t **routes = NULL;
     int route_count = 0;
@@ -253,66 +307,119 @@ static void create_data_flows(cbm_gbuf_t *gb) {
     }
 
     int flows = 0;
+    int skipped = 0;
 
-    /* For each Route node, find callers (HTTP_CALLS/ASYNC_CALLS → Route)
-     * and handlers (HANDLES → Route), then create DATA_FLOWS links. */
     for (int ri = 0; ri < route_count; ri++) {
         const cbm_gbuf_node_t *route = routes[ri];
 
-        /* Find HTTP_CALLS → Route */
+        /* Collect caller edges (HTTP_CALLS + ASYNC_CALLS → Route) */
         const cbm_gbuf_edge_t **http_edges = NULL;
         int http_count = 0;
         cbm_gbuf_find_edges_by_target_type(gb, route->id, "HTTP_CALLS", &http_edges, &http_count);
 
-        /* Find ASYNC_CALLS → Route */
         const cbm_gbuf_edge_t **async_edges = NULL;
         int async_count = 0;
         cbm_gbuf_find_edges_by_target_type(gb, route->id, "ASYNC_CALLS", &async_edges,
                                            &async_count);
 
-        /* Find HANDLES → Route */
+        /* Collect caller edge references (need properties for arg mapping) */
+        struct {
+            int64_t source_id;
+            const char *props;
+            const char *edge_type;
+        } caller_edges[64];
+        int n_callers = 0;
+        for (int ei = 0; ei < http_count && n_callers < 64; ei++) {
+            caller_edges[n_callers].source_id = http_edges[ei]->source_id;
+            caller_edges[n_callers].props = http_edges[ei]->properties_json;
+            caller_edges[n_callers].edge_type = "HTTP_CALLS";
+            n_callers++;
+        }
+        for (int ei = 0; ei < async_count && n_callers < 64; ei++) {
+            caller_edges[n_callers].source_id = async_edges[ei]->source_id;
+            caller_edges[n_callers].props = async_edges[ei]->properties_json;
+            caller_edges[n_callers].edge_type = "ASYNC_CALLS";
+            n_callers++;
+        }
+
+        /* Collect handler nodes (HANDLES → Route) */
         const cbm_gbuf_edge_t **handles_edges = NULL;
         int handles_count = 0;
         cbm_gbuf_find_edges_by_target_type(gb, route->id, "HANDLES", &handles_edges,
                                            &handles_count);
 
-        /* Collect caller IDs */
-        int64_t callers[64];
-        int n_callers = 0;
-        for (int ei = 0; ei < http_count && n_callers < 64; ei++) {
-            callers[n_callers++] = http_edges[ei]->source_id;
-        }
-        for (int ei = 0; ei < async_count && n_callers < 64; ei++) {
-            callers[n_callers++] = async_edges[ei]->source_id;
-        }
-
-        /* Collect handler IDs */
-        int64_t handlers[16];
-        int n_handlers = 0;
-        for (int ei = 0; ei < handles_count && n_handlers < 16; ei++) {
-            handlers[n_handlers++] = handles_edges[ei]->source_id;
-        }
-
-        /* Create DATA_FLOWS: each caller → each handler through this Route */
         for (int ci = 0; ci < n_callers; ci++) {
-            for (int hi = 0; hi < n_handlers; hi++) {
-                if (callers[ci] == handlers[hi]) {
-                    continue; /* skip self-links */
+            for (int hi = 0; hi < handles_count; hi++) {
+                int64_t caller_id = caller_edges[ci].source_id;
+                int64_t handler_id = handles_edges[hi]->source_id;
+
+                if (caller_id == handler_id) {
+                    continue;
                 }
-                char props[512];
-                snprintf(props, sizeof(props), "{\"via_route\":\"%s\",\"route_qn\":\"%s\"}",
-                         route->name ? route->name : "",
-                         route->qualified_name ? route->qualified_name : "");
-                cbm_gbuf_insert_edge(gb, callers[ci], handlers[hi], "DATA_FLOWS", props);
+
+                /* Skip if direct CALLS edge already exists */
+                if (has_direct_call(gb, caller_id, handler_id)) {
+                    skipped++;
+                    continue;
+                }
+
+                /* Build value mapping: caller args → handler params */
+                const char *args_json = find_args_in_props(caller_edges[ci].props);
+
+                const cbm_gbuf_node_t *handler_node = cbm_gbuf_find_by_id(gb, handler_id);
+                char handler_params[512];
+                extract_param_names(handler_node, handler_params, sizeof(handler_params));
+
+                /* Build DATA_FLOWS properties with actual value mapping */
+                char props[2048];
+                int n = snprintf(
+                    props, sizeof(props), "{\"via\":\"%s\",\"route\":\"%s\",\"edge_type\":\"%s\"",
+                    route->name ? route->name : "",
+                    route->qualified_name ? route->qualified_name : "", caller_edges[ci].edge_type);
+
+                if (n > 0 && (size_t)n < sizeof(props) - 100) {
+                    size_t pos = (size_t)n;
+
+                    /* Include handler param_names */
+                    if (handler_params[0]) {
+                        int w = snprintf(props + pos, sizeof(props) - pos,
+                                         ",\"handler_params\":[%s]", handler_params);
+                        if (w > 0) {
+                            pos += (size_t)w;
+                        }
+                    }
+
+                    /* Include caller args (copy from source edge) */
+                    if (args_json) {
+                        int w = snprintf(props + pos, sizeof(props) - pos, ",\"caller_args\":[%.*s",
+                                         400, args_json);
+                        if (w > 0) {
+                            pos += (size_t)w;
+                            /* Find closing ] in the copied fragment */
+                            char *close = strchr(props + (pos - (size_t)w) + 14, ']');
+                            if (close && close < props + sizeof(props) - 2) {
+                                pos = (size_t)(close - props) + 1;
+                            }
+                        }
+                    }
+
+                    if (pos < sizeof(props) - 1) {
+                        props[pos] = '}';
+                        props[pos + 1] = '\0';
+                    }
+                }
+                cbm_gbuf_insert_edge(gb, caller_id, handler_id, "DATA_FLOWS", props);
                 flows++;
             }
         }
     }
 
-    if (flows > 0) {
-        char buf[16];
-        snprintf(buf, sizeof(buf), "%d", flows);
-        cbm_log_info("pass.data_flows", "created", buf);
+    if (flows > 0 || skipped > 0) {
+        char buf1[16];
+        char buf2[16];
+        snprintf(buf1, sizeof(buf1), "%d", flows);
+        snprintf(buf2, sizeof(buf2), "%d", skipped);
+        cbm_log_info("pass.data_flows", "created", buf1, "skipped_has_call", buf2);
     }
 }
 

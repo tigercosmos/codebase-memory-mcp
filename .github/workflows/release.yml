@@ -280,7 +280,7 @@ jobs:
           tar -czf codebase-memory-mcp-ui-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz \
             -C build/c codebase-memory-mcp LICENSE install.sh
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: binaries-${{ matrix.goos }}-${{ matrix.goarch }}
           path: "*.tar.gz"
@@ -329,7 +329,7 @@ jobs:
           cp "$BIN" codebase-memory-mcp.exe
           zip codebase-memory-mcp-ui-windows-amd64.zip codebase-memory-mcp.exe LICENSE install.ps1
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: binaries-windows-amd64
           path: "*.zip"
@@ -560,7 +560,7 @@ jobs:
         run: scripts/soak-test.sh build/c/codebase-memory-mcp 10
       - name: Upload soak metrics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: soak-quick-${{ matrix.goos }}-${{ matrix.goarch }}
           path: soak-results/
@@ -596,7 +596,7 @@ jobs:
           scripts/soak-test.sh "$BIN" 10
       - name: Upload soak metrics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: soak-quick-windows-amd64
           path: soak-results/
@@ -647,7 +647,7 @@ jobs:
         run: scripts/soak-test.sh build/c/codebase-memory-mcp 15
       - name: Upload ASan soak metrics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: soak-asan-${{ matrix.goos }}-${{ matrix.goarch }}
           path: soak-results/
@@ -686,7 +686,7 @@ jobs:
           scripts/soak-test.sh "$BIN" 15
       - name: Upload ASan soak metrics
         if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: soak-asan-windows-amd64
           path: soak-results/

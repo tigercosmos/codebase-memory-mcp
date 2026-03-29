@@ -128,7 +128,17 @@ static char **extract_decorators(const char *json, int *out_count) {
     while ((item = yyjson_arr_iter_next(&iter))) {
         if (yyjson_is_str(item)) {
             // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
-            out[idx++] = strdup(yyjson_get_str(item));
+            char *s = strdup(yyjson_get_str(item));
+            /* Collapse newlines to spaces so regex matches multiline decorators.
+             * POSIX regex [[:space:]] may not match \n on all platforms. */
+            if (s) {
+                for (char *p = s; *p; p++) {
+                    if (*p == '\n' || *p == '\r') {
+                        *p = ' ';
+                    }
+                }
+            }
+            out[idx++] = s;
         }
     }
     out[idx] = NULL;

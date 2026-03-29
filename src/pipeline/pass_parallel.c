@@ -199,6 +199,8 @@ static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def)
     append_json_str_array(buf, bufsize, &pos, "base_classes", def->base_classes);
     append_json_str_array(buf, bufsize, &pos, "param_names", def->param_names);
     append_json_str_array(buf, bufsize, &pos, "param_types", def->param_types);
+    append_json_string(buf, bufsize, &pos, "route_path", def->route_path);
+    append_json_string(buf, bufsize, &pos, "route_method", def->route_method);
     if (pos < bufsize - 1) {
         buf[pos] = '}';
         buf[pos + 1] = '\0';
@@ -440,11 +442,29 @@ static void extract_worker(int worker_id, void *ctx_ptr) {
             char props[2048];
             build_def_props(props, sizeof(props), def);
 
-            cbm_gbuf_upsert_node(ws->local_gbuf, def->label ? def->label : "Function", def->name,
-                                 def->qualified_name,
-                                 def->file_path ? def->file_path : fi->rel_path,
-                                 (int)def->start_line, (int)def->end_line, props);
+            int64_t func_id = cbm_gbuf_upsert_node(
+                ws->local_gbuf, def->label ? def->label : "Function", def->name,
+                def->qualified_name, def->file_path ? def->file_path : fi->rel_path,
+                (int)def->start_line, (int)def->end_line, props);
             ws->nodes_created++;
+
+            /* AST-extracted route: create Route node + HANDLES edge directly.
+             * Pure AST approach: route_path/route_method extracted from decorator
+             * tree-sitter nodes during extraction, no regex needed. */
+            if (def->route_path && def->route_path[0]) {
+                const char *rm = def->route_method ? def->route_method : "ANY";
+                char route_qn[CBM_ROUTE_QN_SIZE];
+                snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", rm, def->route_path);
+                char rprops[256];
+                snprintf(rprops, sizeof(rprops), "{\"method\":\"%s\",\"source\":\"decorator\"}",
+                         rm);
+                int64_t route_id = cbm_gbuf_upsert_node(
+                    ws->local_gbuf, "Route", def->route_path, route_qn,
+                    def->file_path ? def->file_path : fi->rel_path, 0, 0, rprops);
+                char hprops[512];
+                snprintf(hprops, sizeof(hprops), "{\"handler\":\"%s\"}", def->qualified_name);
+                cbm_gbuf_insert_edge(ws->local_gbuf, func_id, route_id, "HANDLES", hprops);
+            }
         }
 
         /* Free TSTree immediately — arena strings survive for registry+resolve.

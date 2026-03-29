@@ -463,6 +463,126 @@ static const char *extract_docstring(CBMArena *a, TSNode node, const char *sourc
     return NULL;
 }
 
+/* HTTP method names recognized in decorator calls (e.g., @router.post → "POST") */
+static const char *decorator_method_name(const char *attr_text) {
+    if (!attr_text) {
+        return NULL;
+    }
+    /* Match the last segment after the dot: "router.post" → "post" */
+    const char *dot = strrchr(attr_text, '.');
+    const char *method = dot ? dot + 1 : attr_text;
+    if (strcmp(method, "get") == 0 || strcmp(method, "Get") == 0) {
+        return "GET";
+    }
+    if (strcmp(method, "post") == 0 || strcmp(method, "Post") == 0) {
+        return "POST";
+    }
+    if (strcmp(method, "put") == 0 || strcmp(method, "Put") == 0) {
+        return "PUT";
+    }
+    if (strcmp(method, "delete") == 0 || strcmp(method, "Delete") == 0) {
+        return "DELETE";
+    }
+    if (strcmp(method, "patch") == 0 || strcmp(method, "Patch") == 0) {
+        return "PATCH";
+    }
+    if (strcmp(method, "route") == 0 || strcmp(method, "api_route") == 0) {
+        return "ANY";
+    }
+    return NULL;
+}
+
+/* Extract route path + method from a decorator's AST nodes.
+ * Works for: @app.route("/path"), @router.post("/path"), @GetMapping("/path"),
+ * @app.get("/path", ...), etc.
+ *
+ * Pure AST approach: walks the decorator node's call children to find:
+ * 1. The function/attribute name → infer HTTP method
+ * 2. The first string argument → route path */
+static void extract_route_from_decorators(CBMArena *a, TSNode func_node, const char *source,
+                                          const CBMLangSpec *spec, const char **out_path,
+                                          const char **out_method) {
+    *out_path = NULL;
+    *out_method = NULL;
+
+    if (!spec->decorator_node_types || !spec->decorator_node_types[0]) {
+        return;
+    }
+
+    TSNode prev = ts_node_prev_sibling(func_node);
+    while (!ts_node_is_null(prev)) {
+        if (!cbm_kind_in_set(prev, spec->decorator_node_types)) {
+            break;
+        }
+
+        /* Walk into the decorator to find a call expression with a path argument.
+         * Python decorator node structure: decorator → (call → attribute + argument_list)
+         * Java annotation: annotation → (name + arguments) */
+        uint32_t dc = ts_node_named_child_count(prev);
+        for (uint32_t di = 0; di < dc; di++) {
+            TSNode dchild = ts_node_named_child(prev, di);
+            const char *dk = ts_node_type(dchild);
+
+            /* Python/JS: decorator contains a call node */
+            if (strcmp(dk, "call") == 0) {
+                /* Get the function/attribute being called */
+                TSNode fn = ts_node_child_by_field_name(dchild, "function", 8);
+                if (ts_node_is_null(fn)) {
+                    fn = ts_node_named_child(dchild, 0);
+                }
+                if (!ts_node_is_null(fn)) {
+                    char *fn_text = cbm_node_text(a, fn, source);
+                    const char *method = decorator_method_name(fn_text);
+                    if (method) {
+                        /* Found a route decorator — extract path from arguments */
+                        TSNode args = ts_node_child_by_field_name(dchild, "arguments", 9);
+                        if (ts_node_is_null(args)) {
+                            /* Try argument_list as child */
+                            for (uint32_t ai = 0; ai < ts_node_named_child_count(dchild); ai++) {
+                                TSNode ac = ts_node_named_child(dchild, ai);
+                                if (strcmp(ts_node_type(ac), "argument_list") == 0) {
+                                    args = ac;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!ts_node_is_null(args)) {
+                            /* First string argument is the path */
+                            uint32_t nc = ts_node_named_child_count(args);
+                            for (uint32_t ai = 0; ai < nc && ai < 3; ai++) {
+                                TSNode arg = ts_node_named_child(args, ai);
+                                const char *ak = ts_node_type(arg);
+                                if (strcmp(ak, "string") == 0 ||
+                                    strcmp(ak, "string_literal") == 0 ||
+                                    strcmp(ak, "interpreted_string_literal") == 0) {
+                                    char *path = cbm_node_text(a, arg, source);
+                                    if (path) {
+                                        int plen = (int)strlen(path);
+                                        if (plen >= 2 && (path[0] == '"' || path[0] == '\'')) {
+                                            path =
+                                                cbm_arena_strndup(a, path + 1, (size_t)(plen - 2));
+                                        }
+                                        if (path && path[0] == '/') {
+                                            *out_path = path;
+                                            *out_method = method;
+                                            return;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        /* Route decorator but no path arg → path is "/" */
+                        *out_path = "/";
+                        *out_method = method;
+                        return;
+                    }
+                }
+            }
+        }
+        prev = ts_node_prev_sibling(prev);
+    }
+}
+
 // Extract decorator names from preceding decorator/annotation nodes
 static const char **extract_decorators(CBMArena *a, TSNode node, const char *source,
                                        CBMLanguage lang, const CBMLangSpec *spec) {
@@ -1123,8 +1243,9 @@ static void extract_func_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec 
         def.label = "Method";
     }
 
-    // Decorators
+    // Decorators + route extraction from decorator AST
     def.decorators = extract_decorators(a, node, ctx->source, ctx->language, spec);
+    extract_route_from_decorators(a, node, ctx->source, spec, &def.route_path, &def.route_method);
 
     // Docstring
     def.docstring = extract_docstring(a, node, ctx->source, ctx->language);
@@ -1610,6 +1731,7 @@ static void push_method_def(CBMExtractCtx *ctx, TSNode child, const char *class_
     }
 
     def.decorators = extract_decorators(a, child, ctx->source, ctx->language, spec);
+    extract_route_from_decorators(a, child, ctx->source, spec, &def.route_path, &def.route_method);
     def.docstring = extract_docstring(a, child, ctx->source, ctx->language);
 
     if (spec->branching_node_types && spec->branching_node_types[0]) {

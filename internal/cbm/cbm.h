@@ -99,6 +99,8 @@ typedef struct {
     const char **param_names;  // NULL-terminated array (NULL if none)
     const char **param_types;  // NULL-terminated array (NULL if none)
     const char **return_types; // NULL-terminated array (NULL if none)
+    const char *route_path;    // HTTP route path from decorator (e.g., "/api/users") or NULL
+    const char *route_method;  // HTTP method from decorator (e.g., "POST") or NULL
     int complexity;            // cyclomatic complexity
     int lines;                 // body line count
     bool is_exported;

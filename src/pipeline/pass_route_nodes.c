@@ -294,6 +294,179 @@ static void match_infra_routes(cbm_gbuf_t *gb) {
     }
 }
 
+/* Phase 2a: Ensure all functions with route_path properties have Route+HANDLES edges.
+ * During incremental indexing, only changed files get Route nodes from extraction.
+ * This pass scans ALL Function/Method nodes and creates missing Route+HANDLES. */
+static void ensure_decorator_routes(cbm_gbuf_t *gb) {
+    const char *labels[] = {"Function", "Method"};
+    int created = 0;
+
+    for (int li = 0; li < 2; li++) {
+        const cbm_gbuf_node_t **nodes = NULL;
+        int count = 0;
+        if (cbm_gbuf_find_by_label(gb, labels[li], &nodes, &count) != 0) {
+            continue;
+        }
+        for (int i = 0; i < count; i++) {
+            const cbm_gbuf_node_t *func = nodes[i];
+            if (!func->properties_json) {
+                continue;
+            }
+            /* Extract route_path from properties */
+            const char *rp = strstr(func->properties_json, "\"route_path\":\"");
+            if (!rp) {
+                continue;
+            }
+            rp += 14; /* skip "route_path":" */
+            const char *rp_end = strchr(rp, '"');
+            if (!rp_end || rp_end <= rp) {
+                continue;
+            }
+            int plen = (int)(rp_end - rp);
+            char path[256];
+            if (plen >= (int)sizeof(path)) {
+                continue;
+            }
+            memcpy(path, rp, (size_t)plen);
+            path[plen] = '\0';
+            if (path[0] != '/') {
+                continue;
+            }
+
+            /* Extract route_method */
+            const char *rm = strstr(func->properties_json, "\"route_method\":\"");
+            char method[16] = "ANY";
+            if (rm) {
+                rm += 16;
+                const char *rm_end = strchr(rm, '"');
+                if (rm_end && rm_end > rm && (rm_end - rm) < 16) {
+                    memcpy(method, rm, (size_t)(rm_end - rm));
+                    method[rm_end - rm] = '\0';
+                }
+            }
+
+            /* Check if Route node already exists */
+            char route_qn[CBM_ROUTE_QN_SIZE];
+            snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", method, path);
+            const cbm_gbuf_node_t *existing = cbm_gbuf_find_by_qn(gb, route_qn);
+
+            /* Create Route if missing */
+            char rprops[256];
+            snprintf(rprops, sizeof(rprops), "{\"method\":\"%s\",\"source\":\"decorator\"}",
+                     method);
+            int64_t route_id = cbm_gbuf_upsert_node(
+                gb, "Route", path, route_qn, func->file_path ? func->file_path : "", 0, 0, rprops);
+
+            /* Check if HANDLES edge already exists */
+            if (existing) {
+                const cbm_gbuf_edge_t **existing_handles = NULL;
+                int eh_count = 0;
+                cbm_gbuf_find_edges_by_target_type(gb, route_id, "HANDLES", &existing_handles,
+                                                   &eh_count);
+                int already_handled = 0;
+                for (int eh = 0; eh < eh_count; eh++) {
+                    if (existing_handles[eh]->source_id == func->id) {
+                        already_handled = 1;
+                        break;
+                    }
+                }
+                if (already_handled) {
+                    continue;
+                }
+            }
+
+            char hprops[512];
+            snprintf(hprops, sizeof(hprops), "{\"handler\":\"%s\"}",
+                     func->qualified_name ? func->qualified_name : "");
+            cbm_gbuf_insert_edge(gb, func->id, route_id, "HANDLES", hprops);
+            created++;
+        }
+    }
+
+    if (created > 0) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d", created);
+        cbm_log_info("pass.ensure_decorator_routes", "created", buf);
+    }
+}
+
+/* Phase 2b: Connect prefix Routes to decorator handler Functions.
+ * For each prefix Route (__route__ANY__/path), find the CALLS edge leading to it
+ * (from the registering file), derive the service directory, then find decorator
+ * Routes in that directory tree and create HANDLES from their handler Functions
+ * to the prefix Route. This bridges include_router → decorator → handler. */
+static void connect_prefix_to_decorators(cbm_gbuf_t *gb) {
+    const cbm_gbuf_node_t **routes = NULL;
+    int route_count = 0;
+    if (cbm_gbuf_find_by_label(gb, "Route", &routes, &route_count) != 0) {
+        return;
+    }
+
+    int connected = 0;
+
+    for (int ri = 0; ri < route_count; ri++) {
+        const cbm_gbuf_node_t *prefix_route = routes[ri];
+        /* Only process prefix Routes from include_router */
+        if (!prefix_route->qualified_name ||
+            strncmp(prefix_route->qualified_name, "__route__ANY__/", 15) != 0) {
+            continue;
+        }
+
+        /* Find the CALLS edge TO this prefix Route (from the registering function) */
+        const cbm_gbuf_edge_t **calls_in = NULL;
+        int calls_count = 0;
+        cbm_gbuf_find_edges_by_target_type(gb, prefix_route->id, "CALLS", &calls_in, &calls_count);
+        if (calls_count == 0) {
+            continue;
+        }
+
+        /* Get the registering file's directory as the service root */
+        const cbm_gbuf_node_t *registrar = cbm_gbuf_find_by_id(gb, calls_in[0]->source_id);
+        if (!registrar || !registrar->file_path) {
+            continue;
+        }
+        /* Extract directory: "docker-images/cloud-runs/svc/main.py" →
+         * "docker-images/cloud-runs/svc/" */
+        const char *last_slash = strrchr(registrar->file_path, '/');
+        if (!last_slash) {
+            continue;
+        }
+        int dir_len = (int)(last_slash - registrar->file_path) + 1;
+
+        /* Find Function/Method nodes in the same service directory that have
+         * route_path in their properties (from AST decorator extraction). */
+        const cbm_gbuf_node_t **funcs = NULL;
+        int func_count = 0;
+        cbm_gbuf_find_by_label(gb, "Function", &funcs, &func_count);
+
+        for (int fi = 0; fi < func_count; fi++) {
+            const cbm_gbuf_node_t *func = funcs[fi];
+            if (!func->file_path) {
+                continue;
+            }
+            /* Must be in the same service directory */
+            if (strncmp(func->file_path, registrar->file_path, (size_t)dir_len) != 0) {
+                continue;
+            }
+            /* Must have route_path in properties (AST-extracted decorator route) */
+            if (!func->properties_json || !strstr(func->properties_json, "\"route_path\"")) {
+                continue;
+            }
+            /* Create HANDLES: handler Function → prefix Route */
+            char props[256];
+            snprintf(props, sizeof(props), "{\"source\":\"prefix_decorator_bridge\"}");
+            cbm_gbuf_insert_edge(gb, func->id, prefix_route->id, "HANDLES", props);
+            connected++;
+        }
+    }
+
+    if (connected > 0) {
+        char buf[16];
+        snprintf(buf, sizeof(buf), "%d", connected);
+        cbm_log_info("pass.prefix_bridge", "connected", buf);
+    }
+}
+
 /* Phase 3: Create DATA_FLOWS edges by linking callers through Route to handlers.
  * For each HTTP_CALLS/ASYNC_CALLS edge (caller → Route), find the HANDLES edge
  * (handler → Route) and create DATA_FLOWS (caller → handler) with route context. */
@@ -562,7 +735,16 @@ void cbm_pipeline_create_route_nodes(cbm_gbuf_t *gb) {
         cbm_log_info("pass.route_nodes", "created", buf);
     }
 
-    /* Phase 2: match infra Routes to handler Routes by URL path */
+    /* Phase 2a: ensure all functions with route_path have Route+HANDLES.
+     * Handles incremental mode where unchanged files don't re-extract. */
+    ensure_decorator_routes(gb);
+
+    /* Phase 2b: connect prefix Routes to decorator handler Functions.
+     * Must run BEFORE match_infra_routes so infra matching can find
+     * HANDLES edges on prefix Routes for the bridge. */
+    connect_prefix_to_decorators(gb);
+
+    /* Phase 2b: match infra Routes to handler Routes by URL path */
     match_infra_routes(gb);
 
     /* Phase 3: create DATA_FLOWS edges through Routes */

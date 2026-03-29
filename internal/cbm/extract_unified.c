@@ -501,6 +501,113 @@ static void scan_yaml_for_infra_bindings(CBMExtractCtx *ctx, TSNode node) {
     }
 }
 
+/* ── HCL infrastructure binding extraction ───────────────────────────
+ * Scan HCL block nodes (resource, dynamic) for attribute pairs
+ * where one is a source key (topic, queue_name) and another is a
+ * target key (uri, push_endpoint). Handles nested blocks like
+ * push_config { push_endpoint = "..." }. */
+static void scan_hcl_block_for_bindings(CBMExtractCtx *ctx, TSNode block) {
+    const char *sources[8] = {NULL};
+    const char *source_keys[8] = {NULL};
+    int n_sources = 0;
+    const char *targets[8] = {NULL};
+    int n_targets = 0;
+
+    /* Scan attributes at this level and one level deep (nested blocks) */
+    uint32_t nc = ts_node_named_child_count(block);
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode child = ts_node_named_child(block, i);
+        const char *ck = ts_node_type(child);
+
+        if (strcmp(ck, "attribute") == 0) {
+            /* HCL attribute: key = value */
+            TSNode key_node = ts_node_named_child(child, 0);
+            TSNode val_node = ts_node_named_child(child, 1);
+            if (ts_node_is_null(key_node) || ts_node_is_null(val_node)) {
+                continue;
+            }
+            char *key = cbm_node_text(ctx->arena, key_node, ctx->source);
+            if (!key) {
+                continue;
+            }
+
+            /* Only extract literal string values (quoted_template or template_literal) */
+            const char *vk = ts_node_type(val_node);
+            char *val = NULL;
+            if (strcmp(vk, "quoted_template") == 0 || strcmp(vk, "template_literal") == 0 ||
+                strcmp(vk, "string_lit") == 0) {
+                val = cbm_node_text(ctx->arena, val_node, ctx->source);
+                if (val) {
+                    int vlen = (int)strlen(val);
+                    if (vlen >= 2 && (val[0] == '"' || val[0] == '\'')) {
+                        val = cbm_arena_strndup(ctx->arena, val + 1, (size_t)(vlen - 2));
+                    }
+                }
+            }
+            if (!val || !val[0]) {
+                continue;
+            }
+
+            if (is_source_key(key) && n_sources < 8) {
+                sources[n_sources] = val;
+                source_keys[n_sources] = key;
+                n_sources++;
+            }
+            if (is_target_key(key) && n_targets < 8 && strstr(val, "://")) {
+                targets[n_targets++] = val;
+            }
+        } else if (strcmp(ck, "block") == 0) {
+            /* Nested block (e.g., push_config { push_endpoint = "..." })
+             * Scan its attributes for target keys */
+            uint32_t bnc = ts_node_named_child_count(child);
+            for (uint32_t bi = 0; bi < bnc; bi++) {
+                TSNode bchild = ts_node_named_child(child, bi);
+                if (strcmp(ts_node_type(bchild), "attribute") != 0) {
+                    continue;
+                }
+                TSNode bkey = ts_node_named_child(bchild, 0);
+                TSNode bval = ts_node_named_child(bchild, 1);
+                if (ts_node_is_null(bkey) || ts_node_is_null(bval)) {
+                    continue;
+                }
+                char *bk = cbm_node_text(ctx->arena, bkey, ctx->source);
+                if (!bk || !is_target_key(bk)) {
+                    continue;
+                }
+                const char *bvk = ts_node_type(bval);
+                if (strcmp(bvk, "quoted_template") == 0 || strcmp(bvk, "template_literal") == 0 ||
+                    strcmp(bvk, "string_lit") == 0) {
+                    char *bv = cbm_node_text(ctx->arena, bval, ctx->source);
+                    if (bv) {
+                        int bvlen = (int)strlen(bv);
+                        if (bvlen >= 2 && (bv[0] == '"' || bv[0] == '\'')) {
+                            bv = cbm_arena_strndup(ctx->arena, bv + 1, (size_t)(bvlen - 2));
+                        }
+                        if (bv && strstr(bv, "://") && n_targets < 8) {
+                            targets[n_targets++] = bv;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /* Emit bindings for each source × target pair */
+    for (int si = 0; si < n_sources; si++) {
+        for (int ti = 0; ti < n_targets; ti++) {
+            if (!sources[si] || !targets[ti]) {
+                continue;
+            }
+            CBMInfraBinding ib = {
+                .source_name = sources[si],
+                .target_url = targets[ti],
+                .broker = infer_broker(ctx->rel_path, source_keys[si]),
+            };
+            cbm_infrabinding_push(&ctx->result->infra_bindings, ctx->arena, ib);
+        }
+    }
+}
+
 /* Handle YAML files: walk top-level block_mapping recursively */
 static void handle_yaml_nested(CBMExtractCtx *ctx, TSNode node) {
     if (ctx->language != CBM_LANG_YAML) {
@@ -564,6 +671,14 @@ void cbm_extract_unified(CBMExtractCtx *ctx) {
             if (strcmp(nk, "block_sequence") == 0 || strcmp(nk, "block_mapping") == 0 ||
                 strcmp(nk, "array") == 0 || strcmp(nk, "document") == 0) {
                 scan_yaml_for_infra_bindings(ctx, node);
+            }
+        }
+
+        /* Scan HCL for infra bindings (resource blocks with topic+endpoint) */
+        if (ctx->language == CBM_LANG_HCL) {
+            const char *nk = ts_node_type(node);
+            if (strcmp(nk, "block") == 0) {
+                scan_hcl_block_for_bindings(ctx, node);
             }
         }
 

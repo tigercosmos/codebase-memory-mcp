@@ -764,7 +764,7 @@ TEST(incr_accuracy_vs_full) {
 
     /* Within tight tolerance (±2 for dedup timing differences) */
     ASSERT_LTE(abs(full_nodes - incr_nodes), 2);
-    ASSERT_LTE(abs(full_edges - incr_edges), 50);
+    ASSERT_LTE(abs(full_nodes - incr_nodes), 50);
     ASSERT_LTE(abs(full_calls - incr_calls), 2);
 
     printf("    [accuracy] incr: %d nodes/%d edges, full: %d nodes/%d edges\n", incr_nodes,

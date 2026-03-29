@@ -433,8 +433,14 @@ static void connect_prefix_to_decorators(cbm_gbuf_t *gb) {
         }
         int dir_len = (int)(last_slash - registrar->file_path) + 1;
 
-        /* Find Function/Method nodes in the same service directory that have
-         * route_path in their properties (from AST decorator extraction). */
+        /* Convert prefix path to directory segments for file path matching.
+         * Prefix "/bq/bulk/ranked" → "bq/bulk/ranked" (skip leading /) */
+        const char *prefix_path = prefix_route->name;
+        const char *prefix_segs =
+            (prefix_path && prefix_path[0] == '/') ? prefix_path + 1 : prefix_path;
+
+        /* Find Function/Method nodes whose file path contains the prefix segments
+         * AND has route_path in properties (AST-extracted decorator route). */
         const cbm_gbuf_node_t **funcs = NULL;
         int func_count = 0;
         cbm_gbuf_find_by_label(gb, "Function", &funcs, &func_count);
@@ -450,6 +456,11 @@ static void connect_prefix_to_decorators(cbm_gbuf_t *gb) {
             }
             /* Must have route_path in properties (AST-extracted decorator route) */
             if (!func->properties_json || !strstr(func->properties_json, "\"route_path\"")) {
+                continue;
+            }
+            /* File path must contain the prefix path segments.
+             * E.g., prefix "/bq/bulk/ranked" → file must contain "bq/bulk/ranked" */
+            if (prefix_segs && prefix_segs[0] && !strstr(func->file_path, prefix_segs)) {
                 continue;
             }
             /* Create HANDLES: handler Function → prefix Route */

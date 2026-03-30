@@ -1240,9 +1240,250 @@ static void *sort_worker(void *arg) {
     return NULL;
 }
 
+/* Edge index cell builder callback: builds one index cell from an edge. */
+typedef uint8_t *(*edge_cell_fn)(const CBMDumpEdge *e, int *out_len);
+
+static uint8_t *ecell_source(const CBMDumpEdge *e, int *out_len) {
+    return build_index_entry_int_text_rowid(e->source_id, e->type, e->id, out_len);
+}
+static uint8_t *ecell_target(const CBMDumpEdge *e, int *out_len) {
+    return build_index_entry_int_text_rowid(e->target_id, e->type, e->id, out_len);
+}
+static uint8_t *ecell_type(const CBMDumpEdge *e, int *out_len) {
+    return build_index_entry_2text_rowid(e->project, e->type, e->id, out_len);
+}
+static uint8_t *ecell_proj_target_type(const CBMDumpEdge *e, int *out_len) {
+    return build_index_entry_text_int_text_rowid(e->project, e->target_id, e->type, e->id, out_len);
+}
+static uint8_t *ecell_proj_source_type(const CBMDumpEdge *e, int *out_len) {
+    return build_index_entry_text_int_text_rowid(e->project, e->source_id, e->type, e->id, out_len);
+}
+static uint8_t *ecell_src_tgt_type(const CBMDumpEdge *e, int *out_len) {
+    return build_index_entry_unique_2int_text_rowid(e->source_id, e->target_id, e->type, e->id,
+                                                    out_len);
+}
+static uint8_t *ecell_url_path(const CBMDumpEdge *e, int *out_len) {
+    const char *url = (e->url_path && e->url_path[0] != '\0') ? e->url_path : NULL;
+    RecordBuilder r;
+    rec_init(&r);
+    rec_add_text(&r, e->project);
+    if (url) {
+        rec_add_text(&r, url);
+    } else {
+        rec_add_null(&r);
+    }
+    rec_add_int(&r, e->id);
+    int payload_len = 0;
+    uint8_t *payload = rec_finalize(&r, &payload_len);
+    rec_free(&r);
+    int vlen = varint_len(payload_len);
+    int total = vlen + payload_len;
+    uint8_t *cell = (uint8_t *)malloc(total);
+    if (!cell) {
+        free(payload);
+        *out_len = 0;
+        return NULL;
+    }
+    int pos = put_varint(cell, payload_len);
+    memcpy(cell + pos, payload, payload_len);
+    free(payload);
+    *out_len = total;
+    return cell;
+}
+
+/* Build an edge index from a pre-sorted permutation using a cell builder callback. */
+static uint32_t build_edge_index_sorted(FILE *fp, uint32_t *next_page, CBMDumpEdge *edges,
+                                        int edge_count, int *perm, edge_cell_fn cell_fn) {
+    if (edge_count <= 0) {
+        return write_index_btree(fp, next_page, NULL, NULL, 0);
+    }
+    if (!perm) {
+        return 0;
+    }
+    uint8_t **idx_cells = (uint8_t **)malloc(edge_count * sizeof(uint8_t *));
+    int *idx_lens = (int *)malloc(edge_count * sizeof(int));
+    if (!idx_cells || !idx_lens) {
+        free(perm);
+        free(idx_cells);
+        free(idx_lens);
+        return 0;
+    }
+    for (int i = 0; i < edge_count; i++) {
+        int si = perm[i];
+        idx_cells[i] = cell_fn(&edges[si], &idx_lens[i]);
+        if (!idx_cells[i]) {
+            for (int j = 0; j < i; j++) {
+                free(idx_cells[j]);
+            }
+            free(idx_cells);
+            free(idx_lens);
+            free(perm);
+            return 0;
+        }
+    }
+    free(perm);
+    uint32_t root = write_index_btree(fp, next_page, idx_cells, idx_lens, edge_count);
+    for (int i = 0; i < edge_count; i++) {
+        free(idx_cells[i]);
+    }
+    free(idx_cells);
+    free(idx_lens);
+    return root;
+}
+
+/* Node column getter for index building. */
+typedef const char *(*node_col_fn)(const CBMDumpNode *n);
+static const char *ncol_label(const CBMDumpNode *n) {
+    return n->label;
+}
+static const char *ncol_name(const CBMDumpNode *n) {
+    return n->name;
+}
+static const char *ncol_file(const CBMDumpNode *n) {
+    return n->file_path ? n->file_path : "";
+}
+static const char *ncol_qn(const CBMDumpNode *n) {
+    return n->qualified_name;
+}
+
+/* Build a 2-text node index from a pre-sorted permutation. Returns root page or 0. */
+static uint32_t build_node_index_sorted(FILE *fp, uint32_t *next_page, CBMDumpNode *nodes,
+                                        int node_count, int *perm, node_col_fn col_fn) {
+    if (node_count <= 0) {
+        return write_index_btree(fp, next_page, NULL, NULL, 0);
+    }
+    if (!perm) {
+        return 0;
+    }
+    uint8_t **idx_cells = (uint8_t **)malloc(node_count * sizeof(uint8_t *));
+    int *idx_lens = (int *)malloc(node_count * sizeof(int));
+    if (!idx_cells || !idx_lens) {
+        free(perm);
+        free(idx_cells);
+        free(idx_lens);
+        return 0;
+    }
+    for (int i = 0; i < node_count; i++) {
+        int si = perm[i];
+        idx_cells[i] = build_index_entry_2text_rowid(nodes[si].project, col_fn(&nodes[si]),
+                                                     nodes[si].id, &idx_lens[i]);
+        if (!idx_cells[i]) {
+            for (int j = 0; j < i; j++) {
+                free(idx_cells[j]);
+            }
+            free(idx_cells);
+            free(idx_lens);
+            free(perm);
+            return 0;
+        }
+    }
+    free(perm);
+    uint32_t root = write_index_btree(fp, next_page, idx_cells, idx_lens, node_count);
+    for (int i = 0; i < node_count; i++) {
+        free(idx_cells[i]);
+    }
+    free(idx_cells);
+    free(idx_lens);
+    return root;
+}
+
 // --- Main entry point ---
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
+/* Write context passed to sub-phases of cbm_write_db. */
+typedef struct {
+    FILE *fp;
+    uint32_t next_page;
+    const char *project;
+    const char *root_path;
+    const char *indexed_at;
+    CBMDumpNode *nodes;
+    int node_count;
+    CBMDumpEdge *edges;
+    int edge_count;
+} write_db_ctx_t;
+
+/* Phase 1: Write node + edge data tables (streaming). */
+static int write_data_tables(write_db_ctx_t *w, uint32_t *nodes_root, uint32_t *edges_root) {
+    if (w->node_count > 0) {
+        PageBuilder pb;
+        pb_init(&pb, w->fp, w->next_page, false);
+        for (int i = 0; i < w->node_count; i++) {
+            int rec_len;
+            uint8_t *rec = build_node_record(&w->nodes[i], &rec_len);
+            if (!rec) {
+                return -3;
+            }
+            pb_add_table_cell_with_flush(&pb, w->nodes[i].id, rec, rec_len,
+                                         i > 0 ? w->nodes[i - 1].id : 0);
+            free(rec);
+        }
+        *nodes_root = pb_finalize_table(&pb, &w->next_page, w->nodes[w->node_count - 1].id);
+    } else {
+        *nodes_root = write_table_btree(w->fp, &w->next_page, NULL, NULL, NULL, 0, false);
+    }
+
+    if (w->edge_count > 0) {
+        PageBuilder pb;
+        pb_init(&pb, w->fp, w->next_page, false);
+        for (int i = 0; i < w->edge_count; i++) {
+            int rec_len;
+            uint8_t *rec = build_edge_record(&w->edges[i], &rec_len);
+            if (!rec) {
+                return -3;
+            }
+            pb_add_table_cell_with_flush(&pb, w->edges[i].id, rec, rec_len,
+                                         i > 0 ? w->edges[i - 1].id : 0);
+            free(rec);
+        }
+        *edges_root = pb_finalize_table(&pb, &w->next_page, w->edges[w->edge_count - 1].id);
+    } else {
+        *edges_root = write_table_btree(w->fp, &w->next_page, NULL, NULL, NULL, 0, false);
+    }
+    return 0;
+}
+
+/* Phase 2: Write metadata tables (projects, file_hashes, summaries, sqlite_sequence). */
+static void write_metadata_tables(write_db_ctx_t *w, uint32_t *projects_root,
+                                  uint32_t *file_hashes_root, uint32_t *summaries_root,
+                                  uint32_t *sqlite_seq_root) {
+    int proj_rec_len;
+    uint8_t *proj_rec =
+        build_project_record(w->project, w->indexed_at, w->root_path, &proj_rec_len);
+    const uint8_t *proj_recs[] = {proj_rec};
+    int proj_lens[] = {proj_rec_len};
+    int64_t proj_rowids[] = {1};
+    *projects_root =
+        write_table_btree(w->fp, &w->next_page, proj_recs, proj_lens, proj_rowids, 1, false);
+    free(proj_rec);
+
+    *file_hashes_root = write_table_btree(w->fp, &w->next_page, NULL, NULL, NULL, 0, false);
+    *summaries_root = write_table_btree(w->fp, &w->next_page, NULL, NULL, NULL, 0, false);
+
+    RecordBuilder r1;
+    RecordBuilder r2;
+    rec_init(&r1);
+    rec_add_text(&r1, "nodes");
+    rec_add_int(&r1, w->node_count > 0 ? w->nodes[w->node_count - 1].id : 0);
+    int seq1_len;
+    uint8_t *seq1 = rec_finalize(&r1, &seq1_len);
+    rec_free(&r1);
+
+    rec_init(&r2);
+    rec_add_text(&r2, "edges");
+    rec_add_int(&r2, w->edge_count > 0 ? w->edges[w->edge_count - 1].id : 0);
+    int seq2_len;
+    uint8_t *seq2 = rec_finalize(&r2, &seq2_len);
+    rec_free(&r2);
+
+    const uint8_t *seq_recs[] = {seq1, seq2};
+    int seq_lens[] = {seq1_len, seq2_len};
+    int64_t seq_rowids[] = {1, 2};
+    *sqlite_seq_root =
+        write_table_btree(w->fp, &w->next_page, seq_recs, seq_lens, seq_rowids, 2, false);
+    free(seq1);
+    free(seq2);
+}
+
 int cbm_write_db(const char *path, const char *project, const char *root_path,
                  const char *indexed_at, CBMDumpNode *nodes, int node_count, CBMDumpEdge *edges,
                  int edge_count) {
@@ -1251,100 +1492,34 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         return -1;
     }
 
-    // Reserve page 1 for sqlite_master (written last after we know all root pages)
-    uint32_t next_page = 2;
+    write_db_ctx_t w = {.fp = fp,
+                        .next_page = 2,
+                        .project = project,
+                        .root_path = root_path,
+                        .indexed_at = indexed_at,
+                        .nodes = nodes,
+                        .node_count = node_count,
+                        .edges = edges,
+                        .edge_count = edge_count};
 
-    // --- Stream node table records (build + write one at a time) ---
-    // This avoids holding all 1.87M node records (~374MB) in memory at once.
+    // Phase 1: Data tables (streaming node + edge records)
     uint32_t nodes_root;
-    if (node_count > 0) {
-        PageBuilder pb;
-        pb_init(&pb, fp, next_page, false);
-        for (int i = 0; i < node_count; i++) {
-            int rec_len;
-            uint8_t *rec = build_node_record(&nodes[i], &rec_len);
-            if (!rec) {
-                fclose(fp);
-                return -3;
-            }
-            pb_add_table_cell_with_flush(&pb, nodes[i].id, rec, rec_len,
-                                         i > 0 ? nodes[i - 1].id : 0);
-            free(rec);
-        }
-        nodes_root = pb_finalize_table(&pb, &next_page, nodes[node_count - 1].id);
-    } else {
-        nodes_root = write_table_btree(fp, &next_page, NULL, NULL, NULL, 0, false);
-    }
-
-    // --- Stream edge table records (build + write one at a time) ---
-    // Avoids holding all 5.7M edge records (~570MB) in memory at once.
     uint32_t edges_root;
-    if (edge_count > 0) {
-        PageBuilder pb;
-        pb_init(&pb, fp, next_page, false);
-        for (int i = 0; i < edge_count; i++) {
-            int rec_len;
-            uint8_t *rec = build_edge_record(&edges[i], &rec_len);
-            if (!rec) {
-                fclose(fp);
-                return -3;
-            }
-            pb_add_table_cell_with_flush(&pb, edges[i].id, rec, rec_len,
-                                         i > 0 ? edges[i - 1].id : 0);
-            free(rec);
-        }
-        edges_root = pb_finalize_table(&pb, &next_page, edges[edge_count - 1].id);
-    } else {
-        edges_root = write_table_btree(fp, &next_page, NULL, NULL, NULL, 0, false);
+    int rc = write_data_tables(&w, &nodes_root, &edges_root);
+    if (rc != 0) {
+        fclose(fp);
+        return rc;
     }
 
-    // --- Projects table (1 row) ---
-    int proj_rec_len;
-    uint8_t *proj_rec = build_project_record(project, indexed_at, root_path, &proj_rec_len);
-    const uint8_t *proj_recs[] = {proj_rec};
-    int proj_lens[] = {proj_rec_len};
-    int64_t proj_rowids[] = {1};
-    uint32_t projects_root =
-        write_table_btree(fp, &next_page, proj_recs, proj_lens, proj_rowids, 1, false);
-    free(proj_rec);
-
-    // --- Empty tables: file_hashes, project_summaries ---
-    uint32_t file_hashes_root = write_table_btree(fp, &next_page, NULL, NULL, NULL, 0, false);
-    uint32_t summaries_root = write_table_btree(fp, &next_page, NULL, NULL, NULL, 0, false);
-
-    // --- sqlite_sequence table (required for AUTOINCREMENT) ---
+    // Phase 2: Metadata tables (projects, file_hashes, summaries, sqlite_sequence)
+    uint32_t projects_root;
+    uint32_t file_hashes_root;
+    uint32_t summaries_root;
     uint32_t sqlite_seq_root;
-    // Two rows: ("nodes", max_node_id), ("edges", max_edge_id)
-    {
-        RecordBuilder r1;
-        RecordBuilder r2;
-        rec_init(&r1);
-        rec_add_text(&r1, "nodes");
-        rec_add_int(&r1, node_count > 0 ? nodes[node_count - 1].id : 0);
-        int seq1_len;
-        uint8_t *seq1 = rec_finalize(&r1, &seq1_len);
-        rec_free(&r1);
-
-        rec_init(&r2);
-        rec_add_text(&r2, "edges");
-        rec_add_int(&r2, edge_count > 0 ? edges[edge_count - 1].id : 0);
-        int seq2_len;
-        uint8_t *seq2 = rec_finalize(&r2, &seq2_len);
-        rec_free(&r2);
-
-        const uint8_t *seq_recs[] = {seq1, seq2};
-        int seq_lens[] = {seq1_len, seq2_len};
-        int64_t seq_rowids[] = {1, 2};
-        sqlite_seq_root =
-            write_table_btree(fp, &next_page, seq_recs, seq_lens, seq_rowids, 2, false);
-        free(seq1);
-        free(seq2);
-    }
+    write_metadata_tables(&w, &projects_root, &file_hashes_root, &summaries_root, &sqlite_seq_root);
+    uint32_t next_page = w.next_page;
 
     // --- Build indexes (all sorted by key columns before writing) ---
-
-    uint8_t **idx_cells = NULL;
-    int *idx_lens = NULL;
 
     // Set sort contexts for qsort comparators.
     g_sort_nodes = nodes;
@@ -1387,200 +1562,45 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         }
     }
 
-// Helper macro: build 2-text node index from pre-sorted permutation.
-#define BUILD_NODE_2TEXT_INDEX_SORTED(col_getter, sorted_perm, idx_name_var)                     \
-    do {                                                                                         \
-        if (node_count > 0) {                                                                    \
-            int *perm = (sorted_perm);                                                           \
-            if (!perm) {                                                                         \
-                fclose(fp);                                                                      \
-                return -4;                                                                       \
-            }                                                                                    \
-            idx_cells = (uint8_t **)malloc(node_count * sizeof(uint8_t *));                      \
-            idx_lens = (int *)malloc(node_count * sizeof(int));                                  \
-            if (!idx_cells || !idx_lens) {                                                       \
-                fprintf(stderr, "cbm_write_db: node idx alloc failed n=%d\n", node_count);       \
-                free(perm);                                                                      \
-                free(idx_cells);                                                                 \
-                free(idx_lens);                                                                  \
-                fclose(fp);                                                                      \
-                return -4;                                                                       \
-            }                                                                                    \
-            for (int i = 0; i < node_count; i++) {                                               \
-                int si = perm[i];                                                                \
-                idx_cells[i] = build_index_entry_2text_rowid(nodes[si].project, (col_getter),    \
-                                                             nodes[si].id, &idx_lens[i]);        \
-                if (!idx_cells[i]) {                                                             \
-                    fprintf(stderr, "cbm_write_db: node idx cell failed i=%d\n", i);             \
-                    for (int j = 0; j < i; j++)                                                  \
-                        free(idx_cells[j]);                                                      \
-                    free(idx_cells);                                                             \
-                    free(idx_lens);                                                              \
-                    free(perm);                                                                  \
-                    fclose(fp);                                                                  \
-                    return -4;                                                                   \
-                }                                                                                \
-            }                                                                                    \
-            free(perm);                                                                          \
-            (idx_name_var) = write_index_btree(fp, &next_page, idx_cells, idx_lens, node_count); \
-            for (int i = 0; i < node_count; i++)                                                 \
-                free(idx_cells[i]);                                                              \
-            free(idx_cells);                                                                     \
-            free(idx_lens);                                                                      \
-        } else {                                                                                 \
-            (idx_name_var) = write_index_btree(fp, &next_page, NULL, NULL, 0);                   \
-        }                                                                                        \
-    } while (0)
+    uint32_t idx_nodes_label_root =
+        build_node_index_sorted(fp, &next_page, nodes, node_count, nsorts[0].perm, ncol_label);
+    uint32_t idx_nodes_name_root =
+        build_node_index_sorted(fp, &next_page, nodes, node_count, nsorts[1].perm, ncol_name);
+    uint32_t idx_nodes_file_root =
+        build_node_index_sorted(fp, &next_page, nodes, node_count, nsorts[2].perm, ncol_file);
+    uint32_t autoindex_nodes_root =
+        build_node_index_sorted(fp, &next_page, nodes, node_count, nsorts[3].perm, ncol_qn);
 
-    uint32_t idx_nodes_label_root;
-    BUILD_NODE_2TEXT_INDEX_SORTED(nodes[si].label, nsorts[0].perm, idx_nodes_label_root);
-
-    uint32_t idx_nodes_name_root;
-    BUILD_NODE_2TEXT_INDEX_SORTED(nodes[si].name, nsorts[1].perm, idx_nodes_name_root);
-
-    uint32_t idx_nodes_file_root;
-    BUILD_NODE_2TEXT_INDEX_SORTED(nodes[si].file_path ? nodes[si].file_path : "", nsorts[2].perm,
-                                  idx_nodes_file_root);
-
-    uint32_t autoindex_nodes_root;
-    BUILD_NODE_2TEXT_INDEX_SORTED(nodes[si].qualified_name, nsorts[3].perm, autoindex_nodes_root);
-
-#undef BUILD_NODE_2TEXT_INDEX_SORTED
-
-// --- Edge indexes (all sorted) ---
-
-// Helper macro: build sorted edge index, invoke cell builder per edge.
-#define BUILD_EDGE_INDEX_SORTED(sorted_perm, cell_builder, idx_name_var)                         \
-    do {                                                                                         \
-        if (edge_count > 0) {                                                                    \
-            int *perm = (sorted_perm);                                                           \
-            if (!perm) {                                                                         \
-                fclose(fp);                                                                      \
-                return -4;                                                                       \
-            }                                                                                    \
-            idx_cells = (uint8_t **)malloc(edge_count * sizeof(uint8_t *));                      \
-            idx_lens = (int *)malloc(edge_count * sizeof(int));                                  \
-            if (!idx_cells || !idx_lens) {                                                       \
-                fprintf(stderr, "cbm_write_db: edge idx alloc failed n=%d\n", edge_count);       \
-                free(perm);                                                                      \
-                free(idx_cells);                                                                 \
-                free(idx_lens);                                                                  \
-                fclose(fp);                                                                      \
-                return -4;                                                                       \
-            }                                                                                    \
-            for (int i = 0; i < edge_count; i++) {                                               \
-                int si = perm[i];                                                                \
-                (cell_builder);                                                                  \
-                if (!idx_cells[i]) {                                                             \
-                    fprintf(stderr, "cbm_write_db: edge idx cell failed i=%d\n", i);             \
-                    for (int j = 0; j < i; j++)                                                  \
-                        free(idx_cells[j]);                                                      \
-                    free(idx_cells);                                                             \
-                    free(idx_lens);                                                              \
-                    free(perm);                                                                  \
-                    fclose(fp);                                                                  \
-                    return -4;                                                                   \
-                }                                                                                \
-            }                                                                                    \
-            free(perm);                                                                          \
-            (idx_name_var) = write_index_btree(fp, &next_page, idx_cells, idx_lens, edge_count); \
-            for (int i = 0; i < edge_count; i++)                                                 \
-                free(idx_cells[i]);                                                              \
-            free(idx_cells);                                                                     \
-            free(idx_lens);                                                                      \
-        } else {                                                                                 \
-            (idx_name_var) = write_index_btree(fp, &next_page, NULL, NULL, 0);                   \
-        }                                                                                        \
-    } while (0)
-
-    // idx_edges_source: (source_id, type) + rowid
-    uint32_t idx_edges_source_root;
-    BUILD_EDGE_INDEX_SORTED(esorts[0].perm,
-                            idx_cells[i] = build_index_entry_int_text_rowid(
-                                edges[si].source_id, edges[si].type, edges[si].id, &idx_lens[i]),
-                            idx_edges_source_root);
-
-    // idx_edges_target: (target_id, type) + rowid
-    uint32_t idx_edges_target_root;
-    BUILD_EDGE_INDEX_SORTED(esorts[1].perm,
-                            idx_cells[i] = build_index_entry_int_text_rowid(
-                                edges[si].target_id, edges[si].type, edges[si].id, &idx_lens[i]),
-                            idx_edges_target_root);
-
-    // idx_edges_type: (project, type) + rowid
-    uint32_t idx_edges_type_root;
-    BUILD_EDGE_INDEX_SORTED(esorts[2].perm,
-                            idx_cells[i] = build_index_entry_2text_rowid(
-                                edges[si].project, edges[si].type, edges[si].id, &idx_lens[i]),
-                            idx_edges_type_root);
-
-    // idx_edges_target_type: (project, target_id, type) + rowid
-    uint32_t idx_edges_target_type_root;
-    BUILD_EDGE_INDEX_SORTED(
-        esorts[3].perm,
-        idx_cells[i] = build_index_entry_text_int_text_rowid(
-            edges[si].project, edges[si].target_id, edges[si].type, edges[si].id, &idx_lens[i]),
-        idx_edges_target_type_root);
-
-    // idx_edges_source_type: (project, source_id, type) + rowid
-    uint32_t idx_edges_source_type_root;
-    BUILD_EDGE_INDEX_SORTED(
-        esorts[4].perm,
-        idx_cells[i] = build_index_entry_text_int_text_rowid(
-            edges[si].project, edges[si].source_id, edges[si].type, edges[si].id, &idx_lens[i]),
-        idx_edges_source_type_root);
-
-    // idx_edges_url_path: (project, url_path_gen) + rowid
-    uint32_t idx_edges_url_path_root;
-    if (edge_count > 0) {
-        int *perm = esorts[5].perm;
-        idx_cells = (uint8_t **)malloc(edge_count * sizeof(uint8_t *));
-        idx_lens = (int *)malloc(edge_count * sizeof(int));
-        for (int i = 0; i < edge_count; i++) {
-            int si = perm[i];
-            const char *url =
-                (edges[si].url_path && edges[si].url_path[0]) ? edges[si].url_path : NULL;
-            RecordBuilder r;
-            rec_init(&r);
-            rec_add_text(&r, edges[si].project);
-            if (url) {
-                rec_add_text(&r, url);
-            } else {
-                rec_add_null(&r);
-            }
-            rec_add_int(&r, edges[si].id);
-            int payload_len = 0;
-            uint8_t *payload = rec_finalize(&r, &payload_len);
-            rec_free(&r);
-            int vl = varint_len(payload_len);
-            int total = vl + payload_len;
-            idx_cells[i] = (uint8_t *)malloc(total);
-            int pos = put_varint(idx_cells[i], payload_len);
-            memcpy(idx_cells[i] + pos, payload, payload_len);
-            free(payload);
-            idx_lens[i] = total;
-        }
-        free(perm);
-        idx_edges_url_path_root =
-            write_index_btree(fp, &next_page, idx_cells, idx_lens, edge_count);
-        for (int i = 0; i < edge_count; i++) {
-            free(idx_cells[i]);
-        }
-        free(idx_cells);
-        free(idx_lens);
-    } else {
-        idx_edges_url_path_root = write_index_btree(fp, &next_page, NULL, NULL, 0);
+    if ((node_count > 0) && (!idx_nodes_label_root || !idx_nodes_name_root ||
+                             !idx_nodes_file_root || !autoindex_nodes_root)) {
+        fclose(fp);
+        return -4;
     }
 
-    // Autoindex for UNIQUE(source_id, target_id, type) on edges
-    uint32_t autoindex_edges_root;
-    BUILD_EDGE_INDEX_SORTED(
-        esorts[6].perm,
-        idx_cells[i] = build_index_entry_unique_2int_text_rowid(
-            edges[si].source_id, edges[si].target_id, edges[si].type, edges[si].id, &idx_lens[i]),
-        autoindex_edges_root);
+    // --- Edge indexes (all sorted) ---
 
-#undef BUILD_EDGE_INDEX_SORTED
+    uint32_t idx_edges_source_root =
+        build_edge_index_sorted(fp, &next_page, edges, edge_count, esorts[0].perm, ecell_source);
+    uint32_t idx_edges_target_root =
+        build_edge_index_sorted(fp, &next_page, edges, edge_count, esorts[1].perm, ecell_target);
+    uint32_t idx_edges_type_root =
+        build_edge_index_sorted(fp, &next_page, edges, edge_count, esorts[2].perm, ecell_type);
+    uint32_t idx_edges_target_type_root = build_edge_index_sorted(
+        fp, &next_page, edges, edge_count, esorts[3].perm, ecell_proj_target_type);
+    uint32_t idx_edges_source_type_root = build_edge_index_sorted(
+        fp, &next_page, edges, edge_count, esorts[4].perm, ecell_proj_source_type);
+    uint32_t idx_edges_url_path_root =
+        build_edge_index_sorted(fp, &next_page, edges, edge_count, esorts[5].perm, ecell_url_path);
+    uint32_t autoindex_edges_root = build_edge_index_sorted(fp, &next_page, edges, edge_count,
+                                                            esorts[6].perm, ecell_src_tgt_type);
+
+    if (edge_count > 0 &&
+        (!idx_edges_source_root || !idx_edges_target_root || !idx_edges_type_root ||
+         !idx_edges_target_type_root || !idx_edges_source_type_root || !idx_edges_url_path_root ||
+         !autoindex_edges_root)) {
+        fclose(fp);
+        return -4;
+    }
 
     // Autoindex for projects(name TEXT PK) — single text column
     uint32_t autoindex_projects_root;

@@ -250,32 +250,32 @@ bool cbm_is_secret_value(const char *value) {
     const char *p;
 
     /* AKIA + 16 alnum (AWS key) */
-    // NOLINTNEXTLINE(bugprone-assignment-in-if-condition)
-    if ((p = ci_strstr(value, "AKIA")) && count_alnum(p + 4) >= 16) {
+    p = ci_strstr(value, "AKIA");
+    if (p && count_alnum(p + 4) >= 16) {
         return true;
     }
 
     /* sk- + 20 alnum (API key) */
-    // NOLINTNEXTLINE(bugprone-assignment-in-if-condition)
-    if ((p = ci_strstr(value, "sk-")) && count_alnum(p + 3) >= 20) {
+    p = ci_strstr(value, "sk-");
+    if (p && count_alnum(p + 3) >= 20) {
         return true;
     }
 
     /* ghp_ + 36 alnum (GitHub PAT) */
-    // NOLINTNEXTLINE(bugprone-assignment-in-if-condition)
-    if ((p = ci_strstr(value, "ghp_")) && count_alnum(p + 4) >= GITHUB_PAT_MIN_ALNUM) {
+    p = ci_strstr(value, "ghp_");
+    if (p && count_alnum(p + 4) >= GITHUB_PAT_MIN_ALNUM) {
         return true;
     }
 
     /* glpat- + 20 alnum/dash (GitLab PAT) */
-    // NOLINTNEXTLINE(bugprone-assignment-in-if-condition)
-    if ((p = ci_strstr(value, "glpat-")) && count_alnum_dash(p + 6) >= 20) {
+    p = ci_strstr(value, "glpat-");
+    if (p && count_alnum_dash(p + 6) >= 20) {
         return true;
     }
 
     /* xox[bps]- (Slack token) */
-    // NOLINTNEXTLINE(bugprone-assignment-in-if-condition)
-    if ((p = ci_strstr(value, "xox")) && p[3] &&
+    p = ci_strstr(value, "xox");
+    if (p && p[3] != '\0' &&
         (tolower((unsigned char)p[3]) == 'b' || tolower((unsigned char)p[3]) == 'p' ||
          tolower((unsigned char)p[3]) == 's') &&
         p[4] == '-' && count_alnum_dash(p + 5) >= 1) {

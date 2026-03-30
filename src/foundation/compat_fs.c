@@ -217,7 +217,6 @@ void cbm_closedir(cbm_dir_t *d) {
 }
 
 FILE *cbm_popen(const char *cmd, const char *mode) {
-    // NOLINTNEXTLINE(cert-env33-c) — popen needed for git commands
     return popen(cmd, mode);
 }
 

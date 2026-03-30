@@ -1087,7 +1087,11 @@ int cbm_upsert_instructions(const char *path, const char *content) {
     } else {
         /* Append section */
         size_t new_len = existing_len + 1 + strlen(section);
-        // NOLINTNEXTLINE(clang-analyzer-optin.taint.TaintedAlloc)
+        if (new_len > 10 * 1024 * 1024) { /* 10 MB safety cap */
+            free(existing);
+            free(section);
+            return -1;
+        }
         result = malloc(new_len + 1);
         if (!result) {
             free(existing);

@@ -50,6 +50,7 @@ Checks: >
   -clang-analyzer-unix.Malloc,
   -misc-include-cleaner,
   -bugprone-command-processor,
+  -bugprone-suspicious-include,
   -cert-env33-c,
   -bugprone-easily-swappable-parameters,
   -concurrency-mt-unsafe,

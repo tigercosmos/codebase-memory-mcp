@@ -1,12 +1,8 @@
-// lz4_store.c — Thin C wrappers around LZ4 HC for the sourceStore.
-// Linked via CGo from lz4.go.
+// lz4_store.c — Thin C wrappers around LZ4 HC.
+// Include vendored LZ4 source directly — compiled as a single translation unit.
 
-// Include the vendored LZ4 source directly so CGo compiles everything
-// in a single translation unit (avoids separate .c file compilation issues).
-// NOLINTNEXTLINE(bugprone-suspicious-include)
-#include "vendored/lz4/lz4.c"
-// NOLINTNEXTLINE(bugprone-suspicious-include)
-#include "vendored/lz4/lz4hc.c"
+#include "vendored/lz4/lz4.c"   // unity build: vendored source
+#include "vendored/lz4/lz4hc.c" // unity build: vendored source
 
 #include "lz4_store.h"
 

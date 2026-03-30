@@ -800,9 +800,8 @@ static uint8_t *build_index_entry_unique_2int_text_rowid(int64_t v1, int64_t v2,
         return NULL;
     }
 
-    // NOLINTNEXTLINE(misc-confusable-identifiers) — identifiers are distinct in context
-    int vl = varint_len(payload_len);
-    int total = vl + payload_len;
+    int vlen = varint_len(payload_len);
+    int total = vlen + payload_len;
     uint8_t *cell = (uint8_t *)malloc(total);
     if (!cell) {
         free(payload);

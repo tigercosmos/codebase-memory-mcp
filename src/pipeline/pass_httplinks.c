@@ -623,9 +623,34 @@ static void resolve_express_prefixes(cbm_pipeline_ctx_t *ctx, cbm_route_handler_
     cbm_regfree(&esimport_re);
 }
 
+/* Apply a group prefix to all routes belonging to a function. */
+static void apply_prefix_to_func_routes(cbm_route_handler_t *routes, int route_count,
+                                        const char *func_qn, const char *prefix) {
+    size_t pfx_len = strlen(prefix);
+    char pfx_buf[256];
+    snprintf(pfx_buf, sizeof(pfx_buf), "%s", prefix);
+    while (pfx_len > 0 && pfx_buf[pfx_len - 1] == '/') {
+        pfx_buf[--pfx_len] = '\0';
+    }
+    for (int r = 0; r < route_count; r++) {
+        if (strcmp(routes[r].qualified_name, func_qn) != 0) {
+            continue;
+        }
+        if (strncmp(routes[r].path, pfx_buf, pfx_len) == 0) {
+            continue;
+        }
+        char new_path[256];
+        const char *old = routes[r].path;
+        while (*old == '/') {
+            old++;
+        }
+        snprintf(new_path, sizeof(new_path), "%s/%s", pfx_buf, old);
+        snprintf(routes[r].path, sizeof(routes[r].path), "%s", new_path);
+    }
+}
+
 /* Resolve Go gin cross-file Group() prefixes.
  * Pattern: v1 := r.Group("/api"); RegisterRoutes(v1) */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void resolve_cross_file_group_prefixes(cbm_pipeline_ctx_t *ctx, cbm_route_handler_t *routes,
                                               int route_count) {
     /* Build routesByFunc index: funcQN → (start_index, count) in routes array */
@@ -723,26 +748,7 @@ static void resolve_cross_file_group_prefixes(cbm_pipeline_ctx_t *ctx, cbm_route
                 p += pm[0].rm_eo;
 
                 if (strcmp(called_name, func_node->name) == 0) {
-                    /* Apply prefix to routes of this function */
-                    size_t pfx_len = strlen(prefix);
-                    while (pfx_len > 0 && prefix[pfx_len - 1] == '/') {
-                        prefix[--pfx_len] = '\0';
-                    }
-                    for (int r = 0; r < route_count; r++) {
-                        if (strcmp(routes[r].qualified_name, func_qn) != 0) {
-                            continue;
-                        }
-                        if (strncmp(routes[r].path, prefix, pfx_len) == 0) {
-                            continue;
-                        }
-                        char new_path[256];
-                        const char *old = routes[r].path;
-                        while (*old == '/') {
-                            old++;
-                        }
-                        snprintf(new_path, sizeof(new_path), "%s/%s", prefix, old);
-                        snprintf(routes[r].path, sizeof(routes[r].path), "%s", new_path);
-                    }
+                    apply_prefix_to_func_routes(routes, route_count, func_qn, prefix);
                     break;
                 }
             }
@@ -786,27 +792,8 @@ static void resolve_cross_file_group_prefixes(cbm_pipeline_ctx_t *ctx, cbm_route
 
                         for (int v = 0; v < var_count; v++) {
                             if (strcmp(var_pfx[v].var, arg_name) == 0) {
-                                char *prefix = var_pfx[v].prefix;
-                                size_t pfx_len = strlen(prefix);
-                                while (pfx_len > 0 && prefix[pfx_len - 1] == '/') {
-                                    prefix[--pfx_len] = '\0';
-                                }
-                                for (int r = 0; r < route_count; r++) {
-                                    if (strcmp(routes[r].qualified_name, func_qn) != 0) {
-                                        continue;
-                                    }
-                                    if (strncmp(routes[r].path, prefix, pfx_len) == 0) {
-                                        continue;
-                                    }
-                                    char new_path[256];
-                                    const char *old = routes[r].path;
-                                    while (*old == '/') {
-                                        old++;
-                                    }
-                                    snprintf(new_path, sizeof(new_path), "%s/%s", prefix, old);
-                                    snprintf(routes[r].path, sizeof(routes[r].path), "%s",
-                                             new_path);
-                                }
+                                apply_prefix_to_func_routes(routes, route_count, func_qn,
+                                                            var_pfx[v].prefix);
                                 break;
                             }
                         }

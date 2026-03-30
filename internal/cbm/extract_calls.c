@@ -42,7 +42,7 @@ static const char *strip_quotes(CBMArena *a, const char *text) {
 }
 
 // Forward declarations
-static void walk_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec);
+static void walk_calls(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec);
 static char *extract_callee_name(CBMArena *a, TSNode node, const char *source, CBMLanguage lang);
 static void extract_jsx_refs(CBMExtractCtx *ctx, TSNode node);
 
@@ -276,77 +276,75 @@ static char *extract_callee_name(CBMArena *a, TSNode node, const char *source, C
     return NULL;
 }
 
-// Walk AST for call nodes
-// NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk
-static void walk_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
-    const char *kind = ts_node_type(node);
+// Walk AST for call nodes (iterative)
+#define CALLS_STACK_CAP 512
+static void walk_calls(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec) {
+    TSNode stack[CALLS_STACK_CAP];
+    int top = 0;
+    stack[top++] = root;
 
-    if (cbm_kind_in_set(node, spec->call_node_types)) {
-        char *callee = extract_callee_name(ctx->arena, node, ctx->source, ctx->language);
-        if (callee && callee[0]) {
-            // Skip keywords
-            if (!cbm_is_keyword(callee, ctx->language)) {
-                CBMCall call = {0};
-                call.callee_name = callee;
-                call.enclosing_func_qn = cbm_enclosing_func_qn_cached(ctx, node);
-                call.first_string_arg = NULL;
+    while (top > 0) {
+        TSNode node = stack[--top];
+        const char *kind = ts_node_type(node);
 
-                /* Extract first string literal argument (URL, topic, key) */
-                TSNode args = ts_node_child_by_field_name(node, "arguments", 9);
-                if (!ts_node_is_null(args)) {
-                    uint32_t nc = ts_node_named_child_count(args);
-                    for (uint32_t ai = 0; ai < nc && ai < 3; ai++) {
-                        TSNode arg = ts_node_named_child(args, ai);
-                        const char *ak = ts_node_type(arg);
-                        if (strcmp(ak, "string") == 0 || strcmp(ak, "string_literal") == 0 ||
-                            strcmp(ak, "interpreted_string_literal") == 0 ||
-                            strcmp(ak, "raw_string_literal") == 0 ||
-                            strcmp(ak, "string_content") == 0) {
-                            char *text = cbm_node_text(ctx->arena, arg, ctx->source);
-                            if (text && text[0]) {
-                                /* Strip quotes */
-                                int len = (int)strlen(text);
-                                if (len >= 2 && (text[0] == '"' || text[0] == '\'')) {
-                                    text =
-                                        cbm_arena_strndup(ctx->arena, text + 1, (size_t)(len - 2));
-                                    len -= 2;
-                                }
-                                /* Validate: must be printable ASCII, no control chars */
-                                // NOLINTNEXTLINE(readability-implicit-bool-conversion)
-                                bool valid = (text != NULL && len > 0 && len < 512);
-                                for (int vi = 0; vi < len && valid; vi++) {
-                                    unsigned char ch = (unsigned char)text[vi];
-                                    if (ch < 0x20 && ch != '\t') {
-                                        valid = false;
+        if (cbm_kind_in_set(node, spec->call_node_types)) {
+            char *callee = extract_callee_name(ctx->arena, node, ctx->source, ctx->language);
+            if (callee && callee[0]) {
+                if (!cbm_is_keyword(callee, ctx->language)) {
+                    CBMCall call = {0};
+                    call.callee_name = callee;
+                    call.enclosing_func_qn = cbm_enclosing_func_qn_cached(ctx, node);
+                    call.first_string_arg = NULL;
+
+                    TSNode args = ts_node_child_by_field_name(node, "arguments", 9);
+                    if (!ts_node_is_null(args)) {
+                        uint32_t nc = ts_node_named_child_count(args);
+                        for (uint32_t ai = 0; ai < nc && ai < 3; ai++) {
+                            TSNode arg = ts_node_named_child(args, ai);
+                            const char *ak = ts_node_type(arg);
+                            if (strcmp(ak, "string") == 0 || strcmp(ak, "string_literal") == 0 ||
+                                strcmp(ak, "interpreted_string_literal") == 0 ||
+                                strcmp(ak, "raw_string_literal") == 0 ||
+                                strcmp(ak, "string_content") == 0) {
+                                char *text = cbm_node_text(ctx->arena, arg, ctx->source);
+                                if (text && text[0]) {
+                                    int len = (int)strlen(text);
+                                    if (len >= 2 && (text[0] == '"' || text[0] == '\'')) {
+                                        text = cbm_arena_strndup(ctx->arena, text + 1,
+                                                                 (size_t)(len - 2));
+                                        len -= 2;
+                                    }
+                                    bool valid = (text != NULL && len > 0 && len < 512);
+                                    for (int vi = 0; vi < len && valid; vi++) {
+                                        unsigned char ch = (unsigned char)text[vi];
+                                        if (ch < 0x20 && ch != '\t') {
+                                            valid = false;
+                                        }
+                                    }
+                                    if (valid) {
+                                        call.first_string_arg = text;
                                     }
                                 }
-                                if (valid) {
-                                    call.first_string_arg = text;
-                                }
+                                break;
                             }
-                            break;
                         }
                     }
+                    cbm_calls_push(&ctx->result->calls, ctx->arena, call);
                 }
-
-                cbm_calls_push(&ctx->result->calls, ctx->arena, call);
             }
         }
-        // Don't recurse into call arguments for nested calls — the walk handles that
-    }
 
-    // JSX component refs (TSX/JSX)
-    if (ctx->language == CBM_LANG_TSX || ctx->language == CBM_LANG_JAVASCRIPT) {
-        if (strcmp(kind, "jsx_self_closing_element") == 0 ||
-            strcmp(kind, "jsx_opening_element") == 0) {
-            extract_jsx_refs(ctx, node);
+        if (ctx->language == CBM_LANG_TSX || ctx->language == CBM_LANG_JAVASCRIPT) {
+            if (strcmp(kind, "jsx_self_closing_element") == 0 ||
+                strcmp(kind, "jsx_opening_element") == 0) {
+                extract_jsx_refs(ctx, node);
+            }
         }
-    }
 
-    // Recurse
-    uint32_t count = ts_node_child_count(node);
-    for (uint32_t i = 0; i < count; i++) {
-        walk_calls(ctx, ts_node_child(node, i), spec);
+        uint32_t count = ts_node_child_count(node);
+        for (int i = (int)count - 1; i >= 0 && top < CALLS_STACK_CAP; i--) {
+            stack[top++] = ts_node_child(node, (uint32_t)i);
+        }
     }
 }
 
@@ -542,7 +540,6 @@ void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, Walk
                                     len -= 2;
                                 }
                                 /* Validate printable */
-                                // NOLINTNEXTLINE(readability-implicit-bool-conversion)
                                 bool valid = (text != NULL && len > 0 && len < 512);
                                 for (int vi = 0; vi < len && valid; vi++) {
                                     if ((unsigned char)text[vi] < 0x20 && text[vi] != '\t') {

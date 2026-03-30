@@ -38,7 +38,6 @@ static bool node_is_test(const cbm_gbuf_node_t *n) {
 /* Helper to check suffix. */
 static bool str_ends_with(const char *s, size_t slen, const char *suffix) {
     size_t sflen = strlen(suffix);
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return slen >= sflen && strcmp(s + slen - sflen, suffix) == 0;
 }
 
@@ -209,7 +208,6 @@ static char *test_to_prod_path(const char *test_path) {
     return NULL;
 }
 
-// NOLINTNEXTLINE(misc-include-cleaner) — cbm_file_info_t provided by standard header
 int cbm_pipeline_pass_tests(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count) {
     cbm_log_info("pass.start", "pass", "tests");
     (void)files;
@@ -234,14 +232,12 @@ int cbm_pipeline_pass_tests(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
 
             /* Source must be a test, target must not */
             bool src_is_test =
-                // NOLINTNEXTLINE(readability-implicit-bool-conversion)
                 node_is_test(src) || (src->file_path && cbm_is_test_path(src->file_path));
             if (!src_is_test) {
                 continue;
             }
 
             bool tgt_is_test =
-                // NOLINTNEXTLINE(readability-implicit-bool-conversion)
                 node_is_test(tgt) || (tgt->file_path && cbm_is_test_path(tgt->file_path));
             if (tgt_is_test) {
                 continue;

@@ -231,7 +231,6 @@ bool cbm_mkdir_p(const char *path, int mode) {
         return true;
     }
     /* Walk path and create each component */
-    // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
     char *tmp = strdup(path);
     if (!tmp) {
         return false;

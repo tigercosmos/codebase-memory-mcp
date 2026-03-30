@@ -451,7 +451,6 @@ char *cbm_mcp_get_arguments(const char *params_json) {
     return result ? result : heap_strdup("{}");
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 char *cbm_mcp_get_string_arg(const char *args_json, const char *key) {
     yyjson_doc *doc = yyjson_read(args_json, strlen(args_json), 0);
     if (!doc) {
@@ -467,7 +466,6 @@ char *cbm_mcp_get_string_arg(const char *args_json, const char *key) {
     return result;
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int cbm_mcp_get_int_arg(const char *args_json, const char *key, int default_val) {
     yyjson_doc *doc = yyjson_read(args_json, strlen(args_json), 0);
     if (!doc) {
@@ -483,7 +481,6 @@ int cbm_mcp_get_int_arg(const char *args_json, const char *key, int default_val)
     return result;
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 bool cbm_mcp_get_bool_arg(const char *args_json, const char *key) {
     yyjson_doc *doc = yyjson_read(args_json, strlen(args_json), 0);
     if (!doc) {
@@ -909,7 +906,6 @@ static char *handle_get_graph_schema(cbm_mcp_server_t *srv, const char *args) {
         char adr_path[4096];
         snprintf(adr_path, sizeof(adr_path), "%s/.codebase-memory/adr.md", proj_info.root_path);
         struct stat adr_st;
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         bool adr_exists = (stat(adr_path, &adr_st) == 0);
         yyjson_mut_obj_add_bool(doc, root, "adr_present", adr_exists);
         if (!adr_exists) {
@@ -1339,9 +1335,7 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     /* Run BFS for each requested direction.
      * IMPORTANT: yyjson_mut_obj_add_str borrows pointers — we must keep
      * traversal results alive until after yy_doc_to_str serialization. */
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     bool do_outbound = strcmp(direction, "outbound") == 0 || strcmp(direction, "both") == 0;
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     bool do_inbound = strcmp(direction, "inbound") == 0 || strcmp(direction, "both") == 0;
 
     cbm_traverse_result_t tr_out = {0};
@@ -1553,7 +1547,6 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
             char adr_path[4096];
             snprintf(adr_path, sizeof(adr_path), "%s/.codebase-memory/adr.md", repo_path);
             struct stat adr_st;
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
             bool adr_exists = (stat(adr_path, &adr_st) == 0);
             yyjson_mut_obj_add_bool(doc, root, "adr_present", adr_exists);
             if (!adr_exists) {
@@ -1786,9 +1779,7 @@ static char *build_snippet_response(cbm_mcp_server_t *srv, cbm_node_t *node,
     for (int i = 0; i < nb_callee_count; i++) {
         free(nb_callees[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(nb_callers);
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(nb_callees);
     free(root_path);
     free(abs_path);
@@ -1943,7 +1934,6 @@ static int search_result_cmp(const void *a, const void *b) {
 static void build_grep_cmd(char *cmd, size_t cmd_sz, bool use_regex, bool scoped,
                            const char *file_pattern, const char *tmpfile, const char *filelist,
                            const char *root_path) {
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     const char *flag = use_regex ? "-E" : "-F";
     if (scoped) {
         if (file_pattern) {
@@ -2225,7 +2215,6 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
         free(file_pattern);
         return cbm_mcp_text_result("search failed: temp file", true);
     }
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     (void)fprintf(tf, "%s\n", pattern);
     (void)fclose(tf);
 
@@ -2268,7 +2257,6 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     char cmd[4096];
     build_grep_cmd(cmd, sizeof(cmd), use_regex, scoped, file_pattern, tmpfile, filelist, root_path);
 
-    // NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c)
     FILE *fp = cbm_popen(cmd, "r");
     if (!fp) {
         cbm_unlink(tmpfile);
@@ -2537,7 +2525,6 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
              root_path, base_branch, root_path);
 #endif
 
-    // NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c)
     FILE *fp = cbm_popen(cmd, "r");
     if (!fp) {
         free(root_path);
@@ -2740,7 +2727,6 @@ static char *handle_ingest_traces(cbm_mcp_server_t *srv, const char *args) {
 
 /* ── Tool dispatch ────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 char *cbm_mcp_handle_tool(cbm_mcp_server_t *srv, const char *tool_name, const char *args_json) {
     if (!tool_name) {
         return cbm_mcp_text_result("missing tool name", true);
@@ -2908,7 +2894,6 @@ static void maybe_auto_index(cbm_mcp_server_t *srv) {
     }
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "git -C '%s' ls-files 2>/dev/null | wc -l", srv->session_root);
-    // NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c)
     FILE *fp = cbm_popen(cmd, "r");
     if (fp) {
         char line[64];
@@ -3072,7 +3057,6 @@ char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
         cbm_clock_gettime(CLOCK_MONOTONIC, &t1);
         long long dur_us = ((long long)(t1.tv_sec - t0.tv_sec) * 1000000LL) +
                            ((long long)(t1.tv_nsec - t0.tv_nsec) / 1000LL);
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         bool is_err = (result_json != NULL) && (strstr(result_json, "\"isError\":true") != NULL);
         cbm_diag_record_query(dur_us, is_err);
 
@@ -3097,7 +3081,6 @@ char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
 
 /* ── Event loop ───────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int cbm_mcp_server_run(cbm_mcp_server_t *srv, FILE *in, FILE *out) {
     char *line = NULL;
     size_t cap = 0;
@@ -3251,7 +3234,6 @@ int cbm_mcp_server_run(cbm_mcp_server_t *srv, FILE *in, FILE *out) {
 
         char *resp = cbm_mcp_server_handle(srv, line);
         if (resp) {
-            // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
             (void)fprintf(out, "%s\n", resp);
             (void)fflush(out);
             free(resp);

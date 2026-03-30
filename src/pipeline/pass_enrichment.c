@@ -46,7 +46,6 @@ int cbm_split_camel_case(const char *s, char **out, int max_out) {
     for (size_t i = 1; i < len; i++) {
         if (s[i] >= 'A' && s[i] <= 'Z' && s[i - 1] >= 'a' && s[i - 1] <= 'z') {
             if (count < max_out) {
-                // NOLINTNEXTLINE(misc-include-cleaner) — strndup provided by standard header
                 out[count] = cbm_strndup(s + start, i - start);
                 count++;
             }
@@ -106,7 +105,6 @@ int cbm_tokenize_decorator(const char *dec, char **out, int max_out) {
     /* Process each part: split camelCase, lowercase, filter stopwords */
     int count = 0;
     char *saveptr = NULL;
-    // NOLINTNEXTLINE(misc-include-cleaner) — strtok_r provided by standard header
     char *part = strtok_r(p, " ", &saveptr);
 
     while (part && count < max_out) {
@@ -147,7 +145,6 @@ int cbm_tokenize_decorator(const char *dec, char **out, int max_out) {
 
 /* Per-node tokenization state */
 typedef struct {
-    // NOLINTNEXTLINE(misc-include-cleaner) — int64_t provided by standard header
     int64_t node_id;
     char *qualified_name;
     char **words;
@@ -179,7 +176,6 @@ static char **extract_decorators_from_json(const char *json) {
         return NULL;
     }
 
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     char **out = calloc(cnt + 1, sizeof(char *));
     size_t idx = 0;
     yyjson_val *item;
@@ -187,7 +183,6 @@ static char **extract_decorators_from_json(const char *json) {
     yyjson_arr_iter_init(decs, &iter);
     while ((item = yyjson_arr_iter_next(&iter))) {
         if (yyjson_is_str(item)) {
-            // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
             out[idx++] = strdup(yyjson_get_str(item));
         }
     }
@@ -197,7 +192,6 @@ static char **extract_decorators_from_json(const char *json) {
     if (idx > 0) {
         return out;
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(out);
     return NULL;
 }
@@ -229,7 +223,6 @@ static int extract_decorator_words(const char *json, char ***out_words) {
         }
         free(decorators[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(decorators);
     cbm_ht_free(seen);
 
@@ -238,9 +231,7 @@ static int extract_decorator_words(const char *json, char ***out_words) {
         return 0;
     }
 
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     *out_words = malloc(sizeof(char *) * total);
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     memcpy(*out_words, all_words, sizeof(char *) * total);
     return total;
 }
@@ -319,16 +310,13 @@ int cbm_pipeline_pass_decorator_tags(cbm_gbuf_t *gbuf, const char *project) {
 
             tagged_node_t *tn = &nodes[node_count++];
             tn->node_id = found[i]->id;
-            // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
             tn->qualified_name = strdup(found[i]->qualified_name);
             tn->words = words;
             tn->word_count = wc;
 
             /* Update word counts */
             for (int w = 0; w < wc; w++) {
-                // NOLINTNEXTLINE(misc-include-cleaner) — intptr_t provided by standard header
                 intptr_t cnt = (intptr_t)cbm_ht_get(word_counts, words[w]);
-                // NOLINTNEXTLINE(performance-no-int-to-ptr)
                 cbm_ht_set(word_counts, words[w], (void *)(cnt + 1));
             }
         }
@@ -362,7 +350,6 @@ int cbm_pipeline_pass_decorator_tags(cbm_gbuf_t *gbuf, const char *project) {
             for (int w = 0; w < nodes[n].word_count; w++) {
                 free(nodes[n].words[w]);
             }
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             free(nodes[n].words);
         }
         free(nodes);
@@ -387,7 +374,6 @@ int cbm_pipeline_pass_decorator_tags(cbm_gbuf_t *gbuf, const char *project) {
         }
 
         /* Sort tags alphabetically */
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         qsort(tag_words, tag_count, sizeof(char *), cmp_str);
 
         /* Look up node in gbuf (borrowed pointer) */
@@ -414,7 +400,6 @@ int cbm_pipeline_pass_decorator_tags(cbm_gbuf_t *gbuf, const char *project) {
         for (int w = 0; w < nodes[n].word_count; w++) {
             free(nodes[n].words[w]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(nodes[n].words);
     }
     free(nodes);

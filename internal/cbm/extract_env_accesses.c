@@ -131,44 +131,38 @@ static bool is_env_var_name(const char *s) {
     return has_upper;
 }
 
-#define WALK_ENV_MAX_DEPTH 4096
+// Iterative env access walker — explicit stack
+#define ENV_STACK_CAP 4096
+static void walk_env_accesses(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec) {
+    TSNode stack[ENV_STACK_CAP];
+    int top = 0;
+    stack[top++] = root;
 
-// NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk
-static void walk_env_inner(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, int depth) {
-    if (depth > WALK_ENV_MAX_DEPTH) {
-        return;
-    }
-    const char *kind = ts_node_type(node);
-    const char *env_key = NULL;
+    while (top > 0) {
+        TSNode node = stack[--top];
+        const char *kind = ts_node_type(node);
+        const char *env_key = NULL;
 
-    // Check call nodes
-    if (cbm_kind_in_set(node, spec->call_node_types)) {
-        env_key = extract_env_key_from_call(ctx, node, spec);
-    }
-    // Check member/subscript access
-    else if (strcmp(kind, "member_expression") == 0 || strcmp(kind, "subscript") == 0 ||
-             strcmp(kind, "attribute") == 0) {
-        env_key = extract_env_key_from_member(ctx, node, spec);
-    }
+        if (cbm_kind_in_set(node, spec->call_node_types)) {
+            env_key = extract_env_key_from_call(ctx, node, spec);
+        } else if (strcmp(kind, "member_expression") == 0 || strcmp(kind, "subscript") == 0 ||
+                   strcmp(kind, "attribute") == 0) {
+            env_key = extract_env_key_from_member(ctx, node, spec);
+        }
 
-    if (env_key && env_key[0] && is_env_var_name(env_key)) {
-        CBMEnvAccess ea;
-        ea.env_key = env_key;
-        ea.enclosing_func_qn = cbm_enclosing_func_qn_cached(ctx, node);
-        cbm_envaccess_push(&ctx->result->env_accesses, ctx->arena, ea);
-        // Don't recurse into this node's children (avoid double-counting)
-        return;
-    }
+        if (env_key && env_key[0] && is_env_var_name(env_key)) {
+            CBMEnvAccess ea;
+            ea.env_key = env_key;
+            ea.enclosing_func_qn = cbm_enclosing_func_qn_cached(ctx, node);
+            cbm_envaccess_push(&ctx->result->env_accesses, ctx->arena, ea);
+            continue; // don't push children (avoid double-counting)
+        }
 
-    // Recurse
-    uint32_t count = ts_node_child_count(node);
-    for (uint32_t i = 0; i < count; i++) {
-        walk_env_inner(ctx, ts_node_child(node, i), spec, depth + 1);
+        uint32_t count = ts_node_child_count(node);
+        for (int i = (int)count - 1; i >= 0 && top < ENV_STACK_CAP; i--) {
+            stack[top++] = ts_node_child(node, (uint32_t)i);
+        }
     }
-}
-
-static void walk_env_accesses(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
-    walk_env_inner(ctx, node, spec, 0);
 }
 
 void cbm_extract_env_accesses(CBMExtractCtx *ctx) {
@@ -177,9 +171,7 @@ void cbm_extract_env_accesses(CBMExtractCtx *ctx) {
         return;
     }
 
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion) — pointer-to-bool check for NULL array
     bool has_funcs = spec->env_access_functions && spec->env_access_functions[0];
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion) — pointer-to-bool check for NULL array
     bool has_members = spec->env_access_member_patterns && spec->env_access_member_patterns[0];
     if (!has_funcs && !has_members) {
         return;
@@ -192,9 +184,7 @@ void cbm_extract_env_accesses(CBMExtractCtx *ctx) {
 
 void handle_env_accesses(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec,
                          WalkState *state) {
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion) — pointer-to-bool check for NULL array
     bool has_funcs = spec->env_access_functions && spec->env_access_functions[0];
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion) — pointer-to-bool check for NULL array
     bool has_members = spec->env_access_member_patterns && spec->env_access_member_patterns[0];
     if (!has_funcs && !has_members) {
         return;

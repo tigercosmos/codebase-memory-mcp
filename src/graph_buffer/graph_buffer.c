@@ -70,7 +70,6 @@ struct cbm_gbuf {
 /* ── Helpers ─────────────────────────────────────────────────────── */
 
 static char *heap_strdup(const char *s) {
-    // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
     return s ? strdup(s) : strdup("{}");
 }
 
@@ -107,12 +106,10 @@ static edge_ptr_array_t *get_or_create_edge_array(CBMHashTable *ht, const char *
 }
 
 /* Free a node_ptr_array_t (callback for hash table iteration) */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void free_node_array(const char *key, void *value, void *ud) {
     (void)ud;
     node_ptr_array_t *arr = value;
     if (arr) {
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         cbm_da_free(arr);
         free(arr);
     }
@@ -120,12 +117,10 @@ static void free_node_array(const char *key, void *value, void *ud) {
 }
 
 /* Free an edge_ptr_array_t (callback) */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void free_edge_array(const char *key, void *value, void *ud) {
     (void)ud;
     edge_ptr_array_t *arr = value;
     if (arr) {
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         cbm_da_free(arr);
         free(arr);
     }
@@ -133,7 +128,6 @@ static void free_edge_array(const char *key, void *value, void *ud) {
 }
 
 /* Free keys only (for node_by_id, edge_by_key) */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void free_key_only(const char *key, void *value, void *ud) {
     (void)value;
     (void)ud;
@@ -157,7 +151,6 @@ static void free_edge_strings(cbm_gbuf_edge_t *e) {
 
 /* ── Lifecycle ──────────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 cbm_gbuf_t *cbm_gbuf_new(const char *project, const char *root_path) {
     cbm_gbuf_t *gb = calloc(1, sizeof(cbm_gbuf_t));
     if (!gb) {
@@ -202,7 +195,6 @@ void cbm_gbuf_free(cbm_gbuf_t *gb) {
         free_node_strings(n);
         free(n);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     cbm_da_free(&gb->nodes);
 
     /* Free each individually-allocated edge */
@@ -211,7 +203,6 @@ void cbm_gbuf_free(cbm_gbuf_t *gb) {
         free_edge_strings(e);
         free(e);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     cbm_da_free(&gb->edges);
 
     /* Free hash tables — may be NULL if already released by dump_to_sqlite */
@@ -274,7 +265,6 @@ void cbm_gbuf_set_next_id(cbm_gbuf_t *gb, int64_t next_id) {
 /* ── Node operations ─────────────────────────────────────────────── */
 
 int64_t cbm_gbuf_upsert_node(cbm_gbuf_t *gb, const char *label, const char *name,
-                             // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                              const char *qualified_name, const char *file_path, int start_line,
                              int end_line, const char *properties_json) {
     if (!gb || !qualified_name) {
@@ -328,7 +318,6 @@ int64_t cbm_gbuf_upsert_node(cbm_gbuf_t *gb, const char *label, const char *name
     node->properties_json = heap_strdup(properties_json);
 
     /* Store pointer in array */
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     cbm_da_push(&gb->nodes, node);
 
     /* Primary indexes — QN key is borrowed from the node's own string */
@@ -347,11 +336,9 @@ int64_t cbm_gbuf_upsert_node(cbm_gbuf_t *gb, const char *label, const char *name
 
     /* Secondary indexes */
     node_ptr_array_t *by_label = get_or_create_node_array(gb->nodes_by_label, label ? label : "");
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     cbm_da_push(by_label, (const cbm_gbuf_node_t *)node);
 
     node_ptr_array_t *by_name = get_or_create_node_array(gb->nodes_by_name, name ? name : "");
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     cbm_da_push(by_name, (const cbm_gbuf_node_t *)node);
 
     return id;
@@ -796,7 +783,6 @@ int64_t cbm_gbuf_insert_edge(cbm_gbuf_t *gb, int64_t source_id, int64_t target_i
     edge->properties_json = heap_strdup(properties_json);
 
     /* Store pointer in array */
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     cbm_da_push(&gb->edges, edge);
 
     /* Dedup index */
@@ -805,16 +791,13 @@ int64_t cbm_gbuf_insert_edge(cbm_gbuf_t *gb, int64_t source_id, int64_t target_i
     /* Secondary indexes */
     make_src_type_key(key, sizeof(key), source_id, type);
     edge_ptr_array_t *st = get_or_create_edge_array(gb->edges_by_source_type, key);
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     cbm_da_push(st, (const cbm_gbuf_edge_t *)edge);
 
     make_src_type_key(key, sizeof(key), target_id, type);
     edge_ptr_array_t *tt = get_or_create_edge_array(gb->edges_by_target_type, key);
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     cbm_da_push(tt, (const cbm_gbuf_edge_t *)edge);
 
     edge_ptr_array_t *bt = get_or_create_edge_array(gb->edges_by_type, type);
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     cbm_da_push(bt, (const cbm_gbuf_edge_t *)edge);
 
     return id;
@@ -925,16 +908,13 @@ int cbm_gbuf_delete_edges_by_type(cbm_gbuf_t *gb, const char *type) {
 
         make_src_type_key(key, sizeof(key), e->source_id, e->type);
         edge_ptr_array_t *st = get_or_create_edge_array(gb->edges_by_source_type, key);
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         cbm_da_push(st, (const cbm_gbuf_edge_t *)e);
 
         make_src_type_key(key, sizeof(key), e->target_id, e->type);
         edge_ptr_array_t *tt = get_or_create_edge_array(gb->edges_by_target_type, key);
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         cbm_da_push(tt, (const cbm_gbuf_edge_t *)e);
 
         edge_ptr_array_t *bt = get_or_create_edge_array(gb->edges_by_type, e->type);
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         cbm_da_push(bt, (const cbm_gbuf_edge_t *)e);
     }
 
@@ -944,7 +924,6 @@ int cbm_gbuf_delete_edges_by_type(cbm_gbuf_t *gb, const char *type) {
 /* ── Merge ───────────────────────────────────────────────────────── */
 
 /* Free remap hash table entries (key = heap string, value = heap int64_t*) */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void free_remap_entry(const char *key, void *val, void *ud) {
     (void)ud;
     free((void *)key);
@@ -1019,7 +998,6 @@ int cbm_gbuf_merge(cbm_gbuf_t *dst, cbm_gbuf_t *src) {
             node->properties_json = heap_strdup(sn->properties_json);
 
             /* Store in array */
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             cbm_da_push(&dst->nodes, node);
 
             /* Primary indexes */
@@ -1036,12 +1014,10 @@ int cbm_gbuf_merge(cbm_gbuf_t *dst, cbm_gbuf_t *src) {
             /* Secondary indexes */
             node_ptr_array_t *by_label =
                 get_or_create_node_array(dst->nodes_by_label, node->label ? node->label : "");
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             cbm_da_push(by_label, (const cbm_gbuf_node_t *)node);
 
             node_ptr_array_t *by_name =
                 get_or_create_node_array(dst->nodes_by_name, node->name ? node->name : "");
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             cbm_da_push(by_name, (const cbm_gbuf_node_t *)node);
 
             /* Keep next_id above all inserted IDs */
@@ -1101,7 +1077,6 @@ static char *extract_url_path(const char *props) {
     if (!end || end <= key) {
         return NULL;
     }
-    // NOLINTNEXTLINE(misc-include-cleaner) — strndup provided by standard header
     return cbm_strndup(key, (size_t)(end - key));
 }
 
@@ -1170,7 +1145,6 @@ int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
     /* Build CBMDumpEdge array with remapped IDs */
     CBMDumpEdge *dump_edges =
         malloc((size_t)(valid_edges > 0 ? valid_edges : 1) * sizeof(CBMDumpEdge));
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     char **url_paths = calloc((size_t)(valid_edges > 0 ? valid_edges : 1), sizeof(char *));
     int edge_idx = 0;
 
@@ -1199,7 +1173,6 @@ int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
 
     /* Generate ISO 8601 timestamp */
     time_t now = time(NULL);
-    // NOLINTNEXTLINE(concurrency-mt-unsafe) — called once during single-threaded dump
     struct tm *tm_val = gmtime(&now);
     char indexed_at[64];
     strftime(indexed_at, sizeof(indexed_at), "%Y-%m-%dT%H:%M:%SZ", tm_val);
@@ -1249,7 +1222,6 @@ int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
     for (int i = 0; i < edge_idx; i++) {
         free(url_paths[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(url_paths);
     free(dump_edges);
     free(dump_nodes);

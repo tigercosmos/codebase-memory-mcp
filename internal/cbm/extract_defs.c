@@ -22,7 +22,7 @@
 // Forward declarations
 static void extract_func_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec);
 static void extract_class_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec);
-static void walk_defs(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, int depth);
+static void walk_defs(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec, int depth_unused);
 static void extract_variables(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec);
 static void extract_class_variables(CBMExtractCtx *ctx, TSNode class_node, const CBMLangSpec *spec);
 static void extract_rust_impl(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec);
@@ -40,7 +40,6 @@ static TSNode func_name_node(TSNode node) {
 }
 
 // Resolve the name node for a function, handling language-specific quirks
-// NOLINTNEXTLINE(readability-function-cognitive-complexity,misc-no-recursion)
 static TSNode resolve_func_name(TSNode node, CBMLanguage lang, const char *source) {
     const char *kind = ts_node_type(node);
 
@@ -1873,7 +1872,6 @@ static void extract_rust_impl(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
 
 // --- Elixir def/defp/defmodule ---
 
-// NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk for nested Elixir modules
 static void extract_elixir_call(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
     CBMArena *a = ctx->arena;
 
@@ -1912,7 +1910,6 @@ static void extract_elixir_call(CBMExtractCtx *ctx, TSNode node, const CBMLangSp
         char *name = NULL;
         if (strcmp(fk, "call") == 0 && ts_node_child_count(first_arg) > 0) {
             name = cbm_node_text(a, ts_node_child(first_arg, 0), ctx->source);
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         } else if (strcmp(fk, "identifier") == 0) {
             name = cbm_node_text(a, first_arg, ctx->source);
         }
@@ -1928,7 +1925,6 @@ static void extract_elixir_call(CBMExtractCtx *ctx, TSNode node, const CBMLangSp
         def.file_path = ctx->rel_path;
         def.start_line = ts_node_start_point(node).row + 1;
         def.end_line = ts_node_end_point(node).row + 1;
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         def.is_exported = (strcmp(macro, "def") == 0 || strcmp(macro, "defmacro") == 0);
         cbm_defs_push(&ctx->result->defs, a, def);
     } else if (strcmp(macro, "defmodule") == 0) {
@@ -2564,7 +2560,6 @@ static void extract_var_names(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
 
 // Recursive variable walker for languages with deeply nested module structure.
 // Used by YAML, TOML, INI, JSON (config languages with nested containers).
-// NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk for nested config structures
 static void walk_variables_rec(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec,
                                int depth) {
     if (depth > 8) {
@@ -2778,138 +2773,147 @@ static void extract_class_variables(CBMExtractCtx *ctx, TSNode class_node,
 
 // --- Module node + main walk ---
 
-// Recursive definition walker using tree-sitter cursor for cache-friendliness
-// Search for nested class definitions inside a class body, recursing into wrapper
-// nodes (field_declaration, template_declaration) but not into function bodies.
-// NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk for nested class hierarchies
-static void find_nested_classes(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
-    uint32_t nc = ts_node_child_count(node);
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode child = ts_node_child(node, i);
-        if (cbm_kind_in_set(child, spec->class_node_types)) {
-            // Found a nested class — process it via normal walk_defs
-            walk_defs(ctx, child, spec, 0);
-        } else {
-            const char *ck = ts_node_type(child);
-            // Recurse into wrapper nodes that might contain nested classes
-            // but NOT into function bodies (function_definition, lambda_expression)
-            if (strcmp(ck, "field_declaration") == 0 || strcmp(ck, "template_declaration") == 0 ||
-                strcmp(ck, "declaration") == 0) {
-                find_nested_classes(ctx, child, spec);
+// Iterative walk_defs — explicit stack with enclosing class context per frame.
+typedef struct {
+    TSNode node;
+    const char *enclosing_class_qn; // saved context for class nesting
+} walk_defs_frame_t;
+
+#define CBM_WALK_DEFS_STACK_CAP 4096
+
+// Push nested class nodes from a class body container onto the defs stack.
+// Iteratively walks into wrapper nodes (field_declaration, template_declaration).
+static void push_nested_class_nodes(TSNode body, const CBMLangSpec *spec, walk_defs_frame_t *stack,
+                                    int *top, const char *enclosing_qn) {
+    TSNode nc_stack[128];
+    int nc_top = 0;
+    nc_stack[nc_top++] = body;
+
+    while (nc_top > 0) {
+        TSNode cur = nc_stack[--nc_top];
+        uint32_t nc = ts_node_child_count(cur);
+        for (int i = (int)nc - 1; i >= 0; i--) {
+            TSNode child = ts_node_child(cur, (uint32_t)i);
+            if (cbm_kind_in_set(child, spec->class_node_types)) {
+                if (*top < CBM_WALK_DEFS_STACK_CAP) {
+                    stack[(*top)++] = (walk_defs_frame_t){child, enclosing_qn};
+                }
+            } else {
+                const char *ck = ts_node_type(child);
+                if (strcmp(ck, "field_declaration") == 0 ||
+                    strcmp(ck, "template_declaration") == 0 || strcmp(ck, "declaration") == 0) {
+                    if (nc_top < 128) {
+                        nc_stack[nc_top++] = child;
+                    }
+                }
             }
         }
     }
 }
 
-/* Max AST recursion depth — prevents stack overflow on pathological files.
- * 256 levels is far beyond any real code nesting; 896+ was observed on
- * generated Linux kernel headers with deeply nested preprocessor output. */
-#define CBM_WALK_DEFS_MAX_DEPTH 256
+static void walk_defs(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec, int depth_unused) {
+    (void)depth_unused;
+    walk_defs_frame_t stack[CBM_WALK_DEFS_STACK_CAP];
+    int top = 0;
+    stack[top++] = (walk_defs_frame_t){root, ctx->enclosing_class_qn};
 
-// NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk
-static void walk_defs(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, int depth) {
-    if (depth >= CBM_WALK_DEFS_MAX_DEPTH) {
-        return;
-    }
+    while (top > 0) {
+        walk_defs_frame_t frame = stack[--top];
+        TSNode node = frame.node;
+        ctx->enclosing_class_qn = frame.enclosing_class_qn;
+        const char *kind = ts_node_type(node);
 
-    const char *kind = ts_node_type(node);
-
-    // Elixir: all defs are call nodes
-    if (ctx->language == CBM_LANG_ELIXIR && strcmp(kind, "call") == 0) {
-        extract_elixir_call(ctx, node, spec);
-        return;
-    }
-
-    // Function types
-    if (cbm_kind_in_set(node, spec->function_node_types)) {
-        // C++/CUDA: template_declaration may wrap a class, not a function.
-        // Check if it contains a class_specifier/struct_specifier — if so, skip
-        // function extraction and fall through to class handling.
-        bool is_template_class = false;
-        if ((ctx->language == CBM_LANG_CPP || ctx->language == CBM_LANG_CUDA) &&
-            strcmp(kind, "template_declaration") == 0) {
-            uint32_t nc = ts_node_named_child_count(node);
-            for (uint32_t i = 0; i < nc; i++) {
-                const char *ck = ts_node_type(ts_node_named_child(node, i));
-                if (strcmp(ck, "class_specifier") == 0 || strcmp(ck, "struct_specifier") == 0 ||
-                    strcmp(ck, "union_specifier") == 0) {
-                    is_template_class = true;
-                    break;
-                }
-            }
+        // Elixir: all defs are call nodes
+        if (ctx->language == CBM_LANG_ELIXIR && strcmp(kind, "call") == 0) {
+            extract_elixir_call(ctx, node, spec);
+            continue;
         }
-        if (!is_template_class) {
-            extract_func_def(ctx, node, spec);
-            // Wolfram: continue recursing — nested set_delayed inside Module/Block are valid defs
-            if (ctx->language != CBM_LANG_WOLFRAM) {
-                return; // don't recurse into function bodies for nested defs
-            }
-        }
-        // For template classes: fall through to class check or default recursion
-    }
 
-    // Rust impl blocks
-    if (ctx->language == CBM_LANG_RUST && strcmp(kind, "impl_item") == 0) {
-        extract_rust_impl(ctx, node, spec);
-        return;
-    }
-
-    // Class types
-    if (cbm_kind_in_set(node, spec->class_node_types)) {
-        const char *saved_enclosing = ctx->enclosing_class_qn;
-        extract_class_def(ctx, node, spec);
-        // extract_class_def computed class_qn; replicate to set enclosing for nested classes
-        {
-            TSNode name_node = ts_node_child_by_field_name(node, "name", 4);
-            if (ts_node_is_null(name_node) && ctx->language == CBM_LANG_OBJC) {
-                name_node = cbm_find_child_by_kind(node, "identifier");
-            }
-            if (ts_node_is_null(name_node) && ctx->language == CBM_LANG_SWIFT) {
-                name_node = cbm_find_child_by_kind(node, "type_identifier");
-            }
-            if (!ts_node_is_null(name_node)) {
-                char *cname = cbm_node_text(ctx->arena, name_node, ctx->source);
-                if (cname && cname[0]) {
-                    if (saved_enclosing) {
-                        ctx->enclosing_class_qn =
-                            cbm_arena_sprintf(ctx->arena, "%s.%s", saved_enclosing, cname);
-                    } else {
-                        ctx->enclosing_class_qn =
-                            cbm_fqn_compute(ctx->arena, ctx->project, ctx->rel_path, cname);
+        // Function types
+        if (cbm_kind_in_set(node, spec->function_node_types)) {
+            bool is_template_class = false;
+            if ((ctx->language == CBM_LANG_CPP || ctx->language == CBM_LANG_CUDA) &&
+                strcmp(kind, "template_declaration") == 0) {
+                uint32_t nc = ts_node_named_child_count(node);
+                for (uint32_t i = 0; i < nc; i++) {
+                    const char *ck = ts_node_type(ts_node_named_child(node, i));
+                    if (strcmp(ck, "class_specifier") == 0 || strcmp(ck, "struct_specifier") == 0 ||
+                        strcmp(ck, "union_specifier") == 0) {
+                        is_template_class = true;
+                        break;
                     }
                 }
             }
-        }
-        // Recurse into class body for nested class definitions (C++, Java, C#, Python, etc.)
-        // For languages with body containers, use targeted nested class search.
-        // For config languages (XML, JSON, etc.) with no body container, generic child walk.
-        bool found_body = false;
-        uint32_t nc = ts_node_child_count(node);
-        for (uint32_t ci = 0; ci < nc; ci++) {
-            TSNode child = ts_node_child(node, ci);
-            const char *ck = ts_node_type(child);
-            if (strcmp(ck, "field_declaration_list") == 0 || strcmp(ck, "class_body") == 0 ||
-                strcmp(ck, "declaration_list") == 0 || strcmp(ck, "body") == 0 ||
-                strcmp(ck, "block") == 0 || strcmp(ck, "suite") == 0) {
-                find_nested_classes(ctx, child, spec);
-                found_body = true;
-                break;
+            if (!is_template_class) {
+                extract_func_def(ctx, node, spec);
+                if (ctx->language != CBM_LANG_WOLFRAM) {
+                    continue; // don't push function body children
+                }
             }
         }
-        if (!found_body) {
-            // Config languages (XML, TOML, JSON, etc.) — children are direct class nodes
-            for (uint32_t ci = 0; ci < nc; ci++) {
-                walk_defs(ctx, ts_node_child(node, ci), spec, depth + 1);
-            }
-        }
-        ctx->enclosing_class_qn = saved_enclosing;
-        return;
-    }
 
-    // Recurse into children
-    uint32_t count = ts_node_child_count(node);
-    for (uint32_t i = 0; i < count; i++) {
-        walk_defs(ctx, ts_node_child(node, i), spec, depth + 1);
+        // Rust impl blocks
+        if (ctx->language == CBM_LANG_RUST && strcmp(kind, "impl_item") == 0) {
+            extract_rust_impl(ctx, node, spec);
+            continue;
+        }
+
+        // Class types
+        if (cbm_kind_in_set(node, spec->class_node_types)) {
+            const char *saved_enclosing = frame.enclosing_class_qn;
+            extract_class_def(ctx, node, spec);
+            // Compute new enclosing class QN for nested classes
+            const char *new_enclosing = saved_enclosing;
+            {
+                TSNode name_node = ts_node_child_by_field_name(node, "name", 4);
+                if (ts_node_is_null(name_node) && ctx->language == CBM_LANG_OBJC) {
+                    name_node = cbm_find_child_by_kind(node, "identifier");
+                }
+                if (ts_node_is_null(name_node) && ctx->language == CBM_LANG_SWIFT) {
+                    name_node = cbm_find_child_by_kind(node, "type_identifier");
+                }
+                if (!ts_node_is_null(name_node)) {
+                    char *cname = cbm_node_text(ctx->arena, name_node, ctx->source);
+                    if (cname && cname[0]) {
+                        if (saved_enclosing) {
+                            new_enclosing =
+                                cbm_arena_sprintf(ctx->arena, "%s.%s", saved_enclosing, cname);
+                        } else {
+                            new_enclosing =
+                                cbm_fqn_compute(ctx->arena, ctx->project, ctx->rel_path, cname);
+                        }
+                    }
+                }
+            }
+            // Push nested class children with the new enclosing context
+            bool found_body = false;
+            uint32_t nc = ts_node_child_count(node);
+            for (uint32_t ci = 0; ci < nc; ci++) {
+                TSNode child = ts_node_child(node, ci);
+                const char *ck = ts_node_type(child);
+                if (strcmp(ck, "field_declaration_list") == 0 || strcmp(ck, "class_body") == 0 ||
+                    strcmp(ck, "declaration_list") == 0 || strcmp(ck, "body") == 0 ||
+                    strcmp(ck, "block") == 0 || strcmp(ck, "suite") == 0) {
+                    push_nested_class_nodes(child, spec, stack, &top, new_enclosing);
+                    found_body = true;
+                    break;
+                }
+            }
+            if (!found_body) {
+                for (int ci = (int)nc - 1; ci >= 0 && top < CBM_WALK_DEFS_STACK_CAP; ci--) {
+                    stack[top++] =
+                        (walk_defs_frame_t){ts_node_child(node, (uint32_t)ci), new_enclosing};
+                }
+            }
+            continue;
+        }
+
+        // Default: push all children (reverse order for left-to-right processing)
+        uint32_t count = ts_node_child_count(node);
+        for (int i = (int)count - 1; i >= 0 && top < CBM_WALK_DEFS_STACK_CAP; i--) {
+            stack[top++] =
+                (walk_defs_frame_t){ts_node_child(node, (uint32_t)i), frame.enclosing_class_qn};
+        }
     }
 }
 

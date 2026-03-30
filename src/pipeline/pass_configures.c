@@ -4,7 +4,6 @@
  * Pure helper functions for detecting environment variable names,
  * normalizing config keys, and identifying config file extensions.
  */
-// NOLINTNEXTLINE(misc-include-cleaner) — pipeline.h included for interface contract
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_internal.h"
 
@@ -64,7 +63,6 @@ int cbm_normalize_config_key(const char *key, char *norm_out, size_t norm_sz) {
     size_t out_pos = 0;
 
     char *saveptr = NULL;
-    // NOLINTNEXTLINE(misc-include-cleaner) — strtok_r provided by standard header
     char *part = strtok_r(buf, " ", &saveptr);
     while (part) {
         /* Split camelCase within this part */

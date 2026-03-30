@@ -65,7 +65,6 @@ void cbm_log(CBMLogLevel level, const char *msg, ...) {
     va_end(args);
 
     /* Write to stderr */
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     (void)fprintf(stderr, "%s\n", line_buf);
 
     /* Send to sink if registered */
@@ -80,11 +79,9 @@ void cbm_log_int(CBMLogLevel level, const char *msg, const char *key, int64_t va
     }
 
     char line_buf[256];
-    // NOLINTNEXTLINE(misc-include-cleaner)
     snprintf(line_buf, sizeof(line_buf), "level=%s msg=%s %s=%" PRId64, level_str(level),
              msg ? msg : "", key ? key : "?", value);
 
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     (void)fprintf(stderr, "%s\n", line_buf);
 
     if (g_log_sink) {

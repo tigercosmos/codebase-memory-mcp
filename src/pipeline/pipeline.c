@@ -12,7 +12,6 @@
  */
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_internal.h"
-// NOLINTNEXTLINE(misc-include-cleaner) — worker_pool.h included for interface contract
 #include "pipeline/worker_pool.h"
 #include "graph_buffer/graph_buffer.h"
 #include "store/store.h"
@@ -76,7 +75,6 @@ struct cbm_pipeline {
 
 static double elapsed_ms(struct timespec start) {
     struct timespec now;
-    // NOLINTNEXTLINE(misc-include-cleaner) — cbm_clock_gettime provided by standard header
     cbm_clock_gettime(CLOCK_MONOTONIC, &now);
     return ((double)(now.tv_sec - start.tv_sec) * CBM_MS_PER_SEC) +
            ((double)(now.tv_nsec - start.tv_nsec) / CBM_US_PER_SEC_F);
@@ -105,7 +103,6 @@ cbm_pipeline_t *cbm_pipeline_new(const char *repo_path, const char *db_path,
         return NULL;
     }
 
-    // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
     p->repo_path = strdup(repo_path);
     p->db_path = db_path ? strdup(db_path) : NULL;
     p->project_name = cbm_project_name_from_path(repo_path);
@@ -174,7 +171,6 @@ static int check_cancel(const cbm_pipeline_t *p) {
 
 /* ── Hash table cleanup callback ─────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void free_seen_dir_key(const char *key, void *val, void *ud) {
     (void)val;
     (void)ud;
@@ -531,7 +527,6 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
     /* Decide: parallel or sequential pipeline */
     int worker_count = cbm_default_worker_count(true);
 #define MIN_FILES_FOR_PARALLEL 50
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     bool use_parallel = (worker_count > 1 && file_count > MIN_FILES_FOR_PARALLEL);
 
     if (use_parallel) {
@@ -539,13 +534,11 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
                      "files", itoa_buf(file_count));
 
         /* Shared atomic ID source — workers allocate globally unique IDs */
-        // NOLINTNEXTLINE(misc-include-cleaner) — int64_t provided by standard header
         _Atomic int64_t shared_ids;
         int64_t gbuf_next = cbm_gbuf_next_id(p->gbuf);
         atomic_init(&shared_ids, gbuf_next);
 
         /* Allocate result cache: one CBMFileResult* per file */
-        // NOLINTNEXTLINE(misc-include-cleaner)
         CBMFileResult **result_cache =
             (CBMFileResult **)calloc(file_count, sizeof(CBMFileResult *));
         if (!result_cache) {
@@ -560,12 +553,10 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
         cbm_log_info("pass.timing", "pass", "parallel_extract", "elapsed_ms",
                      itoa_buf((int)elapsed_ms(t)));
         if (rc != 0) {
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             free(result_cache);
             goto cleanup;
         }
         if (check_cancel(p)) {
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             free(result_cache);
             rc = -1;
             goto cleanup;
@@ -582,11 +573,9 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
         if (rc != 0) {
             for (int i = 0; i < file_count; i++) {
                 if (result_cache[i]) {
-                    // NOLINTNEXTLINE(misc-include-cleaner)
                     cbm_free_result(result_cache[i]);
                 }
             }
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             free(result_cache);
             goto cleanup;
         }
@@ -596,7 +585,6 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
                     cbm_free_result(result_cache[i]);
                 }
             }
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             free(result_cache);
             rc = -1;
             goto cleanup;
@@ -623,7 +611,6 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
                 cbm_free_result(result_cache[i]);
             }
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(result_cache);
 
         if (rc != 0) {
@@ -648,7 +635,6 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
 
         /* Allocate result cache: pass_definitions stores results for reuse
          * by pass_calls/usages/semantic, avoiding 3x redundant file I/O + parsing */
-        // NOLINTNEXTLINE(misc-include-cleaner)
         CBMFileResult **seq_cache = (CBMFileResult **)calloc(file_count, sizeof(CBMFileResult *));
         if (seq_cache) {
             ctx.result_cache = seq_cache;
@@ -718,7 +704,6 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
                     cbm_free_result(seq_cache[i]);
                 }
             }
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             free(seq_cache);
             ctx.result_cache = NULL;
         }

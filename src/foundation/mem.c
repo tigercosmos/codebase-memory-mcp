@@ -58,7 +58,6 @@ static size_t os_rss(void) {
     }
     unsigned long pages = 0;
     unsigned long rss_pages = 0;
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     if (fscanf(f, "%lu %lu", &pages, &rss_pages) != 2) {
         rss_pages = 0;
     }
@@ -83,11 +82,8 @@ static void check_pressure(size_t rss) {
         char rss_mb[32];
         char budget_mb[32];
         char pct_str[16];
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         snprintf(rss_mb, sizeof(rss_mb), "%zu", rss / MB_DIVISOR);
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         snprintf(budget_mb, sizeof(budget_mb), "%zu", g_budget / MB_DIVISOR);
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         snprintf(pct_str, sizeof(pct_str), "%zu", g_budget > 0 ? (rss * 100) / g_budget : 0);
         cbm_log_warn("mem.pressure.warn", "rss_mb", rss_mb, "budget_mb", budget_mb, "pct", pct_str);
     } else if (!over && was) {
@@ -95,11 +91,8 @@ static void check_pressure(size_t rss) {
         char rss_mb[32];
         char budget_mb[32];
         char pct_str[16];
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         snprintf(rss_mb, sizeof(rss_mb), "%zu", rss / MB_DIVISOR);
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         snprintf(budget_mb, sizeof(budget_mb), "%zu", g_budget / MB_DIVISOR);
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         snprintf(pct_str, sizeof(pct_str), "%zu", g_budget > 0 ? (rss * 100) / g_budget : 0);
         cbm_log_info("mem.pressure.ok", "rss_mb", rss_mb, "budget_mb", budget_mb, "pct", pct_str);
     }
@@ -125,9 +118,7 @@ void cbm_mem_init(double ram_fraction) {
 
     char budget_mb[32];
     char ram_mb[32];
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     snprintf(budget_mb, sizeof(budget_mb), "%zu", g_budget / MB_DIVISOR);
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     snprintf(ram_mb, sizeof(ram_mb), "%zu", info.total_ram / MB_DIVISOR);
     cbm_log_info("mem.init", "budget_mb", budget_mb, "total_ram_mb", ram_mb);
 }

@@ -50,7 +50,6 @@ static char *k8s_read_file(const char *path, int *out_len) {
 
     size_t nread = fread(buf, 1, size, f);
     (void)fclose(f);
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     buf[nread] = '\0';
     *out_len = (int)nread;
     return buf;
@@ -82,7 +81,6 @@ static void handle_kustomize(cbm_pipeline_ctx_t *ctx, const char *path, const ch
         return;
     }
 
-    // NOLINTNEXTLINE(misc-include-cleaner)
     int64_t mod_id = cbm_gbuf_upsert_node(ctx->gbuf, "Module", k8s_basename(rel_path), mod_qn,
                                           rel_path, 1, 0, "{\"source\":\"kustomize\"}");
     free(mod_qn);
@@ -170,7 +168,6 @@ static void handle_k8s_manifest(cbm_pipeline_ctx_t *ctx, const char *path, const
             continue;
         }
 
-        // NOLINTNEXTLINE(misc-include-cleaner)
         int64_t node_id =
             cbm_gbuf_upsert_node(ctx->gbuf, "Resource", def->name, def->qualified_name, rel_path,
                                  (int)def->start_line, (int)def->end_line, "{\"source\":\"k8s\"}");
@@ -190,7 +187,6 @@ static void handle_k8s_manifest(cbm_pipeline_ctx_t *ctx, const char *path, const
 
 /* ── Pass entry point ────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(misc-include-cleaner) — cbm_file_info_t provided by standard header
 int cbm_pipeline_pass_k8s(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count) {
     cbm_log_info("pass.start", "pass", "k8s", "files", itoa_k8s(file_count));
 

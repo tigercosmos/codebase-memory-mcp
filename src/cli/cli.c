@@ -130,7 +130,6 @@ const char *cbm_detect_shell_rc(const char *home_dir) {
         return "";
     }
 
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     const char *shell = getenv("SHELL");
     if (!shell) {
         shell = "";
@@ -169,18 +168,15 @@ const char *cbm_find_cli(const char *name, const char *home_dir) {
     }
 
     /* Check PATH first */
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     const char *path_env = getenv("PATH");
     if (path_env) {
         char path_copy[4096];
         snprintf(path_copy, sizeof(path_copy), "%s", path_env);
         char *saveptr;
-        // NOLINTNEXTLINE(misc-include-cleaner) — strtok_r provided by standard header
         char *dir = strtok_r(path_copy, ":", &saveptr);
         while (dir) {
             snprintf(buf, sizeof(buf), "%s/%s", dir, name);
             struct stat st;
-            // NOLINTNEXTLINE(misc-include-cleaner) — S_IXUSR provided by standard header
             if (stat(buf, &st) == 0 && (st.st_mode & S_IXUSR)) {
                 return buf;
             }
@@ -459,7 +455,6 @@ static int mkdirp(const char *path, int mode) {
 
 /* ── Recursive rmdir ──────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(misc-no-recursion) — intentional recursive directory removal
 static int rmdir_recursive(const char *path) {
     cbm_dir_t *d = cbm_opendir(path);
     if (!d) {
@@ -593,7 +588,6 @@ static yyjson_doc *read_json_file(const char *path) {
 
     size_t nread = fread(buf, 1, (size_t)size, f);
     (void)fclose(f);
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     buf[nread] = '\0';
 
     /* Allow JSONC (comments + trailing commas) — Zed settings.json uses this format */
@@ -1573,6 +1567,72 @@ static void cbm_install_hook_gate_script(const char *home) {
 #endif
 }
 
+/* SessionStart hook: remind agent to use MCP tools on every context reset. */
+#define CMM_SESSION_COMMAND "~/.claude/hooks/cbm-session-reminder"
+
+static void cbm_install_session_reminder_script(const char *home) {
+    if (!home) {
+        return;
+    }
+    char hooks_dir[1024];
+    snprintf(hooks_dir, sizeof(hooks_dir), "%s/.claude/hooks", home);
+    cbm_mkdir_p(hooks_dir, 0755);
+
+    char script_path[1024];
+    snprintf(script_path, sizeof(script_path), "%s/cbm-session-reminder", hooks_dir);
+
+    FILE *f = fopen(script_path, "w");
+    if (!f) {
+        return;
+    }
+    fprintf(f,
+            "#!/bin/bash\n"
+            "# SessionStart hook: remind agent to use codebase-memory-mcp tools.\n"
+            "# Installed by codebase-memory-mcp. Fires on startup/resume/clear/compact.\n"
+            "cat << 'REMINDER'\n"
+            "CRITICAL - Code Discovery Protocol:\n"
+            "1. ALWAYS use codebase-memory-mcp tools FIRST for ANY code exploration:\n"
+            "   - search_graph(name_pattern/label/qn_pattern) to find functions/classes/routes\n"
+            "   - trace_path(function_name, mode=calls|data_flow|cross_service) for call chains\n"
+            "   - get_code_snippet(qualified_name) to read source (NOT Read/cat)\n"
+            "   - query_graph(query) for complex Cypher patterns\n"
+            "   - get_architecture(aspects) for project structure\n"
+            "   - search_code(pattern) for text search (graph-augmented grep)\n"
+            "2. Fall back to Grep/Glob/Read ONLY for text content, config values, non-code files.\n"
+            "3. If a project is not indexed yet, run index_repository FIRST.\n"
+            "REMINDER\n");
+#ifndef _WIN32
+    fchmod(fileno(f), 0755);
+#endif
+    fclose(f);
+#ifdef _WIN32
+    chmod(script_path, 0755);
+#endif
+}
+
+static int cbm_upsert_session_hooks(const char *settings_path) {
+    static const char *matchers[] = {"startup", "resume", "clear", "compact"};
+    int rc = 0;
+    for (int i = 0; i < 4; i++) {
+        if (upsert_hooks_json(settings_path, "SessionStart", matchers[i], CMM_SESSION_COMMAND) !=
+            0) {
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
+static int cbm_remove_session_hooks(const char *settings_path) {
+    static const char *matchers[] = {"startup", "resume", "clear", "compact"};
+    int rc = 0;
+    for (int i = 0; i < 4; i++) {
+        if (remove_hooks_json(settings_path, "SessionStart", matchers[i]) != 0) {
+            rc = -1;
+        }
+    }
+    return rc;
+}
+
 #define GEMINI_HOOK_MATCHER "google_search|read_file|grep_search"
 #define GEMINI_HOOK_COMMAND                                               \
     "echo 'Reminder: prefer codebase-memory-mcp search_graph/trace_path/" \
@@ -1618,7 +1678,6 @@ int cbm_ensure_path(const char *bin_dir, const char *rc_file, bool dry_run) {
         return -1;
     }
 
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     (void)fprintf(f, "\n# Added by codebase-memory-mcp install\n%s\n", line);
     (void)fclose(f);
     return 0;
@@ -1634,11 +1693,9 @@ unsigned char *cbm_extract_binary_from_targz(const unsigned char *data, int data
 
     /* Decompress gzip */
     z_stream strm = {0};
-    // NOLINTNEXTLINE(performance-no-int-to-ptr)
     strm.next_in = (unsigned char *)(uintptr_t)data;
     strm.avail_in = (unsigned int)data_len;
 
-    // NOLINTNEXTLINE(misc-include-cleaner) — MAX_WBITS provided by standard header
     if (inflateInit2(&strm, 16 + MAX_WBITS) != Z_OK) {
         return NULL;
     }
@@ -2198,7 +2255,6 @@ static bool prompt_yn(const char *question) {
     if (!fgets(buf, sizeof(buf), stdin)) {
         return false;
     }
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return (buf[0] == 'y' || buf[0] == 'Y') ? true : false;
 }
 
@@ -2222,7 +2278,6 @@ static int sha256_file(const char *path, char *out, size_t out_size) {
 #else
     snprintf(cmd, sizeof(cmd), "sha256sum '%s' 2>/dev/null", path);
 #endif
-    // NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c)
     FILE *fp = cbm_popen(cmd, "r");
     if (!fp) {
         return -1;
@@ -2307,7 +2362,6 @@ static int verify_download_checksum(const char *archive_path, const char *archiv
     char checksum_file[256];
     snprintf(checksum_file, sizeof(checksum_file), "%s/cbm-checksums.txt", cbm_tmpdir());
 
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     const char *dl_base = getenv("CBM_DOWNLOAD_URL");
     char checksum_url[512];
     if (dl_base && dl_base[0]) {
@@ -2459,8 +2513,11 @@ static void cbm_install_agent_configs(const char *home, const char *binary_path,
         if (!dry_run) {
             cbm_upsert_claude_hooks(settings_path);
             cbm_install_hook_gate_script(home);
+            cbm_install_session_reminder_script(home);
+            cbm_upsert_session_hooks(settings_path);
         }
         printf("  hooks: PreToolUse (code discovery gate)\n");
+        printf("  hooks: SessionStart (MCP usage reminder on startup/resume/clear/compact)\n");
     }
 
     /* Codex CLI */
@@ -2767,8 +2824,9 @@ int cbm_cmd_uninstall(int argc, char **argv) {
         snprintf(settings_path, sizeof(settings_path), "%s/.claude/settings.json", home);
         if (!dry_run) {
             cbm_remove_claude_hooks(settings_path);
+            cbm_remove_session_hooks(settings_path);
         }
-        printf("  removed PreToolUse hook\n");
+        printf("  removed PreToolUse + SessionStart hooks\n");
     }
 
     if (agents.codex) {
@@ -3039,9 +3097,7 @@ int cbm_cmd_update(int argc, char **argv) {
         }
         want_ui = (choice[0] == '2');
     }
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     const char *variant = want_ui ? "ui-" : "";
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     const char *variant_label = want_ui ? "ui" : "standard";
 
     /* Step 3: Build download URL (CBM_DOWNLOAD_URL overrides for testing) */
@@ -3049,7 +3105,6 @@ int cbm_cmd_update(int argc, char **argv) {
     const char *arch = detect_arch();
     const char *ext = strcmp(os, "windows") == 0 ? "zip" : "tar.gz";
 
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     const char *base_url = getenv("CBM_DOWNLOAD_URL");
     if (!base_url || !base_url[0]) {
         base_url = "https://github.com/DeusData/codebase-memory-mcp/releases/latest/download";

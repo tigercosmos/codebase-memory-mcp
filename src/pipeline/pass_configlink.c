@@ -51,7 +51,6 @@ static bool is_dep_section(const char *s) {
     static const char *secs[] = {"dependencies",     "devdependencies",    "peerdependencies",
                                  "dev-dependencies", "build-dependencies", NULL};
     for (int i = 0; secs[i]; i++) {
-        // NOLINTNEXTLINE(misc-include-cleaner) — strcasestr provided by standard header
         if (cbm_strcasestr(s, secs[i]) != NULL) {
             return true;
         }
@@ -62,7 +61,6 @@ static bool is_dep_section(const char *s) {
 /* ── Strategy 1: Config Key → Code Symbol ───────────────────────── */
 
 typedef struct {
-    // NOLINTNEXTLINE(misc-include-cleaner) — int64_t provided by standard header
     int64_t node_id;
     char normalized[256];
     char name[256];
@@ -229,7 +227,6 @@ static int collect_manifest_deps(const cbm_gbuf_node_t *const *vars, int var_cou
             char qn_copy[512];
             snprintf(qn_copy, sizeof(qn_copy), "%s", vars[i]->qualified_name);
             char *saveptr = NULL;
-            // NOLINTNEXTLINE(misc-include-cleaner) — strtok_r provided by standard header
             char *part = strtok_r(qn_copy, ".", &saveptr);
             while (part) {
                 char lower[128];
@@ -354,7 +351,6 @@ static int strategy_dep_imports(cbm_gbuf_t *gb) {
 /* ── Strategy 3: Config File Path → Code String Reference ───────── */
 
 /* Disk-based fallback: reads source from disk (sequential pipeline path). */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int strategy_file_refs_disk(cbm_gbuf_t *gb, const char *project, const char *repo_path) {
     /* Collect config Module nodes */
     const cbm_gbuf_node_t **modules = NULL;
@@ -438,7 +434,6 @@ static int strategy_file_refs_disk(cbm_gbuf_t *gb, const char *project, const ch
             continue;
         }
         size_t nread = fread(source, 1, (size_t)fsize, f);
-        // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
         source[nread] = '\0';
         (void)fclose(f);
 

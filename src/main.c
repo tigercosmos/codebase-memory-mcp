@@ -104,7 +104,6 @@ static int watcher_index_fn(const char *project_name, const char *root_path, voi
 
 static int run_cli(int argc, char **argv) {
     if (argc < 1) {
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         (void)fprintf(stderr, "Usage: codebase-memory-mcp cli <tool_name> [json_args]\n");
         return 1;
     }
@@ -114,7 +113,6 @@ static int run_cli(int argc, char **argv) {
 
     cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
     if (!srv) {
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         (void)fprintf(stderr, "Failed to create server\n");
         return 1;
     }
@@ -222,9 +220,7 @@ int main(int argc, char **argv) {
     signal(SIGTERM, signal_handler);
     signal(SIGINT, signal_handler);
 #else
-    // NOLINTNEXTLINE(misc-include-cleaner) — sigaction provided by standard header
     struct sigaction sa = {0};
-    // NOLINTNEXTLINE(misc-include-cleaner) — sa_handler provided by standard header
     sa.sa_handler = signal_handler;
     sigemptyset(&sa.sa_mask);
     sa.sa_flags = 0;

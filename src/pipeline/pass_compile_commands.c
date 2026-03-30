@@ -4,7 +4,6 @@
  * Parses compile_commands.json to extract per-file include paths, defines,
  * and C/C++ standard flags.
  */
-// NOLINTNEXTLINE(misc-include-cleaner) — pipeline.h included for interface contract
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_internal.h"
 
@@ -38,7 +37,6 @@ int cbm_split_command(const char *cmd, char **out, int max_out) {
         } else if (c == ' ' || c == '\t') {
             if (clen > 0 && count < max_out) {
                 current[clen] = '\0';
-                // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
                 out[count++] = strdup(current);
                 clen = 0;
             }
@@ -83,9 +81,7 @@ cbm_compile_flags_t *cbm_extract_flags(const char **args, int argc, const char *
     }
 
     /* Pre-allocate arrays */
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     f->include_paths = calloc(argc, sizeof(char *));
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     f->defines = calloc(argc, sizeof(char *));
 
     for (int i = 0; i < argc; i++) {
@@ -141,12 +137,10 @@ void cbm_compile_flags_free(cbm_compile_flags_t *f) {
     for (int i = 0; i < f->include_count; i++) {
         free(f->include_paths[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(f->include_paths);
     for (int i = 0; i < f->define_count; i++) {
         free(f->defines[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(f->defines);
     free(f);
 }
@@ -176,9 +170,7 @@ int cbm_parse_compile_commands(const char *json_data, const char *repo_path, cha
         return 0;
     }
 
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     char **paths = calloc(arr_len, sizeof(char *));
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     cbm_compile_flags_t **flags = calloc(arr_len, sizeof(cbm_compile_flags_t *));
     int count = 0;
 

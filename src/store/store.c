@@ -25,7 +25,6 @@
 
 /* Wrap sqlite3_bind_text with SQLITE_TRANSIENT to isolate the platform
    int-to-pointer cast ((void*)-1) in one place. */
-// NOLINTNEXTLINE(performance-no-int-to-ptr)
 static const sqlite3_destructor_type BIND_TRANSIENT = SQLITE_TRANSIENT;
 
 static int bind_text(sqlite3_stmt *s, int col, const char *v) {
@@ -750,7 +749,6 @@ int cbm_store_delete_project(cbm_store_t *s, const char *name) {
 
 /* ── Node CRUD ──────────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(misc-include-cleaner) — int64_t provided by standard header
 int64_t cbm_store_upsert_node(cbm_store_t *s, const cbm_node_t *n) {
     sqlite3_stmt *stmt =
         prepare_cached(s, &s->stmt_upsert_node,
@@ -789,7 +787,6 @@ static void scan_node(sqlite3_stmt *stmt, cbm_node_t *n) {
     n->id = sqlite3_column_int64(stmt, 0);
     n->project = heap_strdup((const char *)sqlite3_column_text(stmt, 1));
     n->label = heap_strdup((const char *)sqlite3_column_text(stmt, 2));
-    // NOLINTNEXTLINE(clang-analyzer-unix.Malloc)
     n->name = heap_strdup((const char *)sqlite3_column_text(stmt, 3));
     n->qualified_name = heap_strdup((const char *)sqlite3_column_text(stmt, 4));
     n->file_path = heap_strdup((const char *)sqlite3_column_text(stmt, 5));
@@ -925,7 +922,6 @@ int cbm_store_find_node_ids_by_qns(cbm_store_t *s, const char *project, const ch
 }
 
 /* Generic: find multiple nodes by a single-column filter. */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int find_nodes_generic(cbm_store_t *s, sqlite3_stmt **slot, const char *sql,
                               const char *project, const char *val, cbm_node_t **out, int *count) {
     if (!s || !s->db) {
@@ -1499,7 +1495,6 @@ int cbm_store_find_nodes_by_qn_suffix(cbm_store_t *s, const char *project, const
 
 /* ── NodeDegree ────────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 void cbm_store_node_degree(cbm_store_t *s, int64_t node_id, int *in_deg, int *out_deg) {
     *in_deg = 0;
     *out_deg = 0;
@@ -1563,7 +1558,6 @@ int cbm_store_list_files(cbm_store_t *s, const char *project, char ***out, int *
 
 /* ── Node neighbor names ──────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int query_neighbor_names(sqlite3 *db, const char *sql, int64_t node_id, int limit,
                                 char ***out, int *out_count) {
     *out = NULL;
@@ -1576,7 +1570,6 @@ static int query_neighbor_names(sqlite3 *db, const char *sql, int64_t node_id, i
     sqlite3_bind_int(stmt, 2, limit);
 
     int cap = 8;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     char **names = malloc((size_t)cap * sizeof(char *));
     int count = 0;
     while (sqlite3_step(stmt) == SQLITE_ROW) {
@@ -1586,10 +1579,8 @@ static int query_neighbor_names(sqlite3 *db, const char *sql, int64_t node_id, i
         }
         if (count >= cap) {
             cap *= 2;
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             names = safe_realloc(names, (size_t)cap * sizeof(char *));
         }
-        // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
         names[count++] = strdup(name);
     }
     sqlite3_finalize(stmt);
@@ -1645,7 +1636,6 @@ int cbm_store_batch_count_degrees(cbm_store_t *s, const int64_t *node_ids, int i
     }
     in_clause[pos] = '\0';
 
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     bool has_type = edge_type && edge_type[0] != '\0';
 
     /* Inbound: COUNT grouped by target_id */
@@ -1751,7 +1741,6 @@ int cbm_store_upsert_file_hash_batch(cbm_store_t *s, const cbm_file_hash_t *hash
 
 /* ── FindEdgesByURLPath ────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int cbm_store_find_edges_by_url_path(cbm_store_t *s, const char *project, const char *keyword,
                                      cbm_edge_t **out, int *count) {
     *out = NULL;
@@ -2050,7 +2039,6 @@ int cbm_store_search(cbm_store_t *s, const cbm_search_params_t *params, cbm_sear
 
     /* Degree filters: -1 = no filter, 0+ = active filter.
      * Wraps in subquery to filter on computed degree columns. */
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     bool has_degree_filter = (params->min_degree >= 0 || params->max_degree >= 0);
     if (has_degree_filter) {
         char inner_sql[4096];
@@ -2077,7 +2065,6 @@ int cbm_store_search(cbm_store_t *s, const cbm_search_params_t *params, cbm_sear
     int limit = params->limit > 0 ? params->limit : 500000;
     int offset = params->offset;
     bool has_degree_wrap = has_degree_filter;
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     const char *name_col = has_degree_wrap ? "name" : "n.name";
     char order_limit[128];
     snprintf(order_limit, sizeof(order_limit), " ORDER BY %s LIMIT %d OFFSET %d", name_col, limit,
@@ -2149,7 +2136,6 @@ void cbm_store_search_free(cbm_search_output_t *out) {
         for (int j = 0; j < r->connected_count; j++) {
             free((void *)r->connected_names[j]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(r->connected_names);
     }
     free(out->results);
@@ -2159,7 +2145,6 @@ void cbm_store_search_free(cbm_search_output_t *out) {
 /* ── BFS Traversal ──────────────────────────────────────────────── */
 
 int cbm_store_bfs(cbm_store_t *s, int64_t start_id, const char *direction, const char **edge_types,
-                  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                   int edge_type_count, int max_depth, int max_results, cbm_traverse_result_t *out) {
     memset(out, 0, sizeof(*out));
 
@@ -2195,8 +2180,7 @@ int cbm_store_bfs(cbm_store_t *s, int64_t start_id, const char *direction, const
     char sql[4096];
     const char *join_cond;
     const char *next_id;
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
-    bool is_inbound = direction && strcmp(direction, "inbound") == 0;
+    bool is_inbound = (direction != NULL) && (strcmp(direction, "inbound") == 0);
 
     if (is_inbound) {
         join_cond = "e.target_id = bfs.node_id";
@@ -2532,25 +2516,21 @@ void cbm_store_schema_free(cbm_schema_info_t *out) {
     for (int i = 0; i < out->rel_pattern_count; i++) {
         free((void *)out->rel_patterns[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(out->rel_patterns);
 
     for (int i = 0; i < out->sample_func_count; i++) {
         free((void *)out->sample_func_names[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(out->sample_func_names);
 
     for (int i = 0; i < out->sample_class_count; i++) {
         free((void *)out->sample_class_names[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(out->sample_class_names);
 
     for (int i = 0; i < out->sample_qn_count; i++) {
         free((void *)out->sample_qns[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(out->sample_qns);
 
     memset(out, 0, sizeof(*out));
@@ -2619,8 +2599,10 @@ const char *cbm_qn_to_top_package(const char *qn) {
 }
 
 bool cbm_is_test_file_path(const char *fp) {
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
-    return fp && fp[0] && strstr(fp, "test") != NULL;
+    if (!fp || fp[0] == '\0') {
+        return false;
+    }
+    return strstr(fp, "test") != NULL;
 }
 
 /* File extension → language name mapping */
@@ -2812,7 +2794,6 @@ static int arch_languages(cbm_store_t *s, const char *project, cbm_architecture_
         nlang = 10;
     }
 
-    // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI)
     out->languages = calloc(nlang, sizeof(cbm_language_count_t));
     out->language_count = nlang;
     for (int i = 0; i < nlang; i++) {
@@ -2992,14 +2973,12 @@ static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_bo
     int ncap = 256;
     int nn = 0;
     int64_t *nids = malloc(ncap * sizeof(int64_t));
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     char **npkgs = malloc(ncap * sizeof(char *));
 
     while (sqlite3_step(nstmt) == SQLITE_ROW) {
         if (nn >= ncap) {
             ncap *= 2;
             nids = safe_realloc(nids, ncap * sizeof(int64_t));
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             npkgs = safe_realloc(npkgs, ncap * sizeof(char *));
         }
         nids[nn] = sqlite3_column_int64(nstmt, 0);
@@ -3017,7 +2996,6 @@ static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_bo
             free(npkgs[i]);
         }
         free(nids);
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(npkgs);
         store_set_error_sqlite(s, "arch_boundaries_edges");
         return CBM_STORE_ERR;
@@ -3027,9 +3005,7 @@ static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_bo
     /* Boundary counts: parallel arrays for from→to→count */
     int bcap = 32;
     int bn = 0;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     char **bfroms = malloc(bcap * sizeof(char *));
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     char **btos = malloc(bcap * sizeof(char *));
     int *bcounts = malloc(bcap * sizeof(int));
 
@@ -3071,7 +3047,6 @@ static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_bo
         free(npkgs[i]);
     }
     free(nids);
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(npkgs);
 
     /* Sort by count descending */
@@ -3098,16 +3073,13 @@ static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_bo
         bn = 10;
     }
 
-    // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI)
     cbm_cross_pkg_boundary_t *result = calloc(bn, sizeof(cbm_cross_pkg_boundary_t));
     for (int i = 0; i < bn; i++) {
         result[i].from = bfroms[i];
         result[i].to = btos[i];
         result[i].call_count = bcounts[i];
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(bfroms);
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(btos);
     free(bcounts);
     *out_arr = result;
@@ -3202,7 +3174,6 @@ static int arch_packages(cbm_store_t *s, const char *project, cbm_architecture_i
             np = MAX_PREVIEW_NAMES;
         }
 
-        // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI)
         arr = calloc(np, sizeof(cbm_package_summary_t));
         n = np;
         for (int i = 0; i < np; i++) {
@@ -3217,7 +3188,6 @@ static int arch_packages(cbm_store_t *s, const char *project, cbm_architecture_i
 }
 
 static void classify_layer(const char *pkg, int in, int out_deg, bool has_routes,
-                           // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                            bool has_entry_points, const char **layer, const char **reason) {
     static CBM_TLS char reason_buf[128];
     if (has_entry_points && out_deg > 0 && in == 0) {
@@ -3364,7 +3334,6 @@ static int arch_layers(cbm_store_t *s, const char *project, cbm_architecture_inf
     }
 
     /* Classify each package */
-    // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI)
     out->layers = calloc(npkgs, sizeof(cbm_package_layer_t));
     out->layer_count = npkgs;
     for (int i = 0; i < npkgs; i++) {
@@ -3428,17 +3397,14 @@ static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_
     /* Collect all file paths + build directory children map */
     int fcap = 32;
     int fn = 0;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     char **files = malloc(fcap * sizeof(char *));
 
     /* Directory tree: parallel arrays of dir → children set */
     int dcap = 64;
     int dn = 0;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     char **dir_paths = calloc(dcap, sizeof(char *));
     int *dir_child_counts = calloc(dcap, sizeof(int));
     /* Track unique children per dir using a simple string array */
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     char ***dir_children = calloc(dcap, sizeof(char **));
     int *dir_children_caps = calloc(dcap, sizeof(int));
 
@@ -3449,7 +3415,6 @@ static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_
         }
         if (fn >= fcap) {
             fcap *= 2;
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             files = safe_realloc(files, fcap * sizeof(char *));
         }
         files[fn++] = heap_strdup(fp);
@@ -3503,7 +3468,6 @@ static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_
                         dir_children_caps[ri] =
                             dir_children_caps[ri] ? dir_children_caps[ri] * 2 : 4;
                         dir_children[ri] =
-                            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
                             realloc(dir_children[ri], dir_children_caps[ri] * sizeof(char *));
                     }
                     dir_children[ri][dir_child_counts[ri]++] = heap_strdup(parts[0]);
@@ -3554,7 +3518,6 @@ static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_
                         dir_children_caps[di] =
                             dir_children_caps[di] ? dir_children_caps[di] * 2 : 4;
                         dir_children[di] =
-                            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
                             realloc(dir_children[di], dir_children_caps[di] * sizeof(char *));
                     }
                     dir_children[di][dir_child_counts[di]++] = heap_strdup(child);
@@ -3598,8 +3561,11 @@ static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_
                 }
             }
             entries[en].path = heap_strdup(child);
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
-            entries[en].type = heap_strdup(is_file ? "file" : "dir");
+            if (is_file) {
+                entries[en].type = heap_strdup("file");
+            } else {
+                entries[en].type = heap_strdup("dir");
+            }
             entries[en].children = nch;
             en++;
         }
@@ -3612,7 +3578,6 @@ static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_
         }
         /* Limit depth to 3 levels */
         int slashes = 0;
-        // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
         for (const char *p = dir_paths[i]; *p; p++) {
             if (*p == '/') {
                 slashes++;
@@ -3644,8 +3609,11 @@ static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_
                 }
             }
             entries[en].path = heap_strdup(path);
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
-            entries[en].type = heap_strdup(is_file ? "file" : "dir");
+            if (is_file) {
+                entries[en].type = heap_strdup("file");
+            } else {
+                entries[en].type = heap_strdup("dir");
+            }
             entries[en].children = nch;
             en++;
         }
@@ -3668,19 +3636,15 @@ static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_
         for (int k = 0; k < dir_child_counts[i]; k++) {
             free(dir_children[i][k]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(dir_children[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(dir_paths);
     free(dir_child_counts);
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(dir_children);
     free(dir_children_caps);
     for (int i = 0; i < fn; i++) {
         free(files[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(files);
 
     out->file_tree = entries;
@@ -3753,9 +3717,7 @@ int cbm_louvain(const int64_t *nodes, int node_count, const cbm_louvain_edge_t *
     }
 
     /* Build adjacency lists */
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     int **adj = calloc(n, sizeof(int *));
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     double **adj_w = calloc(n, sizeof(double *));
     int *adj_n = calloc(n, sizeof(int));
     int *adj_cap = calloc(n, sizeof(int));
@@ -3811,9 +3773,7 @@ int cbm_louvain(const int64_t *nodes, int node_count, const cbm_louvain_edge_t *
             free(adj[i]);
             free(adj_w[i]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(adj);
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(adj_w);
         free(adj_n);
         free(adj_cap);
@@ -3925,9 +3885,7 @@ int cbm_louvain(const int64_t *nodes, int node_count, const cbm_louvain_edge_t *
         free(adj[i]);
         free(adj_w[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(adj);
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(adj_w);
     free(adj_n);
     free(adj_cap);
@@ -4063,17 +4021,14 @@ void cbm_store_architecture_free(cbm_architecture_info_t *out) {
         for (int j = 0; j < out->clusters[i].top_node_count; j++) {
             free((void *)out->clusters[i].top_nodes[j]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(out->clusters[i].top_nodes);
         for (int j = 0; j < out->clusters[i].package_count; j++) {
             free((void *)out->clusters[i].packages[j]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(out->clusters[i].packages);
         for (int j = 0; j < out->clusters[i].edge_type_count; j++) {
             free((void *)out->clusters[i].edge_types[j]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(out->clusters[i].edge_types);
     }
     free(out->clusters);
@@ -4406,7 +4361,6 @@ int cbm_store_adr_delete(cbm_store_t *s, const char *project) {
     return CBM_STORE_OK;
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int cbm_store_adr_update_sections(cbm_store_t *s, const char *project, const char **keys,
                                   const char **values, int count, cbm_adr_t *out) {
     /* Get existing ADR */
@@ -4491,12 +4445,10 @@ int cbm_store_find_architecture_docs(cbm_store_t *s, const char *project, char *
 
     int cap = 8;
     int n = 0;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     char **arr = malloc(cap * sizeof(char *));
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         if (n >= cap) {
             cap *= 2;
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             arr = safe_realloc(arr, cap * sizeof(char *));
         }
         arr[n++] = heap_strdup((const char *)sqlite3_column_text(stmt, 0));

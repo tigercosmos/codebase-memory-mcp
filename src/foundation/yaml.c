@@ -16,8 +16,7 @@
 #include <stddef.h> // NULL
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h> // strdup
-// NOLINTNEXTLINE(misc-include-cleaner) — strings.h included for interface contract
+#include <string.h>  // strdup
 #include <strings.h> // strcasecmp
 
 /* ── Node types ───────────────────────────────────────────────── */
@@ -55,7 +54,6 @@ static void node_add_child(cbm_yaml_node_t *parent, cbm_yaml_node_t *child) {
     }
     if (parent->child_count >= parent->child_cap) {
         int new_cap = parent->child_cap < 8 ? 8 : parent->child_cap * 2;
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         cbm_yaml_node_t **new_arr = realloc(parent->children, (size_t)new_cap * sizeof(*new_arr));
         if (!new_arr) {
             return;
@@ -66,7 +64,6 @@ static void node_add_child(cbm_yaml_node_t *parent, cbm_yaml_node_t *child) {
     parent->children[parent->child_count++] = child;
 }
 
-// NOLINTNEXTLINE(misc-no-recursion) — intentional recursive tree deallocation
 void cbm_yaml_free(cbm_yaml_node_t *root) {
     if (!root) {
         return;
@@ -74,7 +71,6 @@ void cbm_yaml_free(cbm_yaml_node_t *root) {
     for (int i = 0; i < root->child_count; i++) {
         cbm_yaml_free(root->children[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(root->children);
     free(root->key);
     free(root->value);
@@ -92,7 +88,6 @@ static char *trim_dup(const char *start, const char *end) {
         start++;
     }
     if (start >= end) {
-        // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
         return strdup("");
     }
     size_t len = (size_t)(end - start);
@@ -195,7 +190,6 @@ cbm_yaml_node_t *cbm_yaml_parse(const char *text, int len) {
                 node_add_child(list_parent, item);
             }
 
-            // NOLINTNEXTLINE(clang-analyzer-unix.Malloc)
             p = (eol < end) ? eol + 1 : end;
             continue;
         }
@@ -271,7 +265,6 @@ cbm_yaml_node_t *cbm_yaml_parse(const char *text, int len) {
                 break;
             }
 
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
             cbm_yaml_node_t *child = node_new(is_list ? YAML_LIST : YAML_MAP);
             if (child) {
                 child->key = key;
@@ -285,11 +278,9 @@ cbm_yaml_node_t *cbm_yaml_parse(const char *text, int len) {
             }
         }
 
-        // NOLINTNEXTLINE(clang-analyzer-unix.Malloc)
         p = (eol < end) ? eol + 1 : end;
     }
 
-    // NOLINTNEXTLINE(clang-analyzer-unix.Malloc)
     return root;
 }
 
@@ -374,7 +365,6 @@ bool cbm_yaml_get_bool(const cbm_yaml_node_t *root, const char *path, bool defau
         return default_val;
     }
 
-    // NOLINTNEXTLINE(misc-include-cleaner) — strcasecmp provided by standard header
     if (strcasecmp(str, "true") == 0 || strcasecmp(str, "yes") == 0 || strcasecmp(str, "on") == 0 ||
         strcmp(str, "1") == 0) {
         return true;

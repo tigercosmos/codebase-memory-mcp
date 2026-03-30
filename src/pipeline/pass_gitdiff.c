@@ -4,7 +4,6 @@
  * Pure string parsers for git diff --name-status and --unified=0 output.
  * No git execution — just parsing pre-captured output strings.
  */
-// NOLINTNEXTLINE(misc-include-cleaner) — pipeline.h included for interface contract
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_internal.h"
 
@@ -12,7 +11,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 void cbm_parse_range(const char *s, int *out_start, int *out_count) {
     *out_start = 0;
     *out_count = 1;

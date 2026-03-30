@@ -77,7 +77,6 @@ static const char *extract_constructor_type(CBMArena *a, TSNode rhs, const char 
 }
 
 // Walk AST for assignment patterns where RHS is a constructor call.
-// NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk
 static void walk_type_assigns(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
     const char *kind = ts_node_type(node);
 

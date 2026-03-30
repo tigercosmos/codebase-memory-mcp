@@ -41,7 +41,6 @@ static char *read_file(const char *path, int *out_len) {
     }
     size_t nread = fread(buf, 1, size, f);
     (void)fclose(f);
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     buf[nread] = '\0';
     *out_len = (int)nread;
     return buf;
@@ -58,7 +57,6 @@ static const char *itoa_log(int val) {
 
 /* Build per-file import map from cached extraction result or graph buffer edges. */
 static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
-                            // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                             const CBMFileResult *result, const char ***out_keys,
                             const char ***out_vals, int *out_count) {
     *out_keys = NULL;
@@ -67,9 +65,7 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
 
     /* Fast path: build from cached extraction result (no JSON parsing) */
     if (result && result->imports.count > 0) {
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         const char **keys = calloc((size_t)result->imports.count, sizeof(const char *));
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         const char **vals = calloc((size_t)result->imports.count, sizeof(const char *));
         int count = 0;
 
@@ -84,7 +80,6 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
             if (!target) {
                 continue;
             }
-            // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
             keys[count] = strdup(imp->local_name);
             vals[count] = target->qualified_name;
             count++;
@@ -112,9 +107,7 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
         return 0;
     }
 
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     const char **keys = calloc(edge_count, sizeof(const char *));
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     const char **vals = calloc(edge_count, sizeof(const char *));
     int count = 0;
 
@@ -130,7 +123,6 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
             start += strlen("\"local_name\":\"");
             const char *end = strchr(start, '"');
             if (end && end > start) {
-                // NOLINTNEXTLINE(misc-include-cleaner) — strndup provided by standard header
                 keys[count] = cbm_strndup(start, end - start);
                 vals[count] = target->qualified_name;
                 count++;
@@ -207,7 +199,6 @@ static bool fp_ends_with(const char *fp, const char *suffix) {
     }
     size_t fplen = strlen(fp);
     size_t sflen = strlen(suffix);
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return fplen >= sflen && strcmp(fp + fplen - sflen, suffix) == 0;
 }
 
@@ -247,7 +238,6 @@ int cbm_pipeline_implements_go(cbm_pipeline_ctx_t *ctx) {
         /* Collect interface method info */
         typedef struct {
             const char *name;
-            // NOLINTNEXTLINE(misc-include-cleaner) — int64_t provided by standard header
             int64_t id;
         } imethod_t;
         imethod_t imethods[128];
@@ -309,7 +299,6 @@ int cbm_pipeline_implements_go(cbm_pipeline_ctx_t *ctx) {
     return edge_count;
 }
 
-// NOLINTNEXTLINE(misc-include-cleaner) — cbm_file_info_t provided by standard header
 int cbm_pipeline_pass_semantic(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                                int file_count) {
     cbm_log_info("pass.start", "pass", "semantic", "files", itoa_log(file_count));

@@ -9,7 +9,6 @@
 
 // --- Scope stack management ---
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void push_scope(WalkState *state, uint8_t kind, uint32_t depth, const char *qn) {
     if (state->scope_top >= MAX_SCOPES) {
         return;
@@ -196,7 +195,6 @@ static void handle_string_constants(CBMExtractCtx *ctx, TSNode node, const WalkS
 
 static bool is_string_node(const char *kind) {
     /* Common string literal node types across tree-sitter grammars */
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return (strcmp(kind, "string_literal") == 0 || strcmp(kind, "string") == 0 ||
             strcmp(kind, "string_content") == 0 ||
             strcmp(kind, "interpreted_string_literal") == 0 ||

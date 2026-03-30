@@ -42,7 +42,6 @@ static char *read_file(const char *path, int *out_len) {
     }
     size_t nread = fread(buf, 1, size, f);
     (void)fclose(f);
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     buf[nread] = '\0';
     *out_len = (int)nread;
     return buf;
@@ -73,7 +72,6 @@ static bool is_checked_exception(const char *name) {
 
 /* Build per-file import map from cached extraction result or graph buffer edges. */
 static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
-                            // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                             const CBMFileResult *result, const char ***out_keys,
                             const char ***out_vals, int *out_count) {
     *out_keys = NULL;
@@ -82,9 +80,7 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
 
     /* Fast path: build from cached extraction result (no JSON parsing) */
     if (result && result->imports.count > 0) {
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         const char **keys = calloc((size_t)result->imports.count, sizeof(const char *));
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         const char **vals = calloc((size_t)result->imports.count, sizeof(const char *));
         int count = 0;
 
@@ -99,7 +95,6 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
             if (!target) {
                 continue;
             }
-            // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
             keys[count] = strdup(imp->local_name);
             vals[count] = target->qualified_name;
             count++;
@@ -127,9 +122,7 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
         return 0;
     }
 
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     const char **keys = calloc(edge_count, sizeof(const char *));
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     const char **vals = calloc(edge_count, sizeof(const char *));
     int count = 0;
 
@@ -146,7 +139,6 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
                 start += strlen("\"local_name\":\"");
                 const char *end = strchr(start, '"');
                 if (end && end > start) {
-                    // NOLINTNEXTLINE(misc-include-cleaner) — strndup provided by standard header
                     keys[count] = cbm_strndup(start, end - start);
                     vals[count] = target->qualified_name;
                     count++;
@@ -174,7 +166,6 @@ static void free_import_map(const char **keys, const char **vals, int count) {
 }
 
 /* Find the graph buffer node for an enclosing function QN, falling back to file node. */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static const cbm_gbuf_node_t *find_enclosing_node(cbm_pipeline_ctx_t *ctx, const char *func_qn,
                                                   const char *rel_path) {
     const cbm_gbuf_node_t *node = NULL;
@@ -189,7 +180,6 @@ static const cbm_gbuf_node_t *find_enclosing_node(cbm_pipeline_ctx_t *ctx, const
     return node;
 }
 
-// NOLINTNEXTLINE(misc-include-cleaner) — cbm_file_info_t provided by standard header
 int cbm_pipeline_pass_usages(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                              int file_count) {
     cbm_log_info("pass.start", "pass", "usages", "files", itoa_log(file_count));
@@ -295,7 +285,6 @@ int cbm_pipeline_pass_usages(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *fil
                 continue;
             }
 
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
             const char *edge_type = is_checked_exception(thr->exception_name) ? "THROWS" : "RAISES";
 
             /* Try to resolve exception class */
@@ -341,7 +330,6 @@ int cbm_pipeline_pass_usages(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *fil
                 continue;
             }
 
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
             const char *edge_type = rw->is_write ? "WRITES" : "READS";
             cbm_gbuf_insert_edge(ctx->gbuf, src->id, tgt->id, edge_type, "{}");
             rw_resolved++;

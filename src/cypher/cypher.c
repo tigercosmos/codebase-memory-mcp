@@ -15,7 +15,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-// NOLINTNEXTLINE(misc-include-cleaner) — strings.h included for interface contract
 #include <strings.h> // strcasecmp
 
 /* ── Helpers ────────────────────────────────────────────────────── */
@@ -148,7 +147,6 @@ static const kw_entry_t keywords[] = {
 static cbm_token_type_t keyword_lookup(const char *word) {
     /* Case-insensitive compare */
     for (const kw_entry_t *kw = keywords; kw->name; kw++) {
-        // NOLINTNEXTLINE(misc-include-cleaner) — strcasecmp provided by standard header
         if (strcasecmp(word, kw->name) == 0) {
             return kw->type;
         }
@@ -525,12 +523,10 @@ static int parse_rel(parser_t *p, cbm_rel_pattern_t *out) {
         if (match(p, TOK_COLON)) {
             int cap = 4;
             int n = 0;
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             const char **types = malloc(cap * sizeof(const char *));
 
             const cbm_token_t *t = expect(p, TOK_IDENT);
             if (!t) {
-                // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
                 free(types);
                 return -1;
             }
@@ -542,13 +538,11 @@ static int parse_rel(parser_t *p, cbm_rel_pattern_t *out) {
                     for (int i = 0; i < n; i++) {
                         free((void *)types[i]);
                     }
-                    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
                     free(types);
                     return -1;
                 }
                 if (n >= cap) {
                     cap *= 2;
-                    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
                     types = safe_realloc(types, cap * sizeof(const char *));
                 }
                 types[n++] = heap_strdup(t->text);
@@ -628,7 +622,6 @@ static void expr_free(cbm_expr_t *e) {
         for (int i = 0; i < e->cond.in_value_count; i++) {
             free((void *)e->cond.in_values[i]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(e->cond.in_values);
     }
     expr_free(e->left);
@@ -747,7 +740,6 @@ static cbm_expr_t *parse_condition_expr(parser_t *p) {
         }
         int vcap = 8;
         int vn = 0;
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         const char **vals = malloc(vcap * sizeof(const char *));
         while (!check(p, TOK_RBRACKET) && !check(p, TOK_EOF)) {
             if (vn > 0) {
@@ -756,7 +748,6 @@ static cbm_expr_t *parse_condition_expr(parser_t *p) {
             if (check(p, TOK_STRING) || check(p, TOK_NUMBER)) {
                 if (vn >= vcap) {
                     vcap *= 2;
-                    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
                     vals = safe_realloc(vals, vcap * sizeof(const char *));
                 }
                 vals[vn++] = heap_strdup(advance(p)->text);
@@ -1436,7 +1427,6 @@ static void free_pattern(cbm_pattern_t *pat) {
         for (int j = 0; j < r->type_count; j++) {
             free((void *)r->types[j]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(r->types);
         free((void *)r->direction);
     }
@@ -1456,7 +1446,6 @@ static void free_where(cbm_where_clause_t *w) {
         for (int j = 0; j < w->conditions[i].in_value_count; j++) {
             free((void *)w->conditions[i].in_values[j]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(w->conditions[i].in_values);
     }
     free(w->conditions);
@@ -1790,12 +1779,10 @@ static bool eval_condition(const cbm_condition_t *c, binding_t *b) {
     /* IS NULL / IS NOT NULL */
     if (strcmp(c->op, "IS NULL") == 0) {
         result = ((!actual || actual[0] == '\0') != 0);
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return (int)(c->negated ? !result : result);
     }
     if (strcmp(c->op, "IS NOT NULL") == 0) {
         result = ((actual && actual[0] != '\0') != 0);
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return (int)(c->negated ? !result : result);
     }
 
@@ -1808,7 +1795,6 @@ static bool eval_condition(const cbm_condition_t *c, binding_t *b) {
                 break;
             }
         }
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return (int)(c->negated ? !result : result);
     }
 
@@ -1851,7 +1837,6 @@ static bool eval_condition(const cbm_condition_t *c, binding_t *b) {
         result = false;
     }
 
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return (int)(c->negated ? !result : result);
 }
 
@@ -1925,12 +1910,10 @@ typedef struct {
 static void rb_init(result_builder_t *rb) {
     memset(rb, 0, sizeof(*rb));
     rb->row_cap = 32;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     rb->rows = malloc(rb->row_cap * sizeof(const char **));
 }
 
 static void rb_set_columns(result_builder_t *rb, const char **cols, int count) {
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion,
     rb->columns = malloc(count * sizeof(const char *));
     for (int i = 0; i < count; i++) {
         rb->columns[i] = heap_strdup(cols[i]);
@@ -1941,10 +1924,8 @@ static void rb_set_columns(result_builder_t *rb, const char **cols, int count) {
 static void rb_add_row(result_builder_t *rb, const char **values) {
     if (rb->row_count >= rb->row_cap) {
         rb->row_cap *= 2;
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         rb->rows = safe_realloc(rb->rows, rb->row_cap * sizeof(const char **));
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     const char **row = malloc(rb->col_count * sizeof(const char *));
     for (int i = 0; i < rb->col_count; i++) {
         row[i] = heap_strdup(values[i]);
@@ -1954,7 +1935,6 @@ static void rb_add_row(result_builder_t *rb, const char **values) {
 
 /* ── Main execution ─────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters,readability-function-cognitive-complexity,readability-function-size)
 /* Hard ceiling: queries returning more than this trigger an error instead of data.
  * Prevents accidental multi-GB JSON payloads from unbounded MATCH (n) RETURN n. */
 #define CYPHER_RESULT_CEILING 100000
@@ -2079,7 +2059,6 @@ static void expand_pattern_rels(cbm_store_t *store, cbm_pattern_t *pat, binding_
         cbm_node_pattern_t *target_node = &pat->nodes[ri + 1];
         const char *to_var = target_node->variable ? target_node->variable : "_n_t";
 
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         bool is_variable_length = (rel->min_hops != 1 || rel->max_hops != 1);
 
         binding_t *new_bindings = malloc(((*bind_cap * 10) + 1) * sizeof(binding_t));
@@ -2120,9 +2099,7 @@ static void expand_pattern_rels(cbm_store_t *store, cbm_pattern_t *pat, binding_
                 }
                 cbm_store_traverse_free(&tr);
             } else {
-                // NOLINTNEXTLINE(readability-implicit-bool-conversion)
                 bool is_inbound = rel->direction && strcmp(rel->direction, "inbound") == 0;
-                // NOLINTNEXTLINE(readability-implicit-bool-conversion)
                 bool is_any = rel->direction && strcmp(rel->direction, "any") == 0;
                 const char *rel_var = rel->variable;
 
@@ -2241,7 +2218,6 @@ static void rb_apply_order_by(result_builder_t *rb, const cbm_return_clause_t *r
         return;
     }
 
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     bool desc = ret->order_dir && strcmp(ret->order_dir, "DESC") == 0;
     bool numeric = false;
     for (int i = 0; i < rb->row_count; i++) {
@@ -2267,7 +2243,6 @@ static void rb_apply_order_by(result_builder_t *rb, const cbm_return_clause_t *r
             } else {
                 cmp = strcmp(rb->rows[j][order_col], rb->rows[j + 1][order_col]);
             }
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
             if (desc ? cmp < 0 : cmp > 0) {
                 const char **tmp = rb->rows[j];
                 rb->rows[j] = rb->rows[j + 1];
@@ -2284,7 +2259,6 @@ static void rb_apply_skip_limit(result_builder_t *rb, int skip_n, int limit) {
             for (int c = 0; c < rb->col_count; c++) {
                 free((void *)rb->rows[i][c]);
             }
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             free(rb->rows[i]);
         }
         memmove(rb->rows, rb->rows + skip_n, (rb->row_count - skip_n) * sizeof(const char **));
@@ -2294,7 +2268,6 @@ static void rb_apply_skip_limit(result_builder_t *rb, int skip_n, int limit) {
             for (int c = 0; c < rb->col_count; c++) {
                 free((void *)rb->rows[i][c]);
             }
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             free(rb->rows[i]);
         }
         rb->row_count = 0;
@@ -2305,7 +2278,6 @@ static void rb_apply_skip_limit(result_builder_t *rb, int skip_n, int limit) {
             for (int c = 0; c < rb->col_count; c++) {
                 free((void *)rb->rows[i][c]);
             }
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             free(rb->rows[i]);
         }
         rb->row_count = limit;
@@ -2339,7 +2311,6 @@ static void rb_apply_distinct(result_builder_t *rb) {
             for (int c = 0; c < rb->col_count; c++) {
                 free((void *)rb->rows[i][c]);
             }
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             free(rb->rows[i]);
         }
     }
@@ -2351,15 +2322,12 @@ static void rb_free(result_builder_t *rb) {
         for (int c = 0; c < rb->col_count; c++) {
             free((void *)rb->rows[i][c]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(rb->rows[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(rb->rows);
     for (int i = 0; i < rb->col_count; i++) {
         free((void *)rb->columns[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(rb->columns);
 }
 
@@ -2676,7 +2644,6 @@ static int execute_single(cbm_store_t *store, cbm_query_t *q, const char *projec
                 for (int ci = 0; ci < wc->count; ci++) {
                     free((void *)aggs[a].group_vals[ci]);
                 }
-                // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
                 free(aggs[a].group_vals);
                 free(aggs[a].sums);
                 free(aggs[a].counts);
@@ -2941,7 +2908,6 @@ static int execute_single(cbm_store_t *store, cbm_query_t *q, const char *projec
                     }
                     found = agg_count++;
                     snprintf(aggs[found].group_key, sizeof(aggs[found].group_key), "%s", key);
-                    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
                     aggs[found].group_vals = malloc(ret->count * sizeof(const char *));
                     aggs[found].sums = calloc(ret->count, sizeof(double));
                     aggs[found].counts = calloc(ret->count, sizeof(int));
@@ -3038,7 +3004,6 @@ static int execute_single(cbm_store_t *store, cbm_query_t *q, const char *projec
                     }
                     free(aggs[a].collect_lists[ci]);
                 }
-                // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
                 free(aggs[a].group_vals);
                 free(aggs[a].sums);
                 free(aggs[a].counts);
@@ -3121,7 +3086,6 @@ static int execute_single(cbm_store_t *store, cbm_query_t *q, const char *projec
 
 /* ── Main entry point ─────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters,readability-function-cognitive-complexity,readability-function-size)
 int cbm_cypher_execute(cbm_store_t *store, const char *query, const char *project, int max_rows,
                        cbm_cypher_result_t *out) {
     memset(out, 0, sizeof(*out));
@@ -3192,16 +3156,13 @@ void cbm_cypher_result_free(cbm_cypher_result_t *r) {
     for (int i = 0; i < r->col_count; i++) {
         free((void *)r->columns[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(r->columns);
     for (int i = 0; i < r->row_count; i++) {
         for (int j = 0; j < r->col_count; j++) {
             free((void *)r->rows[i][j]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(r->rows[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(r->rows);
     free(r->error);
     memset(r, 0, sizeof(*r));

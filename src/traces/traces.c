@@ -59,7 +59,6 @@ const char *cbm_extract_path_from_url(const char *url, char *buf, size_t buf_sz)
 
 /* ── parseDuration ───────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(misc-include-cleaner) — int64_t provided by standard header
 int64_t cbm_parse_duration(const char *start_nano, const char *end_nano) {
     if (!start_nano || !end_nano) {
         return 0;
@@ -118,7 +117,6 @@ bool cbm_extract_http_info(const cbm_trace_span_t *span, const char *service_nam
 
 /* ── calculateP99 ────────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int cmp_int64(const void *a, const void *b) {
     int64_t va = *(const int64_t *)a;
     int64_t vb = *(const int64_t *)b;

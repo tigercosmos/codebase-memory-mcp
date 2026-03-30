@@ -17,7 +17,6 @@
 #include "foundation/compat_thread.h"
 #include "graph_buffer/graph_buffer.h"
 #include "service_patterns.h"
-// NOLINTNEXTLINE(misc-include-cleaner) — platform.h included for interface contract
 #include "foundation/platform.h"
 #include "foundation/log.h"
 #include "foundation/slab_alloc.h"
@@ -61,7 +60,6 @@ static char *read_file(const char *path, int *out_len) {
     }
     size_t nread = fread(buf, 1, (size_t)size, f);
     (void)fclose(f);
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     buf[nread] = '\0';
     *out_len = (int)nread;
     return buf;
@@ -82,7 +80,6 @@ static const char *itoa_log(int val) {
 }
 
 /* Append a JSON-escaped string value to buf at position *pos. */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void append_json_string(char *buf, size_t bufsize, size_t *pos, const char *key,
                                const char *val) {
     if (!val || !val[0]) {
@@ -209,7 +206,6 @@ static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def)
 
 /* Build import map from graph buffer IMPORTS edges (read-only access to gbuf). */
 static int build_import_map(const cbm_gbuf_t *gbuf, const char *project_name, const char *rel_path,
-                            // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                             const char ***out_keys, const char ***out_vals, int *out_count) {
     *out_keys = NULL;
     *out_vals = NULL;
@@ -230,9 +226,7 @@ static int build_import_map(const cbm_gbuf_t *gbuf, const char *project_name, co
         return 0;
     }
 
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     const char **keys = calloc(edge_count, sizeof(const char *));
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     const char **vals = calloc(edge_count, sizeof(const char *));
     int count = 0;
 
@@ -247,7 +241,6 @@ static int build_import_map(const cbm_gbuf_t *gbuf, const char *project_name, co
             start += strlen("\"local_name\":\"");
             const char *end = strchr(start, '"');
             if (end && end > start) {
-                // NOLINTNEXTLINE(misc-include-cleaner) — strndup provided by standard header
                 keys[count] = cbm_strndup(start, end - start);
                 vals[count] = target->qualified_name;
                 count++;
@@ -325,11 +318,9 @@ static void extract_decorator_func(const char *dec, char *out, size_t outsz) {
 
 typedef struct {
     int idx;
-    // NOLINTNEXTLINE(misc-include-cleaner) — int64_t provided by standard header
     int64_t size;
 } file_sort_entry_t;
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int compare_by_size_desc(const void *a, const void *b) {
     const file_sort_entry_t *fa = a;
     const file_sort_entry_t *fb = b;
@@ -354,7 +345,6 @@ typedef struct __attribute__((aligned(CBM_CACHE_LINE))) {
 } extract_worker_state_t;
 
 typedef struct {
-    // NOLINTNEXTLINE(misc-include-cleaner) — cbm_file_info_t provided by standard header
     const cbm_file_info_t *files;
     file_sort_entry_t *sorted;
     int file_count;
@@ -1093,7 +1083,6 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                 continue;
             }
 
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
             const char *edge_type = is_checked_exception(thr->exception_name) ? "THROWS" : "RAISES";
             cbm_resolution_t res = cbm_registry_resolve(rc->registry, thr->exception_name,
                                                         module_qn, imp_keys, imp_vals, imp_count);
@@ -1140,7 +1129,6 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                 continue;
             }
 
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
             const char *etype = rw->is_write ? "WRITES" : "READS";
             cbm_gbuf_insert_edge(ws->local_edge_buf, src->id, tgt->id, etype, "{}");
         }

@@ -38,7 +38,6 @@ static const char *itoa_log(int val) {
 
 static bool ends_with(const char *s, size_t slen, const char *suffix) {
     size_t sflen = strlen(suffix);
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return slen >= sflen && strcmp(s + slen - sflen, suffix) == 0;
 }
 
@@ -87,10 +86,8 @@ typedef struct {
 static void commit_add_file(commit_t *c, const char *file) {
     if (c->count >= c->cap) {
         c->cap = c->cap ? c->cap * 2 : 16;
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         c->files = safe_realloc(c->files, c->cap * sizeof(char *));
     }
-    // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
     c->files[c->count++] = strdup(file);
 }
 
@@ -98,7 +95,6 @@ static void commit_free(commit_t *c) {
     for (int i = 0; i < c->count; i++) {
         free(c->files[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(c->files);
 }
 
@@ -226,7 +222,6 @@ static int parse_git_log(const char *repo_path, commit_t **out, int *out_count) 
              "--since='1 year ago' --max-count=10000 2>/dev/null",
              repo_path);
 
-    // NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c)
     FILE *fp = cbm_popen(cmd, "r");
     if (!fp) {
         return -1;
@@ -282,7 +277,6 @@ static int parse_git_log(const char *repo_path, commit_t **out, int *out_count) 
 #endif /* HAVE_LIBGIT2 */
 
 /* Callback to free hash table entries. */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void free_counter(const char *key, void *val, void *ud) {
     (void)ud;
     free((void *)key);
@@ -299,7 +293,6 @@ typedef struct {
     int max_out;
 } collect_coupling_ctx_t;
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void collect_coupling_cb(const char *pair_key, void *val, void *ud) {
     collect_coupling_ctx_t *cctx = ud;
     int co_count = *(int *)val;

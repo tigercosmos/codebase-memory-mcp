@@ -244,7 +244,6 @@ static void parse_python_imports(CBMExtractCtx *ctx) {
 // import X from "Y"; import {A, B} from "Y"; import * as X from "Y"
 // const X = require("Y")
 
-// NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk
 static void walk_es_imports(CBMExtractCtx *ctx, TSNode node) {
     CBMArena *a = ctx->arena;
     const char *kind = ts_node_type(node);
@@ -668,7 +667,6 @@ static void parse_generic_imports(CBMExtractCtx *ctx, const char *node_type) {
 // get_top: << "package" (Get["file"])
 // apply where first child is builtin_symbol "Needs" with string arg
 
-// NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk
 static void walk_wolfram_imports(CBMExtractCtx *ctx, TSNode node) {
     CBMArena *a = ctx->arena;
     const char *kind = ts_node_type(node);

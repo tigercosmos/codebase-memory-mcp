@@ -133,7 +133,6 @@ void *cbm_mmap_read(const char *path, size_t *out_size) {
     }
     *out_size = 0;
 
-    // NOLINTNEXTLINE(misc-include-cleaner) — open provided by standard header
     int fd = open(path, O_RDONLY);
     if (fd < 0) {
         return NULL;
@@ -214,7 +213,6 @@ bool cbm_file_exists(const char *path) {
 
 bool cbm_is_dir(const char *path) {
     struct stat st;
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
 }
 
@@ -245,14 +243,12 @@ char *cbm_normalize_path_sep(char *path) {
 
 const char *cbm_get_home_dir(void) {
     static char buf[1024];
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     const char *h = getenv("HOME");
     if (h && h[0]) {
         snprintf(buf, sizeof(buf), "%s", h);
         cbm_normalize_path_sep(buf);
         return buf;
     }
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     h = getenv("USERPROFILE");
     if (h && h[0]) {
         snprintf(buf, sizeof(buf), "%s", h);

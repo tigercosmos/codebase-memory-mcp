@@ -47,7 +47,6 @@ static char *read_file(const char *path, int *out_len) {
     size_t nread = fread(buf, 1, size, f);
     (void)fclose(f);
 
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     buf[nread] = '\0';
     *out_len = (int)nread;
     return buf;
@@ -66,7 +65,6 @@ static const char *itoa_log(int val) {
 /* Append a JSON-escaped string value to buf at position *pos.
  * Writes: ,"key":"escaped_value"
  * Handles: \, ", \n, \r, \t */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void append_json_string(char *buf, size_t bufsize, size_t *pos, const char *key,
                                const char *val) {
     if (!val || !val[0]) {
@@ -197,7 +195,6 @@ static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def)
     }
 }
 
-// NOLINTNEXTLINE(misc-include-cleaner) — cbm_file_info_t provided by standard header
 int cbm_pipeline_pass_definitions(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                                   int file_count) {
     cbm_log_info("pass.start", "pass", "definitions", "files", itoa_log(file_count));
@@ -249,7 +246,6 @@ int cbm_pipeline_pass_definitions(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t
             char props[2048];
             build_def_props(props, sizeof(props), def);
 
-            // NOLINTNEXTLINE(misc-include-cleaner) — int64_t provided by standard header
             int64_t node_id =
                 cbm_gbuf_upsert_node(ctx->gbuf, def->label ? def->label : "Function", def->name,
                                      def->qualified_name, def->file_path ? def->file_path : rel,

@@ -48,7 +48,6 @@ static void *pthread_worker(void *arg) {
     return NULL;
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void run_pthreads(int count, cbm_parallel_fn fn, void *ctx, int nworkers) {
     _Atomic int next_idx = 0;
 

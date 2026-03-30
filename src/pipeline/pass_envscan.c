@@ -7,10 +7,8 @@
  *
  * Port of internal/pipeline/envscan.go:ScanProjectEnvURLs().
  */
-// NOLINTNEXTLINE(misc-include-cleaner) — pipeline.h included for interface contract
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_internal.h"
-// NOLINTNEXTLINE(misc-include-cleaner) — log.h included for interface contract
 #include "foundation/log.h"
 
 #include <ctype.h>

@@ -205,7 +205,6 @@ typedef struct {
     int capacity;
 } file_list_t;
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void fl_add(file_list_t *fl, const char *abs_path, const char *rel_path, CBMLanguage lang,
                    int64_t size) {
     if (fl->count >= fl->capacity) {
@@ -219,7 +218,6 @@ static void fl_add(file_list_t *fl, const char *abs_path, const char *rel_path, 
     }
 
     cbm_file_info_t *fi = &fl->files[fl->count++];
-    // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
     fi->path = strdup(abs_path);
     fi->rel_path = strdup(rel_path);
     fi->language = lang;
@@ -228,7 +226,6 @@ static void fl_add(file_list_t *fl, const char *abs_path, const char *rel_path, 
 
 /* ── Recursive walk ──────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters,misc-no-recursion)
 static void walk_dir(const char *dir_path, const char *rel_prefix, const cbm_discover_opts_t *opts,
                      const cbm_gitignore_t *gitignore, const cbm_gitignore_t *cbmignore,
                      file_list_t *out) {

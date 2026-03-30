@@ -161,7 +161,6 @@ static void *diag_thread_fn(void *arg) {
 /* ── Public API ──────────────────────────────────────────────────── */
 
 bool cbm_diag_start(void) {
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     const char *env = getenv("CBM_DIAGNOSTICS");
     if (!env || (strcmp(env, "1") != 0 && strcmp(env, "true") != 0)) {
         return false;

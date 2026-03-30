@@ -102,7 +102,6 @@ double cbm_normalized_levenshtein(const char *a, const char *b) {
     return 1.0 - ((double)dist / (double)max_len);
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void free_ht_key(const char *key, void *val, void *ud) {
     (void)val;
     (void)ud;
@@ -127,7 +126,6 @@ double cbm_ngram_overlap(const char *a, const char *b, int n) {
         memcpy(key, a + i, (size_t)klen);
         key[klen] = '\0';
         if (!cbm_ht_get(set_a, key)) {
-            // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by string.h
             cbm_ht_set(set_a, strdup(key), (void *)1);
         }
     }
@@ -141,7 +139,6 @@ double cbm_ngram_overlap(const char *a, const char *b, int n) {
         memcpy(key, b + i, (size_t)klen);
         key[klen] = '\0';
         if (!cbm_ht_get(set_b, key)) {
-            // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by string.h
             cbm_ht_set(set_b, strdup(key), (void *)1);
             if (cbm_ht_get(set_a, key)) {
                 intersection++;
@@ -296,21 +293,17 @@ bool cbm_paths_match(const char *call_path, const char *route_path) {
     int nc = 0;
     int nr = 0;
 
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     char *tok = strtok(call_copy, "/");
     while (tok && nc < 64) {
         call_segs[nc++] = tok;
-        // NOLINTNEXTLINE(concurrency-mt-unsafe)
         tok = strtok(NULL, "/");
     }
 
     /* Need to re-copy route since strtok consumed call_copy's context */
     normalize_to_buf(route_path, route_copy, sizeof(route_copy));
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     tok = strtok(route_copy, "/");
     while (tok && nr < 64) {
         route_segs[nr++] = tok;
-        // NOLINTNEXTLINE(concurrency-mt-unsafe)
         tok = strtok(NULL, "/");
     }
 
@@ -377,19 +370,15 @@ static double segment_jaccard(const char *norm_call, const char *norm_route) {
     int na = 0;
     int nb = 0;
 
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     char *t = strtok(a, "/");
     while (t && na < 64) {
         a_segs[na++] = t;
-        // NOLINTNEXTLINE(concurrency-mt-unsafe)
         t = strtok(NULL, "/");
     }
 
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     t = strtok(b, "/");
     while (t && nb < 64) {
         b_segs[nb++] = t;
-        // NOLINTNEXTLINE(concurrency-mt-unsafe)
         t = strtok(NULL, "/");
     }
 
@@ -451,18 +440,14 @@ double cbm_path_match_score(const char *call_path, const char *route_path) {
             char *rs[64];
             int nc2 = 0;
             int nr2 = 0;
-            // NOLINTNEXTLINE(concurrency-mt-unsafe)
             char *tk = strtok(c2, "/");
             while (tk && nc2 < 64) {
                 cs[nc2++] = tk;
-                // NOLINTNEXTLINE(concurrency-mt-unsafe)
                 tk = strtok(NULL, "/");
             }
-            // NOLINTNEXTLINE(concurrency-mt-unsafe)
             tk = strtok(r2, "/");
             while (tk && nr2 < 64) {
                 rs[nr2++] = tk;
-                // NOLINTNEXTLINE(concurrency-mt-unsafe)
                 tk = strtok(NULL, "/");
             }
 
@@ -488,7 +473,6 @@ double cbm_path_match_score(const char *call_path, const char *route_path) {
 
     /* Compute confidence: 0.5 × jaccard + 0.5 × depthFactor */
     double jaccard = segment_jaccard(norm_call, norm_route);
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     int depth = count_segments(is_suffix ? norm_route : norm_call);
     double depth_factor = (double)depth / DEPTH_DIVISOR;
     if (depth_factor > 1.0) {
@@ -514,19 +498,15 @@ bool cbm_same_service(const char *qn1, const char *qn2) {
     int na = 0;
     int nb = 0;
 
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     char *tok = strtok(a, ".");
     while (tok && na < 64) {
         a_segs[na++] = tok;
-        // NOLINTNEXTLINE(concurrency-mt-unsafe)
         tok = strtok(NULL, ".");
     }
 
-    // NOLINTNEXTLINE(concurrency-mt-unsafe)
     tok = strtok(b, ".");
     while (tok && nb < 64) {
         b_segs[nb++] = tok;
-        // NOLINTNEXTLINE(concurrency-mt-unsafe)
         tok = strtok(NULL, ".");
     }
 
@@ -575,7 +555,6 @@ const char *cbm_detect_protocol(const char *source) {
 }
 
 /* containsTestSegment: check if path has a segment that equals testWord */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static bool contains_test_segment(const char *fp, const char *test_word) {
     char work[1024];
     int len = (int)strlen(fp);
@@ -772,7 +751,6 @@ int cbm_extract_json_string_paths(const char *text, char **out, int max_out) {
 
 /* ── Route extraction: Python ──────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int cbm_extract_python_routes(const char *name, const char *qn, const char **decorators, int ndec,
                               cbm_route_handler_t *out, int max_out) {
     if (!decorators || ndec <= 0) {
@@ -854,7 +832,6 @@ int cbm_extract_python_routes(const char *name, const char *qn, const char **dec
 
 /* ── Route extraction: Go gin/chi ──────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int cbm_extract_go_routes(const char *name, const char *qn, const char *source,
                           cbm_route_handler_t *out, int max_out) {
     if (!source || !*source) {
@@ -1120,7 +1097,6 @@ int cbm_extract_go_routes(const char *name, const char *qn, const char *source,
 
 /* ── Route extraction: Java Spring ─────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int cbm_extract_java_routes(const char *name, const char *qn, const char **decorators, int ndec,
                             cbm_route_handler_t *out, int max_out) {
     if (!decorators || ndec <= 0) {
@@ -1215,7 +1191,6 @@ int cbm_extract_java_routes(const char *name, const char *qn, const char **decor
 
 /* ── Route extraction: Kotlin Ktor ─────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int cbm_extract_ktor_routes(const char *name, const char *qn, const char *source,
                             cbm_route_handler_t *out, int max_out) {
     if (!source || !*source) {
@@ -1264,7 +1239,6 @@ int cbm_extract_ktor_routes(const char *name, const char *qn, const char *source
     while (count < max_out && cbm_regexec(&ktor_re, p, 3, match, 0) == 0) {
         /* Make sure this isn't the webSocket match (check if preceded by "web") */
         const char *match_start = p + match[0].rm_so;
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         bool is_ws = (match_start >= source + 3 && strncmp(match_start - 3, "web", 3) == 0);
 
         if (!is_ws) {
@@ -1315,7 +1289,6 @@ static bool is_express_receiver(const char *receiver) {
     return false;
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int cbm_extract_express_routes(const char *name, const char *qn, const char *source,
                                cbm_route_handler_t *out, int max_out) {
     if (!source || !*source) {
@@ -1381,7 +1354,6 @@ int cbm_extract_express_routes(const char *name, const char *qn, const char *sou
 
 /* ── Route extraction: Laravel ─────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int cbm_extract_laravel_routes(const char *name, const char *qn, const char *source,
                                cbm_route_handler_t *out, int max_out) {
     if (!source || !*source) {
@@ -1442,7 +1414,6 @@ int cbm_extract_laravel_routes(const char *name, const char *qn, const char *sou
 
 /* ── Read source lines ─────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 char *cbm_read_source_lines_disk(const char *root_dir, const char *rel_path, int start_line,
                                  int end_line) {
     char full_path[2048];
@@ -1494,7 +1465,6 @@ char *cbm_read_source_lines_disk(const char *root_dir, const char *rel_path, int
 
     (void)fclose(f);
     if (result) {
-        // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
         result[result_len] = '\0';
     }
     return result;
@@ -1502,7 +1472,6 @@ char *cbm_read_source_lines_disk(const char *root_dir, const char *rel_path, int
 
 /* ── Read source lines from cached buffer ──────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 char *cbm_read_source_lines_cached(const char *source, int source_len, int start_line,
                                    int end_line) {
     if (!source || source_len <= 0 || start_line <= 0 || end_line < start_line) {
@@ -1558,7 +1527,6 @@ char *cbm_read_source_lines_cached(const char *source, int source_len, int start
     }
 
     if (result) {
-        // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
         result[result_len] = '\0';
     }
     return result;
@@ -1635,7 +1603,6 @@ cbm_httplink_config_t cbm_httplink_load_config(const char *dir) {
 
     size_t nread = fread(buf, 1, (size_t)size, f);
     (void)fclose(f);
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     buf[nread] = '\0';
 
     /* Parse YAML */
@@ -1652,7 +1619,6 @@ cbm_httplink_config_t cbm_httplink_load_config(const char *dir) {
 
     /* Extract fuzzy_matching */
     if (cbm_yaml_has(root, "http_linker.fuzzy_matching")) {
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         cfg.fuzzy_matching = cbm_yaml_get_bool(root, "http_linker.fuzzy_matching", true) ? 1 : 0;
     }
 
@@ -1660,11 +1626,9 @@ cbm_httplink_config_t cbm_httplink_load_config(const char *dir) {
     const char *items[128];
     int count = cbm_yaml_get_str_list(root, "http_linker.exclude_paths", items, 128);
     if (count > 0) {
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         cfg.exclude_paths = calloc((size_t)count, sizeof(char *));
         if (cfg.exclude_paths) {
             for (int i = 0; i < count; i++) {
-                // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
                 cfg.exclude_paths[i] = strdup(items[i]);
             }
             cfg.exclude_path_count = count;
@@ -1682,7 +1646,6 @@ void cbm_httplink_config_free(cbm_httplink_config_t *cfg) {
     for (int i = 0; i < cfg->exclude_path_count; i++) {
         free(cfg->exclude_paths[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(cfg->exclude_paths);
     cfg->exclude_paths = NULL;
     cfg->exclude_path_count = 0;

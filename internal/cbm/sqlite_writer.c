@@ -168,7 +168,6 @@ static int int_storage_bytes(int serial_type) {
 }
 
 // Write integer in big-endian for given byte count
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void put_int_be(uint8_t *buf, int64_t val, int nbytes) {
     for (int i = nbytes - 1; i >= 0; i--) {
         buf[i] = (uint8_t)(val & BYTE_MASK);
@@ -214,7 +213,6 @@ static bool dynbuf_ensure(DynBuf *b, int needed) {
     }
     uint8_t *p = (uint8_t *)realloc(b->data, newcap);
     if (!p) {
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,cert-err33-c)
         fprintf(stderr, "cbm_write_db: dynbuf realloc failed size=%d\n", newcap);
         return false;
     }
@@ -380,7 +378,6 @@ static void pb_flush_leaf(PageBuilder *pb) {
 
     int hdr = pb->page1_offset;
     // Write leaf page header
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     pb->page[hdr + 0] = pb->is_index ? BTREE_LEAF_INDEX : BTREE_LEAF_TABLE; // leaf flag
     put_u16(pb->page + hdr + 1, 0);                                         // first freeblock
     put_u16(pb->page + hdr + 3, (uint16_t)pb->cell_count);
@@ -390,9 +387,7 @@ static void pb_flush_leaf(PageBuilder *pb) {
     // Write page to file
     uint32_t page_num = pb->next_page;
     long offset = (long)(page_num - 1) * PAGE_SIZE;
-    // NOLINTNEXTLINE(cert-err33-c) — best-effort page write, errors detected at fclose
     fseek(pb->fp, offset, SEEK_SET);
-    // NOLINTNEXTLINE(cert-err33-c) — best-effort page write, errors detected at fclose
     fwrite(pb->page, 1, PAGE_SIZE, pb->fp);
 
     // Record this leaf for interior page building
@@ -555,7 +550,6 @@ static uint32_t pb_build_interior(PageBuilder *pb, bool is_index) {
 
             // Write the interior page
             uint32_t pnum = pb->next_page++;
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
             page[0] = is_index ? 0x02 : 0x05;
             put_u16(page + 1, 0);
             put_u16(page + 3, (uint16_t)cell_count);
@@ -563,9 +557,7 @@ static uint32_t pb_build_interior(PageBuilder *pb, bool is_index) {
             page[7] = 0;
             put_u32(page + 8, right_child_page);
 
-            // NOLINTNEXTLINE(cert-err33-c) — best-effort page write, errors detected at fclose
             fseek(pb->fp, (long)(pnum - 1) * PAGE_SIZE, SEEK_SET);
-            // NOLINTNEXTLINE(cert-err33-c) — best-effort page write, errors detected at fclose
             fwrite(page, 1, PAGE_SIZE, pb->fp);
 
             // Record this interior page as a parent for the next level
@@ -842,7 +834,6 @@ static void pb_ensure_leaf_cap(PageBuilder *pb) {
 
 // Add a table cell to the PageBuilder, flushing leaf pages as needed.
 static void pb_add_table_cell_with_flush(PageBuilder *pb, int64_t rowid, const uint8_t *payload,
-                                         // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                                          int payload_len, int64_t prev_rowid) {
     int cell_len = 0;
     uint8_t *cell = build_table_cell(rowid, payload, payload_len, &cell_len);
@@ -904,23 +895,19 @@ static uint32_t write_table_btree(FILE *fp, uint32_t *next_page, const uint8_t *
         uint32_t pnum = (*next_page)++;
         uint8_t page[PAGE_SIZE];
         memset(page, 0, PAGE_SIZE);
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         int hdr = first_is_page1 ? 100 : 0;
         page[hdr] = BTREE_LEAF_TABLE;                 // leaf table
         put_u16(page + hdr + 1, 0);                   // no freeblocks
         put_u16(page + hdr + 3, 0);                   // 0 cells
         put_u16(page + hdr + 5, (uint16_t)PAGE_SIZE); // content at end of page
         page[hdr + 7] = 0;                            // 0 fragmented bytes
-        // NOLINTNEXTLINE(cert-err33-c) — best-effort page write, errors detected at fclose
         fseek(fp, (long)(pnum - 1) * PAGE_SIZE, SEEK_SET);
-        // NOLINTNEXTLINE(cert-err33-c) — best-effort page write, errors detected at fclose
         fwrite(page, 1, PAGE_SIZE, fp);
         return pnum;
     }
 
     PageBuilder pb;
     pb_init(&pb, fp, *next_page, false);
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     pb.page1_offset = first_is_page1 ? 100 : 0;
     pb.ptr_offset = pb.page1_offset + 8;
 
@@ -944,9 +931,7 @@ static uint32_t write_index_btree(FILE *fp, uint32_t *next_page, uint8_t **cells
         put_u16(page + 3, 0);                   // 0 cells
         put_u16(page + 5, (uint16_t)PAGE_SIZE); // content at end of page
         page[7] = 0;                            // 0 fragmented bytes
-        // NOLINTNEXTLINE(cert-err33-c) — best-effort page write, errors detected at fclose
         fseek(fp, (long)(pnum - 1) * PAGE_SIZE, SEEK_SET);
-        // NOLINTNEXTLINE(cert-err33-c) — best-effort page write, errors detected at fclose
         fwrite(page, 1, PAGE_SIZE, fp);
         return pnum;
     }
@@ -1072,7 +1057,6 @@ static inline const char *safe_str(const char *s) {
 static int *make_sorted_perm(int n, int (*cmp)(const void *, const void *)) {
     int *perm = (int *)malloc(n * sizeof(int));
     if (!perm) {
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,cert-err33-c)
         fprintf(stderr, "cbm_write_db: perm malloc failed n=%d size=%zu\n", n,
                 (size_t)n * sizeof(int));
         return NULL;
@@ -1086,7 +1070,6 @@ static int *make_sorted_perm(int n, int (*cmp)(const void *, const void *)) {
 
 // --- Node index comparators (project is same for all, skip it) ---
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int cmp_node_by_label(const void *a, const void *b) {
     int ia = *(const int *)a;
     int ib = *(const int *)b;
@@ -1097,7 +1080,6 @@ static int cmp_node_by_label(const void *a, const void *b) {
     return cmp_i64(g_sort_nodes[ia].id, g_sort_nodes[ib].id);
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int cmp_node_by_name(const void *a, const void *b) {
     int ia = *(const int *)a;
     int ib = *(const int *)b;
@@ -1108,7 +1090,6 @@ static int cmp_node_by_name(const void *a, const void *b) {
     return cmp_i64(g_sort_nodes[ia].id, g_sort_nodes[ib].id);
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int cmp_node_by_file(const void *a, const void *b) {
     int ia = *(const int *)a;
     int ib = *(const int *)b;
@@ -1119,7 +1100,6 @@ static int cmp_node_by_file(const void *a, const void *b) {
     return cmp_i64(g_sort_nodes[ia].id, g_sort_nodes[ib].id);
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int cmp_node_by_qn(const void *a, const void *b) {
     int ia = *(const int *)a;
     int ib = *(const int *)b;
@@ -1134,7 +1114,6 @@ static int cmp_node_by_qn(const void *a, const void *b) {
 // --- Edge index comparators ---
 
 // idx_edges_source: (source_id, type) + rowid
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int cmp_edge_by_source_type(const void *a, const void *b) {
     int ia = *(const int *)a;
     int ib = *(const int *)b;
@@ -1150,7 +1129,6 @@ static int cmp_edge_by_source_type(const void *a, const void *b) {
 }
 
 // idx_edges_target: (target_id, type) + rowid
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int cmp_edge_by_target_type(const void *a, const void *b) {
     int ia = *(const int *)a;
     int ib = *(const int *)b;
@@ -1166,7 +1144,6 @@ static int cmp_edge_by_target_type(const void *a, const void *b) {
 }
 
 // idx_edges_type: (project, type) + rowid
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int cmp_edge_by_type(const void *a, const void *b) {
     int ia = *(const int *)a;
     int ib = *(const int *)b;
@@ -1178,7 +1155,6 @@ static int cmp_edge_by_type(const void *a, const void *b) {
 }
 
 // idx_edges_target_type: (project, target_id, type) + rowid
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int cmp_edge_by_proj_target_type(const void *a, const void *b) {
     int ia = *(const int *)a;
     int ib = *(const int *)b;
@@ -1194,7 +1170,6 @@ static int cmp_edge_by_proj_target_type(const void *a, const void *b) {
 }
 
 // idx_edges_source_type: (project, source_id, type) + rowid
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int cmp_edge_by_proj_source_type(const void *a, const void *b) {
     int ia = *(const int *)a;
     int ib = *(const int *)b;
@@ -1210,16 +1185,13 @@ static int cmp_edge_by_proj_source_type(const void *a, const void *b) {
 }
 
 // idx_edges_url_path: (project, url_path_gen) + rowid — NULL sorts first
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int cmp_edge_by_url_path(const void *a, const void *b) {
     int ia = *(const int *)a;
     int ib = *(const int *)b;
     const char *ua = g_sort_edges[ia].url_path;
     const char *ub = g_sort_edges[ib].url_path;
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
-    bool na = (!ua || !ua[0]);
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
-    bool nb = (!ub || !ub[0]);
+    bool na = (!ua || ua[0] == '\0');
+    bool nb = (!ub || ub[0] == '\0');
     if (na && nb) {
         return cmp_i64(g_sort_edges[ia].id, g_sort_edges[ib].id);
     }
@@ -1237,7 +1209,6 @@ static int cmp_edge_by_url_path(const void *a, const void *b) {
 }
 
 // autoindex_edges_1: UNIQUE(source_id, target_id, type) + rowid
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static int cmp_edge_by_src_tgt_type(const void *a, const void *b) {
     int ia = *(const int *)a;
     int ib = *(const int *)b;
@@ -1272,7 +1243,7 @@ static void *sort_worker(void *arg) {
 
 // --- Main entry point ---
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters,readability-function-cognitive-complexity,readability-function-size)
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
 int cbm_write_db(const char *path, const char *project, const char *root_path,
                  const char *indexed_at, CBMDumpNode *nodes, int node_count, CBMDumpEdge *edges,
                  int edge_count) {
@@ -1294,7 +1265,6 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
             int rec_len;
             uint8_t *rec = build_node_record(&nodes[i], &rec_len);
             if (!rec) {
-                // NOLINTNEXTLINE(cert-err33-c) — best-effort cleanup on error path
                 fclose(fp);
                 return -3;
             }
@@ -1317,7 +1287,6 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
             int rec_len;
             uint8_t *rec = build_edge_record(&edges[i], &rec_len);
             if (!rec) {
-                // NOLINTNEXTLINE(cert-err33-c) — best-effort cleanup on error path
                 fclose(fp);
                 return -3;
             }
@@ -1465,20 +1434,16 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
     } while (0)
 
     uint32_t idx_nodes_label_root;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion,
     BUILD_NODE_2TEXT_INDEX_SORTED(nodes[si].label, nsorts[0].perm, idx_nodes_label_root);
 
     uint32_t idx_nodes_name_root;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion,
     BUILD_NODE_2TEXT_INDEX_SORTED(nodes[si].name, nsorts[1].perm, idx_nodes_name_root);
 
     uint32_t idx_nodes_file_root;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion,
     BUILD_NODE_2TEXT_INDEX_SORTED(nodes[si].file_path ? nodes[si].file_path : "", nsorts[2].perm,
                                   idx_nodes_file_root);
 
     uint32_t autoindex_nodes_root;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion,
     BUILD_NODE_2TEXT_INDEX_SORTED(nodes[si].qualified_name, nsorts[3].perm, autoindex_nodes_root);
 
 #undef BUILD_NODE_2TEXT_INDEX_SORTED
@@ -1531,7 +1496,6 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
 
     // idx_edges_source: (source_id, type) + rowid
     uint32_t idx_edges_source_root;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion,
     BUILD_EDGE_INDEX_SORTED(esorts[0].perm,
                             idx_cells[i] = build_index_entry_int_text_rowid(
                                 edges[si].source_id, edges[si].type, edges[si].id, &idx_lens[i]),
@@ -1539,7 +1503,6 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
 
     // idx_edges_target: (target_id, type) + rowid
     uint32_t idx_edges_target_root;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion,
     BUILD_EDGE_INDEX_SORTED(esorts[1].perm,
                             idx_cells[i] = build_index_entry_int_text_rowid(
                                 edges[si].target_id, edges[si].type, edges[si].id, &idx_lens[i]),
@@ -1547,7 +1510,6 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
 
     // idx_edges_type: (project, type) + rowid
     uint32_t idx_edges_type_root;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion,
     BUILD_EDGE_INDEX_SORTED(esorts[2].perm,
                             idx_cells[i] = build_index_entry_2text_rowid(
                                 edges[si].project, edges[si].type, edges[si].id, &idx_lens[i]),
@@ -1555,7 +1517,6 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
 
     // idx_edges_target_type: (project, target_id, type) + rowid
     uint32_t idx_edges_target_type_root;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion,
     BUILD_EDGE_INDEX_SORTED(
         esorts[3].perm,
         idx_cells[i] = build_index_entry_text_int_text_rowid(
@@ -1564,7 +1525,6 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
 
     // idx_edges_source_type: (project, source_id, type) + rowid
     uint32_t idx_edges_source_type_root;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion,
     BUILD_EDGE_INDEX_SORTED(
         esorts[4].perm,
         idx_cells[i] = build_index_entry_text_int_text_rowid(
@@ -1607,7 +1567,6 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         for (int i = 0; i < edge_count; i++) {
             free(idx_cells[i]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(idx_cells);
         free(idx_lens);
     } else {
@@ -1616,7 +1575,6 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
 
     // Autoindex for UNIQUE(source_id, target_id, type) on edges
     uint32_t autoindex_edges_root;
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion,
     BUILD_EDGE_INDEX_SORTED(
         esorts[6].perm,
         idx_cells[i] = build_index_entry_unique_2int_text_rowid(
@@ -1758,11 +1716,9 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
                 for (int j = 0; j < master_count; j++) {
                     free((void *)master_records[j]);
                 }
-                // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
                 free(master_records);
                 free(master_lens);
                 free(master_rowids);
-                // NOLINTNEXTLINE(cert-err33-c) — best-effort cleanup on error path
                 fclose(fp);
                 return -2;
             }
@@ -1808,36 +1764,29 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         // Set file change counter = version-valid-for = 1
         put_u32(page1 + HDR_OFF_FILE_CHANGE, 1);
 
-        // NOLINTNEXTLINE(cert-err33-c) — best-effort page write, errors detected at fclose
         fseek(fp, 0, SEEK_SET);
-        // NOLINTNEXTLINE(cert-err33-c) — best-effort page write, errors detected at fclose
         fwrite(page1, 1, PAGE_SIZE, fp);
     }
 
     for (int i = 0; i < master_count; i++) {
         free((void *)master_records[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(master_records);
     free(master_lens);
     free(master_rowids);
 
     // Ensure file size is exactly next_page * PAGE_SIZE
     // (pad any remaining space)
-    // NOLINTNEXTLINE(cert-err33-c) — best-effort file positioning
     fseek(fp, 0, SEEK_END);
     long file_size = ftell(fp);
     long expected_size = (long)(next_page - 1) * PAGE_SIZE;
     if (file_size < expected_size) {
         // Pad with zeros
         uint8_t zero = 0;
-        // NOLINTNEXTLINE(cert-err33-c) — best-effort padding write
         fseek(fp, expected_size - 1, SEEK_SET);
-        // NOLINTNEXTLINE(cert-err33-c) — best-effort padding write
         fwrite(&zero, 1, 1, fp);
     }
 
-    // NOLINTNEXTLINE(cert-err33-c) — caller checks return code from this function, not fclose
     fclose(fp);
     return 0;
 }

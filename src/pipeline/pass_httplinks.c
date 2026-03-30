@@ -17,13 +17,11 @@
  *
  * Depends on: pass_definitions, pass_calls (for cross-file prefix resolution)
  */
-// NOLINTNEXTLINE(misc-include-cleaner) — pipeline.h included for interface contract
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_internal.h"
 #include "pipeline/httplink.h"
 #include "pipeline/worker_pool.h"
 #include "graph_buffer/graph_buffer.h"
-// NOLINTNEXTLINE(misc-include-cleaner) — platform.h included for worker count
 #include "foundation/platform.h"
 #include "foundation/log.h"
 #include "foundation/compat.h"
@@ -86,7 +84,6 @@ static char *read_full_source(const cbm_pipeline_ctx_t *ctx, const char *rel_pat
     }
     size_t nread = fread(source, 1, (size_t)sz, f);
     (void)fclose(f);
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     source[nread] = '\0';
     return source;
 }
@@ -119,7 +116,6 @@ static char **extract_decorators(const char *json, int *out_count) {
         return NULL;
     }
 
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     char **out = calloc(cnt + 1, sizeof(char *));
     int idx = 0;
     yyjson_val *item;
@@ -127,7 +123,6 @@ static char **extract_decorators(const char *json, int *out_count) {
     yyjson_arr_iter_init(decs, &iter);
     while ((item = yyjson_arr_iter_next(&iter))) {
         if (yyjson_is_str(item)) {
-            // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
             char *s = strdup(yyjson_get_str(item));
             /* Collapse newlines to spaces so regex matches multiline decorators.
              * POSIX regex [[:space:]] may not match \n on all platforms. */
@@ -148,7 +143,6 @@ static char **extract_decorators(const char *json, int *out_count) {
     if (idx > 0) {
         return out;
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(out);
     return NULL;
 }
@@ -169,7 +163,6 @@ static bool is_test_from_json(const char *json) {
     }
     yyjson_val *root = yyjson_doc_get_root(doc);
     yyjson_val *v = yyjson_obj_get(root, "is_test");
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     bool result = v && yyjson_is_bool(v) && yyjson_get_bool(v);
     yyjson_doc_free(doc);
     return result;
@@ -220,7 +213,6 @@ static void free_decorators(char **decs) {
     for (int i = 0; decs[i]; i++) {
         free(decs[i]);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     free(decs);
 }
 
@@ -236,7 +228,6 @@ static bool has_suffix(const char *s, const char *suffix) {
 }
 
 static bool is_jsts_file(const char *path) {
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return has_suffix(path, ".js") || has_suffix(path, ".ts") || has_suffix(path, ".mjs") ||
            has_suffix(path, ".mts") || has_suffix(path, ".tsx");
 }
@@ -936,7 +927,6 @@ static int insert_route_nodes(cbm_pipeline_ctx_t *ctx, cbm_route_handler_t *rout
         char h_props_json[2048] = "{}";
         int h_start = 0;
         int h_end = 0;
-        // NOLINTNEXTLINE(misc-include-cleaner) — int64_t provided by standard header
         int64_t h_id = 0;
         if (handler_node) {
             if (handler_node->file_path) {
@@ -1067,7 +1057,6 @@ static int match_and_link(cbm_pipeline_ctx_t *ctx, cbm_route_handler_t *routes, 
             }
 
             /* Create edge */
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
             const char *edge_type = cs->is_async ? "ASYNC_CALLS" : "HTTP_CALLS";
             const char *band = cbm_confidence_band(score);
 
@@ -1214,7 +1203,6 @@ static void hl_site_worker(int worker_id, void *arg) {
             continue;
         }
 
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         bool is_async = has_async && !has_http;
 
         /* Extract URL paths */
@@ -1368,7 +1356,6 @@ int cbm_pipeline_pass_httplinks(cbm_pipeline_ctx_t *ctx) {
 
         if (total_site_nodes > 0) {
             all_site_nodes = malloc((size_t)total_site_nodes * sizeof(cbm_gbuf_node_t *));
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             all_site_labels = malloc((size_t)total_site_nodes * sizeof(const char *));
         }
 
@@ -1413,9 +1400,7 @@ int cbm_pipeline_pass_httplinks(cbm_pipeline_ctx_t *ctx) {
             }
             free(site_bufs);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(all_site_nodes);
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         free(all_site_labels);
     }
 

@@ -33,12 +33,11 @@
 typedef struct {
     char *project_name;
     char *root_path;
-    char last_head[64]; /* git HEAD hash */
-    bool is_git;        /* false → skip polling */
-    bool baseline_done; /* true after first poll */
-    int file_count;     /* approximate, for interval calc */
-    int interval_ms;    /* adaptive poll interval */
-    // NOLINTNEXTLINE(misc-include-cleaner) — int64_t provided by standard header
+    char last_head[64];   /* git HEAD hash */
+    bool is_git;          /* false → skip polling */
+    bool baseline_done;   /* true after first poll */
+    int file_count;       /* approximate, for interval calc */
+    int interval_ms;      /* adaptive poll interval */
     int64_t next_poll_ns; /* next poll time (monotonic ns) */
 } project_state_t;
 
@@ -70,7 +69,6 @@ struct cbm_watcher {
 
 static int64_t now_ns(void) {
     struct timespec ts;
-    // NOLINTNEXTLINE(misc-include-cleaner) — cbm_clock_gettime provided by standard header
     cbm_clock_gettime(CLOCK_MONOTONIC, &ts);
     return ((int64_t)ts.tv_sec * NS_PER_SEC) + ts.tv_nsec;
 }
@@ -90,14 +88,12 @@ int cbm_watcher_poll_interval_ms(int file_count) {
 static bool is_git_repo(const char *root_path) {
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "git -C '%s' rev-parse --git-dir >/dev/null 2>&1", root_path);
-    // NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c,concurrency-mt-unsafe)
     return system(cmd) == 0;
 }
 
 static int git_head(const char *root_path, char *out, size_t out_size) {
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "git -C '%s' rev-parse HEAD 2>/dev/null", root_path);
-    // NOLINTNEXTLINE(misc-include-cleaner,bugprone-command-processor,cert-env33-c)
     FILE *fp = cbm_popen(cmd, "r");
     if (!fp) {
         return -1;
@@ -122,7 +118,6 @@ static bool git_is_dirty(const char *root_path) {
              "git --no-optional-locks -C '%s' status --porcelain "
              "--untracked-files=normal 2>/dev/null",
              root_path);
-    // NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c)
     FILE *fp = cbm_popen(cmd, "r");
     if (!fp) {
         return false;
@@ -148,7 +143,6 @@ static bool git_is_dirty(const char *root_path) {
 static int git_file_count(const char *root_path) {
     char cmd[1024];
     snprintf(cmd, sizeof(cmd), "git -C '%s' ls-files 2>/dev/null | wc -l", root_path);
-    // NOLINTNEXTLINE(bugprone-command-processor,cert-env33-c)
     FILE *fp = cbm_popen(cmd, "r");
     if (!fp) {
         return 0;
@@ -170,7 +164,6 @@ static project_state_t *state_new(const char *name, const char *root_path) {
     if (!s) {
         return NULL;
     }
-    // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
     s->project_name = strdup(name);
     s->root_path = strdup(root_path);
     s->interval_ms = POLL_BASE_MS;
@@ -187,7 +180,6 @@ static void state_free(project_state_t *s) {
 }
 
 /* Hash table foreach callback to free state entries */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void free_state_entry(const char *key, void *val, void *ud) {
     (void)key;
     (void)ud;
@@ -330,7 +322,6 @@ typedef struct {
     int reindexed;
 } poll_ctx_t;
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void poll_project(const char *key, void *val, void *ud) {
     (void)key;
     poll_ctx_t *ctx = ud;

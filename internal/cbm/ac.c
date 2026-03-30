@@ -45,12 +45,10 @@ typedef struct {
 
 static void queue_init(Queue *q, int cap) {
     q->data = (int *)malloc(cap * sizeof(int));
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     q->head = q->tail = 0;
     q->cap = cap;
 }
 static void queue_push(Queue *q, int v) {
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     q->data[q->tail++] = v;
 }
 static int queue_pop(Queue *q) {
@@ -128,7 +126,6 @@ CBMAutomaton *cbm_ac_build(const char **patterns, const int *lengths, int count,
         }
         // Mark this state as accepting pattern p.
         if (p < CBM_AC_MAX_BITMASK) {
-            // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
             ac->output[state] |= (1ULL << p);
         }
         // Append to output list.
@@ -147,15 +144,12 @@ CBMAutomaton *cbm_ac_build(const char **patterns, const int *lengths, int count,
     int *fail = (int *)calloc(num_states, sizeof(int));
 
     Queue q;
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     queue_init(&q, num_states);
 
     // Depth-1 states: failure → root.
     for (int c = 0; c < alpha_size; c++) {
-        // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
         int s = ac->go_table[c]; // root's goto for c
         if (s != 0) {
-            // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
             fail[s] = 0;
             queue_push(&q, s);
         }
@@ -166,11 +160,9 @@ CBMAutomaton *cbm_ac_build(const char **patterns, const int *lengths, int count,
         int r = queue_pop(&q);
         for (int c = 0; c < alpha_size; c++) {
             int idx = (r * alpha_size) + c;
-            // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
             int s = ac->go_table[idx];
             if (s != -1) {
                 // s exists in trie
-                // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
                 fail[s] = ac->go_table[(fail[r] * alpha_size) + c];
                 // Merge output: dictionary suffix links.
                 ac->output[s] |= ac->output[fail[s]];
@@ -250,7 +242,6 @@ uint64_t cbm_ac_scan_bitmask(const CBMAutomaton *ac, const char *text, int text_
 
 // Thread-local reusable decompression buffer to avoid repeated malloc/free.
 // Each goroutine gets its own OS thread (via CGo), so CBM_TLS is safe.
-// NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI)
 static CBM_TLS char *tls_decomp_buf = NULL;
 static CBM_TLS int tls_decomp_cap = 0;
 
@@ -259,7 +250,6 @@ static char *get_decomp_buf(int needed) {
         free(tls_decomp_buf);
         // Round up to 64KB chunks for reuse.
         int cap = (needed + DECOMP_BUF_ALIGN_MASK) & ~DECOMP_BUF_ALIGN_MASK;
-        // NOLINTNEXTLINE(clang-analyzer-optin.portability.UnixAPI)
         tls_decomp_buf = (char *)malloc((size_t)cap);
         tls_decomp_cap = cap;
     }
@@ -364,7 +354,6 @@ int cbm_ac_scan_lz4_batch(const CBMAutomaton *ac, const CBMLz4Entry *entries, in
 //   num_names    — number of names
 //   out_matches  — output buffer for (name_index, pattern_id) pairs
 //   max_matches  — capacity of out_matches
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 int cbm_ac_scan_batch(const CBMAutomaton *ac, const char *names_buf, const int *name_offsets,
                       const int *name_lengths, int num_names, CBMMatchResult *out_matches,
                       int max_matches) {

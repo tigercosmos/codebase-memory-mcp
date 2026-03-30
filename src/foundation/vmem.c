@@ -72,11 +72,8 @@ static void check_pressure(size_t allocated) {
         char alloc_mb[32];
         char budget_mb[32];
         char pct_str[16];
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         snprintf(alloc_mb, sizeof(alloc_mb), "%zu", allocated / MB_DIVISOR);
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         snprintf(budget_mb, sizeof(budget_mb), "%zu", g_budget / MB_DIVISOR);
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         snprintf(pct_str, sizeof(pct_str), "%zu",
                  g_budget > 0 ? (allocated * 100) / g_budget : 0);
         cbm_log_warn("mem.pressure.warn", "allocated_mb", alloc_mb, "budget_mb", budget_mb, "pct",
@@ -87,11 +84,8 @@ static void check_pressure(size_t allocated) {
         char alloc_mb[32];
         char budget_mb[32];
         char pct_str[16];
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         snprintf(alloc_mb, sizeof(alloc_mb), "%zu", allocated / MB_DIVISOR);
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         snprintf(budget_mb, sizeof(budget_mb), "%zu", g_budget / MB_DIVISOR);
-        // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
         snprintf(pct_str, sizeof(pct_str), "%zu",
                  g_budget > 0 ? (allocated * 100) / g_budget : 0);
         cbm_log_info("mem.pressure.ok", "allocated_mb", alloc_mb, "budget_mb", budget_mb, "pct",
@@ -128,9 +122,7 @@ void cbm_vmem_init(double ram_fraction) {
 
     char budget_mb[32];
     char ram_mb[32];
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     snprintf(budget_mb, sizeof(budget_mb), "%zu", g_budget / MB_DIVISOR);
-    // NOLINTNEXTLINE(clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling)
     snprintf(ram_mb, sizeof(ram_mb), "%zu", info.total_ram / MB_DIVISOR);
     cbm_log_info("vmem.init", "budget_mb", budget_mb, "total_ram_mb", ram_mb);
 }

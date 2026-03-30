@@ -314,7 +314,6 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
 
 #define MIN_FILES_FOR_PARALLEL_INCR 50
     int worker_count = cbm_default_worker_count(true);
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     bool use_parallel = (worker_count > 1 && ci > MIN_FILES_FOR_PARALLEL_INCR);
 
     if (use_parallel) {

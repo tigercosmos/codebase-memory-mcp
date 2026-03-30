@@ -49,7 +49,6 @@ static char *read_file(const char *path, int *out_len) {
     size_t nread = fread(buf, 1, size, f);
     (void)fclose(f);
 
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     buf[nread] = '\0';
     *out_len = (int)nread;
     return buf;
@@ -68,7 +67,6 @@ static const char *itoa_log(int val) {
 /* Build per-file import map from cached extraction result or graph buffer edges.
  * Returns parallel arrays of (local_name, module_qn) pairs. Caller frees. */
 static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
-                            // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                             const CBMFileResult *result, const char ***out_keys,
                             const char ***out_vals, int *out_count) {
     *out_keys = NULL;
@@ -77,9 +75,7 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
 
     /* Fast path: build from cached extraction result (no JSON parsing) */
     if (result && result->imports.count > 0) {
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         const char **keys = calloc((size_t)result->imports.count, sizeof(const char *));
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         const char **vals = calloc((size_t)result->imports.count, sizeof(const char *));
         int count = 0;
 
@@ -94,7 +90,6 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
             if (!target) {
                 continue;
             }
-            // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
             keys[count] = strdup(imp->local_name);
             vals[count] = target->qualified_name; /* borrowed from gbuf */
             count++;
@@ -122,9 +117,7 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
         return 0;
     }
 
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     const char **keys = calloc(edge_count, sizeof(const char *));
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     const char **vals = calloc(edge_count, sizeof(const char *));
     int count = 0;
 
@@ -141,7 +134,6 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
                 start += strlen("\"local_name\":\"");
                 const char *end = strchr(start, '"');
                 if (end && end > start) {
-                    // NOLINTNEXTLINE(misc-include-cleaner) — strndup provided by standard header
                     char *key = cbm_strndup(start, end - start);
                     keys[count] = key;
                     vals[count] = target->qualified_name;
@@ -169,7 +161,6 @@ static void free_import_map(const char **keys, const char **vals, int count) {
     }
 }
 
-// NOLINTNEXTLINE(misc-include-cleaner) — cbm_file_info_t provided by standard header
 int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count) {
     cbm_log_info("pass.start", "pass", "calls", "files", itoa_log(file_count));
 
@@ -418,7 +409,6 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
  * creates CALLS edges from the endpoint to the dependency function.
  * Without this, FastAPI auth/DI functions appear as dead code (in_degree=0). */
 
-// NOLINTNEXTLINE(misc-include-cleaner) — cbm_file_info_t provided by standard header
 void cbm_pipeline_pass_fastapi_depends(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                                        int file_count) {
     cbm_regex_t depends_re;

@@ -66,7 +66,6 @@ static const char *clean_type_name(CBMArena *a, const char *name) {
 }
 
 // Extract type name from a type annotation node.
-// NOLINTNEXTLINE(misc-no-recursion)
 static const char *extract_type_text(CBMArena *a, TSNode node, const char *source) {
     const char *kind = ts_node_type(node);
     // For type_identifier / identifier, just get text
@@ -98,7 +97,6 @@ static const char *extract_type_text(CBMArena *a, TSNode node, const char *sourc
 }
 
 // Add a type reference for a function.
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void add_type_ref(CBMExtractCtx *ctx, const char *type_name, const char *func_qn) {
     if (!type_name || !type_name[0]) {
         return;
@@ -144,7 +142,6 @@ static void extract_return_type_refs(CBMExtractCtx *ctx, TSNode func_node, const
 }
 
 // Walk function body for type references (casts, type assertions, local var types, generics).
-// NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk
 static void walk_body_type_refs(CBMExtractCtx *ctx, TSNode node, const char *func_qn) {
     const char *kind = ts_node_type(node);
 
@@ -242,7 +239,6 @@ static void walk_body_type_refs(CBMExtractCtx *ctx, TSNode node, const char *fun
 }
 
 // Walk AST for function nodes, extract type references from signatures and bodies.
-// NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk
 static void walk_type_refs(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
     if (!spec->function_node_types || !spec->function_node_types[0]) {
         return;

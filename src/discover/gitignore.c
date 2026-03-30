@@ -39,7 +39,6 @@ struct cbm_gitignore {
  * Match a glob pattern against a string.
  * Handles: * (non-slash), ** (any path), ? (single non-slash), [class]
  */
-// NOLINTNEXTLINE(misc-no-recursion) — intentional recursive glob pattern matching
 static bool glob_match(const char *pat, const char *str) {
     while (*pat && *str) {
         if (pat[0] == '*' && pat[1] == '*') {
@@ -130,7 +129,6 @@ static bool glob_match(const char *pat, const char *str) {
                 pat++;
             }
             if (negate_class) {
-                // NOLINTNEXTLINE(readability-implicit-bool-conversion)
                 matched = !matched;
             }
             if (!matched) {
@@ -153,7 +151,6 @@ static bool glob_match(const char *pat, const char *str) {
         pat++;
     }
 
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return *pat == '\0' && *str == '\0';
 }
 
@@ -219,7 +216,6 @@ static void gi_add_pattern(cbm_gitignore_t *gi, const char *line, int len) {
         return;
     }
     memcpy(p.pattern, start, len);
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     p.pattern[len] = '\0';
 
     /* Grow array if needed */
@@ -296,7 +292,6 @@ cbm_gitignore_t *cbm_gitignore_load(const char *path) {
     }
 
     size_t n = fread(buf, 1, size, f);
-    // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
     buf[n] = '\0';
     (void)fclose(f);
 
@@ -355,7 +350,6 @@ bool cbm_gitignore_matches(const cbm_gitignore_t *gi, const char *rel_path, bool
         }
 
         if (this_match) {
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
             matched = !p->negated;
         }
     }

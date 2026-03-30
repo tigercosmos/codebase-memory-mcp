@@ -45,7 +45,6 @@ static const char *ci_strstr(const char *haystack, const char *needle) {
     }
     size_t nlen = strlen(needle);
     for (; *haystack; haystack++) {
-        // NOLINTNEXTLINE(misc-include-cleaner) — strncasecmp provided by standard header
         if (strncasecmp(haystack, needle, nlen) == 0) {
             return haystack;
         }
@@ -139,7 +138,6 @@ bool cbm_is_compose_file(const char *name) {
     char lower[256];
     to_lower(name, lower, sizeof(lower));
 
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     bool prefix_match = (strncmp(lower, "docker-compose", LEN_DOCKER_COMPOSE) == 0) ||
                         (strcmp(lower, "compose.yml") == 0) || (strcmp(lower, "compose.yaml") == 0);
     if (!prefix_match) {
@@ -150,7 +148,6 @@ bool cbm_is_compose_file(const char *name) {
     if (!ext) {
         return false;
     }
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return (strcmp(ext, ".yml") == 0 || strcmp(ext, ".yaml") == 0);
 }
 
@@ -168,7 +165,6 @@ bool cbm_is_cloudbuild_file(const char *name) {
     if (!ext) {
         return false;
     }
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return (strcmp(ext, ".yml") == 0 || strcmp(ext, ".yaml") == 0);
 }
 
@@ -204,7 +200,6 @@ bool cbm_is_kustomize_file(const char *name) {
     return strcmp(lower, "kustomization.yml") == 0;
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 bool cbm_is_k8s_manifest(const char *name, const char *content) {
     if (!name || !content || cbm_is_kustomize_file(name)) {
         return false;
@@ -217,13 +212,11 @@ bool cbm_is_k8s_manifest(const char *name, const char *content) {
     return ci_strstr(buf, "apiVersion:") != NULL;
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 bool cbm_is_shell_script(const char *name, const char *ext) {
     (void)name;
     if (!ext) {
         return false;
     }
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return (strcmp(ext, ".sh") == 0 || strcmp(ext, ".bash") == 0 || strcmp(ext, ".zsh") == 0);
 }
 
@@ -292,7 +285,6 @@ bool cbm_is_secret_value(const char *value) {
     return false;
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 bool cbm_is_secret_binding(const char *key, const char *value) {
     if (key && key_is_secret(key)) {
         return true;
@@ -861,10 +853,8 @@ int cbm_parse_shell_source(const char *source, cbm_shell_result_t *out) {
     /* Result is non-empty if we have more than just infra_type.
      * In Go: len(props) > 1, where props always has infra_type.
      * Here: check if we have shebang OR env_vars OR sources OR docker_cmds. */
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     bool has_content = out->shebang[0] != '\0' || out->env_count > 0 || out->source_count > 0 ||
                        out->docker_cmd_count > 0;
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return has_content ? 0 : -1;
 }
 
@@ -879,7 +869,6 @@ typedef enum {
 
 /* Extract a double-quoted string value after = sign.
  * Handles: key = "value" and key = value */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void tf_extract_quoted(const char *line, const char *prefix, char *out, size_t out_sz) {
     const char *p = skip_ws(line);
     size_t plen = strlen(prefix);
@@ -1154,17 +1143,14 @@ int cbm_parse_terraform_source(const char *source, cbm_terraform_result_t *out) 
     }
 
     /* Check if we extracted anything useful */
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     bool has_content = out->resource_count > 0 || out->variable_count > 0 ||
                        out->output_count > 0 || out->provider_count > 0 || out->module_count > 0 ||
                        out->data_source_count > 0 || out->backend[0] != '\0' || out->has_locals;
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return has_content ? 0 : -1;
 }
 
 /* ── Infra QN helper ────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 char *cbm_infra_qn(const char *project_name, const char *rel_path, const char *infra_type,
                    const char *service_name) {
     char *base = cbm_pipeline_fqn_compute(project_name, rel_path, "");
@@ -1181,6 +1167,5 @@ char *cbm_infra_qn(const char *project_name, const char *rel_path, const char *i
     }
 
     free(base);
-    // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
     return strdup(result);
 }

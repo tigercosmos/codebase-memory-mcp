@@ -141,14 +141,12 @@ bool cbm_is_exported(const char *name, CBMLanguage lang) {
     }
     switch (lang) {
     case CBM_LANG_GO:
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return (name[0] >= 'A' && name[0] <= 'Z');
     case CBM_LANG_PYTHON:
         return (name[0] != '_');
     case CBM_LANG_JAVA:
     case CBM_LANG_CSHARP:
     case CBM_LANG_KOTLIN:
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return (name[0] >= 'A' && name[0] <= 'Z');
     default:
         return true;
@@ -201,14 +199,12 @@ bool cbm_is_test_file(const char *rel_path, CBMLanguage lang) {
     case CBM_LANG_GO:
         return has_suffix(base, "_test.go");
     case CBM_LANG_PYTHON:
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return has_prefix(base, "test_") || has_suffix(base, "_test.py");
     case CBM_LANG_JAVASCRIPT:
     case CBM_LANG_TYPESCRIPT:
     case CBM_LANG_TSX: {
         char noext[256];
         strip_ext(base, noext, sizeof(noext));
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return has_suffix(noext, ".test") || has_suffix(noext, ".spec") ||
                has_suffix(noext, "_test") || has_suffix(noext, "_spec") ||
                has_prefix(base, "test_");
@@ -216,31 +212,25 @@ bool cbm_is_test_file(const char *rel_path, CBMLanguage lang) {
     case CBM_LANG_JAVA:
     case CBM_LANG_KOTLIN:
     case CBM_LANG_SCALA:
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return has_suffix(base, "Test.java") || has_suffix(base, "Tests.java") ||
                has_suffix(base, "Spec.java") || has_suffix(base, "Test.kt") ||
                has_suffix(base, "Spec.kt") || has_suffix(base, "Test.scala") ||
                has_suffix(base, "Spec.scala");
     case CBM_LANG_RUST:
         // Rust tests are typically mod tests inside the file, but test files too
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return has_suffix(base, "_test.rs") || has_prefix(base, "test_");
     case CBM_LANG_RUBY:
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return has_suffix(base, "_test.rb") || has_suffix(base, "_spec.rb") ||
                has_prefix(base, "test_");
     case CBM_LANG_PHP:
         return has_suffix(base, "Test.php");
     case CBM_LANG_CSHARP:
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return has_suffix(base, "Tests.cs") || has_suffix(base, "Test.cs");
     case CBM_LANG_CPP:
     case CBM_LANG_C:
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return has_suffix(base, "_test.c") || has_suffix(base, "_test.cc") ||
                has_suffix(base, "_test.cpp") || has_prefix(base, "test_");
     case CBM_LANG_MATLAB:
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return has_prefix(base, "test_") || has_prefix(base, "Test");
     default:
         return false;
@@ -290,7 +280,6 @@ bool cbm_has_ancestor_kind(TSNode node, const char *kind, int max_depth) {
 }
 
 // Recursive branching count
-// NOLINTNEXTLINE(misc-no-recursion) — intentional AST tree walk
 static int count_branching_rec(TSNode node, const char **types) {
     int count = 0;
     const char *kind = ts_node_type(node);
@@ -411,7 +400,6 @@ TSNode cbm_find_enclosing_func(TSNode node, CBMLanguage lang) {
             break;
         }
         const char *pk = ts_node_type(parent);
-        // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
         for (const char **k = kinds; *k; k++) {
             if (strcmp(pk, *k) == 0) {
                 return parent;
@@ -461,9 +449,7 @@ static const char *func_node_name(CBMArena *a, TSNode func_node, const char *sou
     return NULL;
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 const char *cbm_enclosing_func_qn(CBMArena *a, TSNode node, CBMLanguage lang, const char *source,
-                                  // NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
                                   const char *project, const char *rel_path,
                                   const char *module_qn) {
     TSNode func_node = cbm_find_enclosing_func(node, lang);
@@ -573,7 +559,6 @@ bool cbm_is_module_level(TSNode node, CBMLanguage lang) {
         }
         if (strcmp(pk, "expression_statement") == 0) {
             TSNode gp = ts_node_parent(parent);
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
             return !ts_node_is_null(gp) && strcmp(ts_node_type(gp), "module") == 0;
         }
         return false;
@@ -586,7 +571,6 @@ bool cbm_is_module_level(TSNode node, CBMLanguage lang) {
         }
         if (strcmp(pk, "export_statement") == 0) {
             TSNode gp = ts_node_parent(parent);
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
             return !ts_node_is_null(gp) && strcmp(ts_node_type(gp), "program") == 0;
         }
         return false;
@@ -600,7 +584,6 @@ bool cbm_is_module_level(TSNode node, CBMLanguage lang) {
         // assignment_statement -> chunk
         if (strcmp(pk, "assignment_statement") == 0) {
             TSNode gp = ts_node_parent(parent);
-            // NOLINTNEXTLINE(readability-implicit-bool-conversion)
             return !ts_node_is_null(gp) && strcmp(ts_node_type(gp), "chunk") == 0;
         }
         return false;
@@ -608,7 +591,6 @@ bool cbm_is_module_level(TSNode node, CBMLanguage lang) {
 
     // YAML: document or stream
     if (lang == CBM_LANG_YAML) {
-        // NOLINTNEXTLINE(readability-implicit-bool-conversion)
         return strcmp(pk, "document") == 0 || strcmp(pk, "stream") == 0 ||
                strcmp(pk, "block_mapping") == 0;
     }
@@ -720,7 +702,6 @@ bool cbm_is_module_level(TSNode node, CBMLanguage lang) {
         return false;
     }
     if (parents) {
-        // NOLINTNEXTLINE(clang-analyzer-security.ArrayBound)
         for (const char **p = parents; *p; p++) {
             if (strcmp(pk, *p) == 0) {
                 return true;
@@ -935,7 +916,6 @@ static bool is_env_var_pattern(const char *s, int len) {
             return false;
         }
     }
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     return has_upper && has_underscore;
 }
 

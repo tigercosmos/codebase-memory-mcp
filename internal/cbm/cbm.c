@@ -27,13 +27,11 @@ static _Atomic uint64_t total_files = 0;
 
 static uint64_t now_ns(void) {
     struct timespec ts;
-    // NOLINTNEXTLINE(misc-include-cleaner) — clock_gettime provided by standard header
     cbm_clock_gettime(CLOCK_MONOTONIC, &ts);
     return ((uint64_t)ts.tv_sec * NSEC_PER_SEC) + (uint64_t)ts.tv_nsec;
 }
 
 // cbm_get_profile returns accumulated parse/extract times and file count.
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 void cbm_get_profile(uint64_t *parse_ns, uint64_t *extract_ns, uint64_t *files) {
     *parse_ns = atomic_load(&total_parse_ns);
     *extract_ns = atomic_load(&total_extract_ns);

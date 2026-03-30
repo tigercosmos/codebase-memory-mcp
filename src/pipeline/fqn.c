@@ -21,7 +21,6 @@
 /* Build a dot-joined string from segments. Returns heap-allocated string. */
 static char *join_segments(const char **segments, int count) {
     if (count == 0) {
-        // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
         return strdup("");
     }
     size_t total = 0;
@@ -50,7 +49,6 @@ static char *join_segments(const char **segments, int count) {
 
 /* ── Public API ──────────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 char *cbm_pipeline_fqn_compute(const char *project, const char *rel_path, const char *name) {
     if (!project) {
         return strdup("");
@@ -125,7 +123,6 @@ char *cbm_pipeline_fqn_module(const char *project, const char *rel_path) {
     return cbm_pipeline_fqn_compute(project, rel_path, NULL);
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 char *cbm_pipeline_fqn_folder(const char *project, const char *rel_dir) {
     if (!project) {
         return strdup("");

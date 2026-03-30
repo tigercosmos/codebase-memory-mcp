@@ -147,14 +147,12 @@ cbm_registry_t *cbm_registry_new(void) {
     return r;
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void free_label(const char *key, void *value, void *ud) {
     (void)ud;
     free((void *)key);
     free(value);
 }
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void free_qn_array(const char *key, void *value, void *ud) {
     (void)ud;
     qn_array_t *arr = value;
@@ -162,7 +160,6 @@ static void free_qn_array(const char *key, void *value, void *ud) {
         for (int i = 0; i < arr->count; i++) {
             free(arr->items[i]);
         }
-        // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
         cbm_da_free(arr);
         free(arr);
     }
@@ -182,7 +179,6 @@ void cbm_registry_free(cbm_registry_t *r) {
 
 /* ── Registration ────────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 void cbm_registry_add(cbm_registry_t *r, const char *name, const char *qualified_name,
                       const char *label) {
     (void)name;
@@ -196,7 +192,6 @@ void cbm_registry_add(cbm_registry_t *r, const char *name, const char *qualified
     }
 
     /* Store in exact map: QN → label */
-    // NOLINTNEXTLINE(misc-include-cleaner) — strdup provided by standard header
     cbm_ht_set(r->exact, strdup(qualified_name), strdup(label));
 
     /* Index by simple name.
@@ -207,7 +202,6 @@ void cbm_registry_add(cbm_registry_t *r, const char *name, const char *qualified
         arr = calloc(1, sizeof(qn_array_t));
         cbm_ht_set(r->by_name, strdup(simple), arr);
     }
-    // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
     cbm_da_push(arr, strdup(qualified_name));
 }
 
@@ -258,7 +252,6 @@ struct ims_ctx {
     const char *found_key;
 };
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void ims_scan(const char *key, void *value, void *ud) {
     (void)value;
     struct ims_ctx *ctx = ud;
@@ -274,7 +267,6 @@ static void ims_scan(const char *key, void *value, void *ud) {
 }
 
 /* Strategy 1: Import map lookup (exact → suffix fallback) */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static cbm_resolution_t resolve_import_map(const cbm_registry_t *r, const char *prefix,
                                            const char *suffix, const char **keys, const char **vals,
                                            int map_count) {
@@ -331,7 +323,6 @@ static cbm_resolution_t resolve_import_map(const cbm_registry_t *r, const char *
 }
 
 /* Strategy 2: Same-module match */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static cbm_resolution_t resolve_same_module(const cbm_registry_t *r, const char *callee_name,
                                             const char *suffix, const char *module_qn) {
     char candidate[512];
@@ -351,7 +342,6 @@ static cbm_resolution_t resolve_same_module(const cbm_registry_t *r, const char 
 }
 
 /* Strategy 3+4: Name lookup + suffix match */
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static cbm_resolution_t resolve_name_lookup(const cbm_registry_t *r, const char *callee_name,
                                             const char *module_qn, const char **import_vals,
                                             int import_count) {
@@ -483,7 +473,6 @@ cbm_fuzzy_result_t cbm_registry_fuzzy_resolve(const cbm_registry_t *r, const cha
         return no_match;
     }
 
-    // NOLINTNEXTLINE(readability-implicit-bool-conversion)
     bool have_imports = (import_map_vals && import_map_count > 0);
 
     /* Single candidate */
@@ -542,7 +531,6 @@ struct few_ctx {
     int cap;
 };
 
-// NOLINTNEXTLINE(bugprone-easily-swappable-parameters)
 static void few_scan(const char *key, void *value, void *ud) {
     (void)value;
     struct few_ctx *ctx = ud;
@@ -550,7 +538,6 @@ static void few_scan(const char *key, void *value, void *ud) {
     if (klen >= ctx->target_len && strcmp(key + klen - ctx->target_len, ctx->target) == 0) {
         if (ctx->count >= ctx->cap) {
             ctx->cap = ctx->cap ? ctx->cap * 2 : 16;
-            // NOLINTNEXTLINE(bugprone-multi-level-implicit-pointer-conversion)
             ctx->results = safe_realloc(ctx->results, (size_t)ctx->cap * sizeof(char *));
         }
         ctx->results[ctx->count++] = key;

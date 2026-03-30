@@ -264,6 +264,7 @@ void cbm_gbuf_set_next_id(cbm_gbuf_t *gb, int64_t next_id) {
 
 /* ── Node operations ─────────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int64_t cbm_gbuf_upsert_node(cbm_gbuf_t *gb, const char *label, const char *name,
                              const char *qualified_name, const char *file_path, int start_line,
                              int end_line, const char *properties_json) {
@@ -397,6 +398,7 @@ int cbm_gbuf_node_count(const cbm_gbuf_t *gb) {
     return gb ? (int)cbm_ht_count(gb->node_by_qn) : 0;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_gbuf_delete_by_label(cbm_gbuf_t *gb, const char *label) {
     if (!gb || !label) {
         return -1;
@@ -494,6 +496,7 @@ int cbm_gbuf_delete_by_label(cbm_gbuf_t *gb, const char *label) {
     return 0;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_gbuf_delete_by_file(cbm_gbuf_t *gb, const char *file_path) {
     if (!gb || !file_path) {
         return -1;
@@ -743,6 +746,7 @@ void cbm_gbuf_foreach_edge(const cbm_gbuf_t *gb, cbm_gbuf_edge_visitor_fn fn, vo
 
 /* ── Edge operations ─────────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int64_t cbm_gbuf_insert_edge(cbm_gbuf_t *gb, int64_t source_id, int64_t target_id, const char *type,
                              const char *properties_json) {
     if (!gb || !type) {
@@ -867,6 +871,7 @@ int cbm_gbuf_edge_count_by_type(const cbm_gbuf_t *gb, const char *type) {
     return arr ? arr->count : 0;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_gbuf_delete_edges_by_type(cbm_gbuf_t *gb, const char *type) {
     if (!gb || !type) {
         return -1;
@@ -930,6 +935,7 @@ static void free_remap_entry(const char *key, void *val, void *ud) {
     free(val);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_gbuf_merge(cbm_gbuf_t *dst, cbm_gbuf_t *src) {
     if (!dst || !src) {
         return -1;
@@ -1080,6 +1086,7 @@ static char *extract_url_path(const char *props) {
     return cbm_strndup(key, (size_t)(end - key));
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
     if (!gb || !path) {
         return -1;

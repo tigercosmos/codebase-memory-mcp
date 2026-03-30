@@ -190,6 +190,7 @@ static file_type_t detect_file_type(const char *name) {
 
 /* ── Line scanner ──────────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int scan_line(const char *line, file_type_t ft, char *key_out, size_t key_sz, char *val_out,
                      size_t val_sz) {
     cbm_regmatch_t m[5];
@@ -327,6 +328,7 @@ static int scan_line(const char *line, file_type_t ft, char *key_out, size_t key
 
 /* ── Public API ────────────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_scan_project_env_urls(const char *root_path, cbm_env_binding_t *out, int max_out) {
     if (!root_path || !out || max_out <= 0) {
         return 0;

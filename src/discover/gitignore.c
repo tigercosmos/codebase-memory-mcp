@@ -39,6 +39,7 @@ struct cbm_gitignore {
  * Match a glob pattern against a string.
  * Handles: * (non-slash), ** (any path), ? (single non-slash), [class]
  */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static bool glob_match(const char *pat, const char *str) {
     while (*pat && *str) {
         if (pat[0] == '*' && pat[1] == '*') {
@@ -300,6 +301,7 @@ cbm_gitignore_t *cbm_gitignore_load(const char *path) {
     return gi;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 bool cbm_gitignore_matches(const cbm_gitignore_t *gi, const char *rel_path, bool is_dir) {
     if (!gi || !rel_path) {
         return false;

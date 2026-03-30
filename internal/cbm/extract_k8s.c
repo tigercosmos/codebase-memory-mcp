@@ -91,6 +91,7 @@ static void emit_kustomize_sequence(CBMExtractCtx *ctx, TSNode seq_node, const c
     }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void extract_kustomize(CBMExtractCtx *ctx) {
     CBMArena *a = ctx->arena;
 
@@ -156,6 +157,7 @@ static void extract_kustomize(CBMExtractCtx *ctx) {
 
 // Descend into the first block_mapping of a document and extract apiVersion,
 // kind, and metadata.name. Returns void; fills kind_buf and meta_name_buf.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void extract_k8s_scalars(CBMExtractCtx *ctx, TSNode mapping, char *kind_buf, size_t kind_sz,
                                 char *meta_name_buf, size_t meta_sz) {
     CBMArena *a = ctx->arena;

@@ -123,6 +123,7 @@ static const char *url_path(const char *url) {
 
 /* Extract service name from Cloud Run URL hostname.
  * "my-svc-ab12cd34ef-uc.a.run.app/path" → "my-svc" */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static const char *extract_service_name(const char *url, char *buf, int bufsz) {
     if (!url) {
         return NULL;
@@ -197,6 +198,7 @@ static const char *extract_service_name(const char *url, char *buf, int bufsz) {
 }
 
 /* Phase 2: Match infra Route URLs to handler Route nodes by URL path + service name. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void match_infra_routes(cbm_gbuf_t *gb) {
     /* Collect infra Routes (from YAML) and handler Routes (from Python decorators) */
     const cbm_gbuf_node_t **all_routes = NULL;
@@ -297,6 +299,7 @@ static void match_infra_routes(cbm_gbuf_t *gb) {
 /* Phase 2a: Ensure all functions with route_path properties have Route+HANDLES edges.
  * During incremental indexing, only changed files get Route nodes from extraction.
  * This pass scans ALL Function/Method nodes and creates missing Route+HANDLES. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void ensure_decorator_routes(cbm_gbuf_t *gb) {
     const char *labels[] = {"Function", "Method"};
     int created = 0;
@@ -395,6 +398,7 @@ static void ensure_decorator_routes(cbm_gbuf_t *gb) {
  * (from the registering file), derive the service directory, then find decorator
  * Routes in that directory tree and create HANDLES from their handler Functions
  * to the prefix Route. This bridges include_router → decorator → handler. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void connect_prefix_to_decorators(cbm_gbuf_t *gb) {
     const cbm_gbuf_node_t **routes = NULL;
     int route_count = 0;
@@ -535,6 +539,7 @@ static const char *find_args_in_props(const char *props) {
     return p + 7; /* skip "args":[ , points to first { or ] */
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void create_data_flows(cbm_gbuf_t *gb) {
     const cbm_gbuf_node_t **routes = NULL;
     int route_count = 0;

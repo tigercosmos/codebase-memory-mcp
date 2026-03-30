@@ -334,6 +334,7 @@ static int discover_module_routes(const cbm_gbuf_node_t *mod, const cbm_pipeline
 /* Resolve FastAPI include_router prefixes.
  * Scans Python Module nodes for: app.include_router(var, prefix="/prefix")
  * and from ... import var. Prepends prefix to routes from matching modules. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void resolve_fastapi_prefixes(cbm_pipeline_ctx_t *ctx, cbm_route_handler_t *routes,
                                      int route_count) {
     const cbm_gbuf_node_t **modules = NULL;
@@ -466,6 +467,7 @@ static void resolve_fastapi_prefixes(cbm_pipeline_ctx_t *ctx, cbm_route_handler_
 }
 
 /* Resolve Express app.use("/prefix", routerVar) prefixes. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void resolve_express_prefixes(cbm_pipeline_ctx_t *ctx, cbm_route_handler_t *routes,
                                      int route_count) {
     const cbm_gbuf_node_t **modules = NULL;
@@ -651,6 +653,7 @@ static void apply_prefix_to_func_routes(cbm_route_handler_t *routes, int route_c
 
 /* Resolve Go gin cross-file Group() prefixes.
  * Pattern: v1 := r.Group("/api"); RegisterRoutes(v1) */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void resolve_cross_file_group_prefixes(cbm_pipeline_ctx_t *ctx, cbm_route_handler_t *routes,
                                               int route_count) {
     /* Build routesByFunc index: funcQN → (start_index, count) in routes array */
@@ -863,6 +866,7 @@ static int create_registration_call_edges(cbm_pipeline_ctx_t *ctx, cbm_route_han
 
 /* Insert Route nodes and HANDLES edges for discovered routes.
  * Uses ResolvedHandlerQN if set (from createRegistrationCallEdges). */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int insert_route_nodes(cbm_pipeline_ctx_t *ctx, cbm_route_handler_t *routes,
                               int route_count) {
     int count = 0;
@@ -989,6 +993,7 @@ static int insert_route_nodes(cbm_pipeline_ctx_t *ctx, cbm_route_handler_t *rout
 /* ── Match and link ────────────────────────────────────────────── */
 
 /* Match call sites to routes and create HTTP_CALLS/ASYNC_CALLS edges. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int match_and_link(cbm_pipeline_ctx_t *ctx, cbm_route_handler_t *routes, int route_count,
                           cbm_http_call_site_t *sites, int site_count) {
     int link_count = 0;
@@ -1140,6 +1145,7 @@ typedef struct {
     _Atomic int *cancelled;
 } hl_site_ctx_t;
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void hl_site_worker(int worker_id, void *arg) {
     hl_site_ctx_t *sc = arg;
     hl_site_buf_t *buf = &sc->worker_bufs[worker_id];
@@ -1219,6 +1225,7 @@ static void hl_site_worker(int worker_id, void *arg) {
 
 /* ── Main pass entry point ─────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_pipeline_pass_httplinks(cbm_pipeline_ctx_t *ctx) {
     cbm_log_info("pass.start", "pass", "httplinks");
 

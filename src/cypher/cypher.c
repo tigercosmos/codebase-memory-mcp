@@ -154,6 +154,7 @@ static cbm_token_type_t keyword_lookup(const char *word) {
     return TOK_IDENT;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_lex(const char *input, cbm_lex_result_t *out) {
     memset(out, 0, sizeof(*out));
     if (!input) {
@@ -499,6 +500,7 @@ static int parse_node(parser_t *p, cbm_node_pattern_t *out) {
 }
 
 /* Parse relationship: -[:TYPE|TYPE2*min..max]-> or <-[...]-  */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int parse_rel(parser_t *p, cbm_rel_pattern_t *out) {
     memset(out, 0, sizeof(*out));
     out->min_hops = 1;
@@ -690,6 +692,7 @@ static const char *unsupported_clause_error(cbm_token_type_t type) {
 static cbm_expr_t *parse_or_expr(parser_t *p);
 
 /* Parse a single condition: var.prop OP value | var.prop IS [NOT] NULL | var.prop IN [...] */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static cbm_expr_t *parse_condition_expr(parser_t *p) {
     /* Check for NOT prefix at condition level (e.g. NOT n.name CONTAINS "x") */
     bool negated = match(p, TOK_NOT);
@@ -950,6 +953,7 @@ static const char *str_func_name(cbm_token_type_t t) {
 }
 
 /* Parse CASE WHEN ... THEN ... [ELSE ...] END */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static cbm_case_expr_t *parse_case_expr(parser_t *p) {
     /* CASE already consumed */
     cbm_case_expr_t *kase = calloc(1, sizeof(cbm_case_expr_t));
@@ -1004,6 +1008,7 @@ static cbm_case_expr_t *parse_case_expr(parser_t *p) {
 }
 
 /* Parse RETURN/WITH clause (shared logic) */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int parse_return_or_with(parser_t *p, cbm_return_clause_t **out, bool is_with) {
     cbm_token_type_t tok = (int)is_with ? TOK_WITH : TOK_RETURN;
     /* For WITH, we need to check it's standalone (not preceded by STARTS) */
@@ -1215,6 +1220,7 @@ static int parse_match_pattern(parser_t *p, cbm_pattern_t *pat) {
     return 0;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_parse(const cbm_token_t *tokens, int token_count, cbm_parse_result_t *out) {
     memset(out, 0, sizeof(*out));
     parser_t p = {.tokens = tokens, .count = token_count, .pos = 0};
@@ -1753,6 +1759,7 @@ static void binding_set(binding_t *b, const char *var, const cbm_node_t *node) {
 }
 
 /* Evaluate a WHERE condition against a binding */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static bool eval_condition(const cbm_condition_t *c, binding_t *b) {
     const char *actual;
 
@@ -2051,6 +2058,7 @@ static void scan_pattern_nodes(cbm_store_t *store, const char *project, int max_
 
 /* ── Expand one pattern's relationships on a set of bindings ──── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
 static void expand_pattern_rels(cbm_store_t *store, cbm_pattern_t *pat, binding_t **bindings,
                                 int *bind_count, const int *bind_cap, const char **var_name,
                                 bool is_optional) {
@@ -2195,6 +2203,7 @@ static void expand_pattern_rels(cbm_store_t *store, cbm_pattern_t *pat, binding_
 
 /* ── Result postprocessing helpers ─────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void rb_apply_order_by(result_builder_t *rb, const cbm_return_clause_t *ret) {
     if (!ret->order_by) {
         return;
@@ -2346,6 +2355,272 @@ static const char *project_item(binding_t *b, cbm_return_item_t *item, char *fun
     return raw;
 }
 
+/* ── WITH clause: project bindings through aggregation or rename ── */
+
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
+static void execute_with_clause(cbm_query_t *q, binding_t **bindings_ptr, int *bind_count_ptr) {
+    cbm_return_clause_t *wc = q->with_clause;
+    if (!wc) {
+        return;
+    }
+    binding_t *bindings = *bindings_ptr;
+    int bind_count = *bind_count_ptr;
+
+    binding_t *vbindings = malloc((bind_count + 1) * sizeof(binding_t));
+    int vcount = 0;
+
+    /* Check if WITH has aggregation */
+    bool has_agg = false;
+    for (int i = 0; i < wc->count; i++) {
+        if (wc->items[i].func &&
+            (strcmp(wc->items[i].func, "COUNT") == 0 || strcmp(wc->items[i].func, "SUM") == 0 ||
+             strcmp(wc->items[i].func, "AVG") == 0 || strcmp(wc->items[i].func, "MIN") == 0 ||
+             strcmp(wc->items[i].func, "MAX") == 0 || strcmp(wc->items[i].func, "COLLECT") == 0)) {
+            has_agg = true;
+            break;
+        }
+    }
+
+    if (has_agg) {
+        typedef struct {
+            char group_key[1024];
+            const char **group_vals;
+            double *sums;
+            int *counts;
+            double *mins, *maxs;
+        } with_agg_t;
+        int agg_cap = 256;
+        with_agg_t *aggs = calloc(agg_cap, sizeof(with_agg_t));
+        int agg_cnt = 0;
+
+        for (int bi = 0; bi < bind_count; bi++) {
+            char key[1024] = "";
+            int kl = 0;
+            for (int ci = 0; ci < wc->count; ci++) {
+                if (wc->items[ci].func) {
+                    continue;
+                }
+                const char *v = binding_get_virtual(&bindings[bi], wc->items[ci].variable,
+                                                    wc->items[ci].property);
+                kl += snprintf(key + kl, sizeof(key) - (size_t)kl, "%s|", v);
+                if (kl >= (int)sizeof(key)) {
+                    kl = (int)sizeof(key) - 1;
+                }
+            }
+            int found = -1;
+            for (int a = 0; a < agg_cnt; a++) {
+                if (strcmp(aggs[a].group_key, key) == 0) {
+                    found = a;
+                    break;
+                }
+            }
+            if (found < 0) {
+                if (agg_cnt >= agg_cap) {
+                    agg_cap *= 2;
+                    aggs = safe_realloc(aggs, agg_cap * sizeof(with_agg_t));
+                }
+                found = agg_cnt++;
+                snprintf(aggs[found].group_key, sizeof(aggs[found].group_key), "%s", key);
+                aggs[found].group_vals = malloc(wc->count * sizeof(const char *));
+                aggs[found].sums = calloc(wc->count, sizeof(double));
+                aggs[found].counts = calloc(wc->count, sizeof(int));
+                aggs[found].mins = malloc(wc->count * sizeof(double));
+                aggs[found].maxs = malloc(wc->count * sizeof(double));
+                for (int ci = 0; ci < wc->count; ci++) {
+                    aggs[found].mins[ci] = 1e308;
+                    aggs[found].maxs[ci] = -1e308;
+                }
+                for (int ci = 0; ci < wc->count; ci++) {
+                    if (wc->items[ci].func) {
+                        aggs[found].group_vals[ci] = heap_strdup("0");
+                        continue;
+                    }
+                    const char *v = binding_get_virtual(&bindings[bi], wc->items[ci].variable,
+                                                        wc->items[ci].property);
+                    aggs[found].group_vals[ci] = heap_strdup(v);
+                }
+            }
+            for (int ci = 0; ci < wc->count; ci++) {
+                if (!wc->items[ci].func) {
+                    continue;
+                }
+                aggs[found].counts[ci]++;
+                const char *raw = binding_get_virtual(&bindings[bi], wc->items[ci].variable,
+                                                      wc->items[ci].property);
+                double dv = strtod(raw, NULL);
+                aggs[found].sums[ci] += dv;
+                if (dv < aggs[found].mins[ci]) {
+                    aggs[found].mins[ci] = dv;
+                }
+                if (dv > aggs[found].maxs[ci]) {
+                    aggs[found].maxs[ci] = dv;
+                }
+            }
+        }
+
+        vbindings = safe_realloc(vbindings, (agg_cnt + 1) * sizeof(binding_t));
+        for (int a = 0; a < agg_cnt; a++) {
+            binding_t vb = {0};
+            for (int ci = 0; ci < wc->count; ci++) {
+                const char *alias = wc->items[ci].alias;
+                char name_buf[256];
+                if (!alias) {
+                    if (wc->items[ci].property) {
+                        snprintf(name_buf, sizeof(name_buf), "%s.%s", wc->items[ci].variable,
+                                 wc->items[ci].property);
+                    } else {
+                        snprintf(name_buf, sizeof(name_buf), "%s", wc->items[ci].variable);
+                    }
+                    alias = name_buf;
+                }
+                char vbuf[64];
+                if (wc->items[ci].func) {
+                    const char *f = wc->items[ci].func;
+                    if (strcmp(f, "COUNT") == 0) {
+                        snprintf(vbuf, sizeof(vbuf), "%d", aggs[a].counts[ci]);
+                    } else if (strcmp(f, "SUM") == 0) {
+                        snprintf(vbuf, sizeof(vbuf), "%.10g", aggs[a].sums[ci]);
+                    } else if (strcmp(f, "AVG") == 0) {
+                        snprintf(vbuf, sizeof(vbuf), "%.10g",
+                                 aggs[a].counts[ci] > 0 ? aggs[a].sums[ci] / aggs[a].counts[ci]
+                                                        : 0);
+                    } else if (strcmp(f, "MIN") == 0) {
+                        snprintf(vbuf, sizeof(vbuf), "%.10g", aggs[a].mins[ci]);
+                    } else if (strcmp(f, "MAX") == 0) {
+                        snprintf(vbuf, sizeof(vbuf), "%.10g", aggs[a].maxs[ci]);
+                    } else {
+                        snprintf(vbuf, sizeof(vbuf), "%d", aggs[a].counts[ci]);
+                    }
+                    cbm_node_t vn = {.name = heap_strdup(vbuf),
+                                     .qualified_name = heap_strdup(alias)};
+                    if (vb.var_count < 16) {
+                        vb.var_names[vb.var_count] = vn.qualified_name;
+                        vb.var_nodes[vb.var_count] = vn;
+                        vb.var_count++;
+                    }
+                } else {
+                    cbm_node_t vn = {.name = heap_strdup(aggs[a].group_vals[ci]),
+                                     .qualified_name = heap_strdup(alias)};
+                    if (vb.var_count < 16) {
+                        vb.var_names[vb.var_count] = vn.qualified_name;
+                        vb.var_nodes[vb.var_count] = vn;
+                        vb.var_count++;
+                    }
+                }
+            }
+            vbindings[vcount++] = vb;
+        }
+        for (int a = 0; a < agg_cnt; a++) {
+            for (int ci = 0; ci < wc->count; ci++) {
+                free((void *)aggs[a].group_vals[ci]);
+            }
+            free(aggs[a].group_vals);
+            free(aggs[a].sums);
+            free(aggs[a].counts);
+            free(aggs[a].mins);
+            free(aggs[a].maxs);
+        }
+        free(aggs);
+    } else {
+        for (int bi = 0; bi < bind_count; bi++) {
+            binding_t vb = {0};
+            for (int ci = 0; ci < wc->count; ci++) {
+                const char *alias = wc->items[ci].alias;
+                char name_buf[256];
+                if (!alias) {
+                    if (wc->items[ci].property) {
+                        snprintf(name_buf, sizeof(name_buf), "%s.%s", wc->items[ci].variable,
+                                 wc->items[ci].property);
+                    } else {
+                        snprintf(name_buf, sizeof(name_buf), "%s", wc->items[ci].variable);
+                    }
+                    alias = name_buf;
+                }
+                char func_buf[512];
+                const char *val =
+                    project_item(&bindings[bi], &wc->items[ci], func_buf, sizeof(func_buf));
+                cbm_node_t vn = {.name = heap_strdup(val), .qualified_name = heap_strdup(alias)};
+                if (vb.var_count < 16) {
+                    vb.var_names[vb.var_count] = vn.qualified_name;
+                    vb.var_nodes[vb.var_count] = vn;
+                    vb.var_count++;
+                }
+            }
+            vbindings[vcount++] = vb;
+        }
+    }
+
+    /* ORDER BY + SKIP + LIMIT */
+    if (wc->order_by) {
+        const char *ob = wc->order_by;
+        bool wdesc = (wc->order_dir && strcmp(wc->order_dir, "DESC") == 0) != 0;
+        for (int i2 = 0; i2 < vcount - 1; i2++) {
+            for (int j2 = 0; j2 < vcount - i2 - 1; j2++) {
+                const char *va = binding_get_virtual(&vbindings[j2], ob, NULL);
+                const char *vb2 = binding_get_virtual(&vbindings[j2 + 1], ob, NULL);
+                int cmp2;
+                char *ea = NULL;
+                char *eb = NULL;
+                double da = strtod(va, &ea);
+                double db = strtod(vb2, &eb);
+                if (ea != va && eb != vb2) {
+                    cmp2 = (da > db) - (da < db);
+                } else {
+                    cmp2 = strcmp(va, vb2);
+                }
+                if ((int)wdesc ? cmp2 < 0 : cmp2 > 0) {
+                    binding_t tmp2 = vbindings[j2];
+                    vbindings[j2] = vbindings[j2 + 1];
+                    vbindings[j2 + 1] = tmp2;
+                }
+            }
+        }
+    }
+    if (wc->skip > 0 && wc->skip < vcount) {
+        for (int i2 = 0; i2 < wc->skip; i2++) {
+            binding_free(&vbindings[i2]);
+        }
+        memmove(vbindings, vbindings + wc->skip, (vcount - wc->skip) * sizeof(binding_t));
+        vcount -= wc->skip;
+    } else if (wc->skip >= vcount) {
+        for (int i2 = 0; i2 < vcount; i2++) {
+            binding_free(&vbindings[i2]);
+        }
+        vcount = 0;
+    }
+    if (wc->limit > 0 && vcount > wc->limit) {
+        for (int i2 = wc->limit; i2 < vcount; i2++) {
+            binding_free(&vbindings[i2]);
+        }
+        vcount = wc->limit;
+    }
+
+    /* Replace bindings with virtual */
+    for (int bi = 0; bi < bind_count; bi++) {
+        binding_free(&bindings[bi]);
+    }
+    free(bindings);
+
+    /* Post-WITH WHERE */
+    if (q->post_with_where) {
+        int kept = 0;
+        for (int i = 0; i < vcount; i++) {
+            if (eval_where(q->post_with_where, &vbindings[i])) {
+                if (kept != i) {
+                    vbindings[kept] = vbindings[i];
+                }
+                kept++;
+            } else {
+                binding_free(&vbindings[i]);
+            }
+        }
+        vcount = kept;
+    }
+
+    *bindings_ptr = vbindings;
+    *bind_count_ptr = vcount;
+}
+
 /* ── Execute a single query (no UNION recursion) ──────────────── */
 
 // NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
@@ -2488,269 +2763,7 @@ static int execute_single(cbm_store_t *store, cbm_query_t *q, const char *projec
     }
 
     /* Step 3b: WITH clause */
-    if (q->with_clause) {
-        cbm_return_clause_t *wc = q->with_clause;
-        /* Project through WITH into virtual bindings */
-        binding_t *vbindings = malloc((bind_count + 1) * sizeof(binding_t));
-        int vcount = 0;
-
-        /* Check if WITH has aggregation */
-        bool has_agg = false;
-        for (int i = 0; i < wc->count; i++) {
-            if (wc->items[i].func &&
-                (strcmp(wc->items[i].func, "COUNT") == 0 || strcmp(wc->items[i].func, "SUM") == 0 ||
-                 strcmp(wc->items[i].func, "AVG") == 0 || strcmp(wc->items[i].func, "MIN") == 0 ||
-                 strcmp(wc->items[i].func, "MAX") == 0 ||
-                 strcmp(wc->items[i].func, "COLLECT") == 0)) {
-                has_agg = true;
-                break;
-            }
-        }
-
-        if (has_agg) {
-            /* Group-by aggregation through WITH */
-            typedef struct {
-                char group_key[1024];
-                const char **group_vals;
-                double *sums;
-                int *counts;
-                double *mins, *maxs;
-            } with_agg_t;
-            int agg_cap = 256;
-            with_agg_t *aggs = calloc(agg_cap, sizeof(with_agg_t));
-            int agg_cnt = 0;
-
-            for (int bi = 0; bi < bind_count; bi++) {
-                char key[1024] = "";
-                int kl = 0;
-                for (int ci = 0; ci < wc->count; ci++) {
-                    if (wc->items[ci].func) {
-                        continue;
-                    }
-                    const char *v = binding_get_virtual(&bindings[bi], wc->items[ci].variable,
-                                                        wc->items[ci].property);
-                    kl += snprintf(key + kl, sizeof(key) - (size_t)kl, "%s|", v);
-                    if (kl >= (int)sizeof(key)) {
-                        kl = (int)sizeof(key) - 1;
-                    }
-                }
-                int found = -1;
-                for (int a = 0; a < agg_cnt; a++) {
-                    if (strcmp(aggs[a].group_key, key) == 0) {
-                        found = a;
-                        break;
-                    }
-                }
-                if (found < 0) {
-                    if (agg_cnt >= agg_cap) {
-                        agg_cap *= 2;
-                        aggs = safe_realloc(aggs, agg_cap * sizeof(with_agg_t));
-                    }
-                    found = agg_cnt++;
-                    snprintf(aggs[found].group_key, sizeof(aggs[found].group_key), "%s", key);
-                    aggs[found].group_vals = malloc(wc->count * sizeof(const char *));
-                    aggs[found].sums = calloc(wc->count, sizeof(double));
-                    aggs[found].counts = calloc(wc->count, sizeof(int));
-                    aggs[found].mins = malloc(wc->count * sizeof(double));
-                    aggs[found].maxs = malloc(wc->count * sizeof(double));
-                    for (int ci = 0; ci < wc->count; ci++) {
-                        aggs[found].mins[ci] = 1e308;
-                        aggs[found].maxs[ci] = -1e308;
-                    }
-                    for (int ci = 0; ci < wc->count; ci++) {
-                        if (wc->items[ci].func) {
-                            aggs[found].group_vals[ci] = heap_strdup("0");
-                            continue;
-                        }
-                        const char *v = binding_get_virtual(&bindings[bi], wc->items[ci].variable,
-                                                            wc->items[ci].property);
-                        aggs[found].group_vals[ci] = heap_strdup(v);
-                    }
-                }
-                for (int ci = 0; ci < wc->count; ci++) {
-                    if (!wc->items[ci].func) {
-                        continue;
-                    }
-                    aggs[found].counts[ci]++;
-                    const char *raw = binding_get_virtual(&bindings[bi], wc->items[ci].variable,
-                                                          wc->items[ci].property);
-                    double dv = strtod(raw, NULL);
-                    aggs[found].sums[ci] += dv;
-                    if (dv < aggs[found].mins[ci]) {
-                        aggs[found].mins[ci] = dv;
-                    }
-                    if (dv > aggs[found].maxs[ci]) {
-                        aggs[found].maxs[ci] = dv;
-                    }
-                }
-            }
-
-            /* Build virtual bindings from aggregated groups */
-            vbindings = safe_realloc(vbindings, (agg_cnt + 1) * sizeof(binding_t));
-            for (int a = 0; a < agg_cnt; a++) {
-                binding_t vb = {0};
-                for (int ci = 0; ci < wc->count; ci++) {
-                    const char *alias = wc->items[ci].alias;
-                    char name_buf[256];
-                    if (!alias) {
-                        if (wc->items[ci].property) {
-                            snprintf(name_buf, sizeof(name_buf), "%s.%s", wc->items[ci].variable,
-                                     wc->items[ci].property);
-                        } else {
-                            snprintf(name_buf, sizeof(name_buf), "%s", wc->items[ci].variable);
-                        }
-                        alias = name_buf;
-                    }
-                    char vbuf[64];
-                    if (wc->items[ci].func) {
-                        const char *f = wc->items[ci].func;
-                        if (strcmp(f, "COUNT") == 0) {
-                            snprintf(vbuf, sizeof(vbuf), "%d", aggs[a].counts[ci]);
-                        } else if (strcmp(f, "SUM") == 0) {
-                            snprintf(vbuf, sizeof(vbuf), "%.10g", aggs[a].sums[ci]);
-                        } else if (strcmp(f, "AVG") == 0) {
-                            snprintf(vbuf, sizeof(vbuf), "%.10g",
-                                     aggs[a].counts[ci] > 0 ? aggs[a].sums[ci] / aggs[a].counts[ci]
-                                                            : 0);
-                        } else if (strcmp(f, "MIN") == 0) {
-                            snprintf(vbuf, sizeof(vbuf), "%.10g", aggs[a].mins[ci]);
-                        } else if (strcmp(f, "MAX") == 0) {
-                            snprintf(vbuf, sizeof(vbuf), "%.10g", aggs[a].maxs[ci]);
-                        } else {
-                            snprintf(vbuf, sizeof(vbuf), "%d", aggs[a].counts[ci]);
-                        }
-                        /* Store as a "virtual node" with the value in name,
-                         * alias in qualified_name (freed by node_fields_free). */
-                        cbm_node_t vn = {.name = heap_strdup(vbuf),
-                                         .qualified_name = heap_strdup(alias)};
-                        if (vb.var_count < 16) {
-                            vb.var_names[vb.var_count] = vn.qualified_name;
-                            vb.var_nodes[vb.var_count] = vn;
-                            vb.var_count++;
-                        }
-                    } else {
-                        cbm_node_t vn = {.name = heap_strdup(aggs[a].group_vals[ci]),
-                                         .qualified_name = heap_strdup(alias)};
-                        if (vb.var_count < 16) {
-                            vb.var_names[vb.var_count] = vn.qualified_name;
-                            vb.var_nodes[vb.var_count] = vn;
-                            vb.var_count++;
-                        }
-                    }
-                }
-                vbindings[vcount++] = vb;
-            }
-            for (int a = 0; a < agg_cnt; a++) {
-                for (int ci = 0; ci < wc->count; ci++) {
-                    free((void *)aggs[a].group_vals[ci]);
-                }
-                free(aggs[a].group_vals);
-                free(aggs[a].sums);
-                free(aggs[a].counts);
-                free(aggs[a].mins);
-                free(aggs[a].maxs);
-            }
-            free(aggs);
-        } else {
-            /* Non-aggregating WITH: simple projection rename */
-            for (int bi = 0; bi < bind_count; bi++) {
-                binding_t vb = {0};
-                for (int ci = 0; ci < wc->count; ci++) {
-                    const char *alias = wc->items[ci].alias;
-                    char name_buf[256];
-                    if (!alias) {
-                        if (wc->items[ci].property) {
-                            snprintf(name_buf, sizeof(name_buf), "%s.%s", wc->items[ci].variable,
-                                     wc->items[ci].property);
-                        } else {
-                            snprintf(name_buf, sizeof(name_buf), "%s", wc->items[ci].variable);
-                        }
-                        alias = name_buf;
-                    }
-                    char func_buf[512];
-                    const char *val =
-                        project_item(&bindings[bi], &wc->items[ci], func_buf, sizeof(func_buf));
-                    cbm_node_t vn = {.name = heap_strdup(val),
-                                     .qualified_name = heap_strdup(alias)};
-                    if (vb.var_count < 16) {
-                        vb.var_names[vb.var_count] = vn.qualified_name;
-                        vb.var_nodes[vb.var_count] = vn;
-                        vb.var_count++;
-                    }
-                }
-                vbindings[vcount++] = vb;
-            }
-        }
-
-        /* Apply WITH ORDER BY + SKIP + LIMIT on virtual bindings */
-        if (wc->order_by) {
-            const char *ob = wc->order_by;
-            bool wdesc = (wc->order_dir && strcmp(wc->order_dir, "DESC") == 0) != 0;
-            for (int i2 = 0; i2 < vcount - 1; i2++) {
-                for (int j2 = 0; j2 < vcount - i2 - 1; j2++) {
-                    const char *va = binding_get_virtual(&vbindings[j2], ob, NULL);
-                    const char *vb2 = binding_get_virtual(&vbindings[j2 + 1], ob, NULL);
-                    int cmp2;
-                    char *ea = NULL;
-                    char *eb = NULL;
-                    double da = strtod(va, &ea);
-                    double db = strtod(vb2, &eb);
-                    if (ea != va && eb != vb2) {
-                        cmp2 = (da > db) - (da < db);
-                    } else {
-                        cmp2 = strcmp(va, vb2);
-                    }
-                    if ((int)wdesc ? cmp2 < 0 : cmp2 > 0) {
-                        binding_t tmp2 = vbindings[j2];
-                        vbindings[j2] = vbindings[j2 + 1];
-                        vbindings[j2 + 1] = tmp2;
-                    }
-                }
-            }
-        }
-        if (wc->skip > 0 && wc->skip < vcount) {
-            for (int i2 = 0; i2 < wc->skip; i2++) {
-                binding_free(&vbindings[i2]);
-            }
-            memmove(vbindings, vbindings + wc->skip, (vcount - wc->skip) * sizeof(binding_t));
-            vcount -= wc->skip;
-        } else if (wc->skip >= vcount) {
-            for (int i2 = 0; i2 < vcount; i2++) {
-                binding_free(&vbindings[i2]);
-            }
-            vcount = 0;
-        }
-        if (wc->limit > 0 && vcount > wc->limit) {
-            for (int i2 = wc->limit; i2 < vcount; i2++) {
-                binding_free(&vbindings[i2]);
-            }
-            vcount = wc->limit;
-        }
-
-        /* Replace bindings with virtual */
-        for (int bi = 0; bi < bind_count; bi++) {
-            binding_free(&bindings[bi]);
-        }
-        free(bindings);
-        bindings = vbindings;
-        bind_count = vcount;
-
-        /* Apply post-WITH WHERE */
-        if (q->post_with_where) {
-            int kept = 0;
-            for (int i = 0; i < bind_count; i++) {
-                if (eval_where(q->post_with_where, &bindings[i])) {
-                    if (kept != i) {
-                        bindings[kept] = bindings[i];
-                    }
-                    kept++;
-                } else {
-                    binding_free(&bindings[i]);
-                }
-            }
-            bind_count = kept;
-        }
-    }
+    execute_with_clause(q, &bindings, &bind_count);
 
     /* Step 4: Project results */
     rb_init(rb);

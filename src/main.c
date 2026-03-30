@@ -154,6 +154,7 @@ static void print_help(void) {
 
 /* ── Main ───────────────────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int main(int argc, char **argv) {
     /* Parse arguments */
     for (int i = 1; i < argc; i++) {

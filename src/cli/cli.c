@@ -161,6 +161,7 @@ const char *cbm_detect_shell_rc(const char *home_dir) {
 
 /* ── CLI binary detection ─────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 const char *cbm_find_cli(const char *name, const char *home_dir) {
     static char buf[512];
     if (!name || !name[0]) {
@@ -865,6 +866,7 @@ int cbm_remove_zed_mcp(const char *config_path) {
 
 /* ── Agent detection ──────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
     cbm_detected_agents_t agents;
     memset(&agents, 0, sizeof(agents));
@@ -1689,6 +1691,7 @@ int cbm_ensure_path(const char *bin_dir, const char *rc_file, bool dry_run) {
 
 /* ── Tar.gz extraction ────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 unsigned char *cbm_extract_binary_from_targz(const unsigned char *data, int data_len,
                                              int *out_len) {
     if (!data || data_len <= 0 || !out_len) {
@@ -1811,6 +1814,7 @@ unsigned char *cbm_extract_binary_from_targz(const unsigned char *data, int data
 
 /* ── Zip extraction (in-memory, replaces external unzip) ──────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 unsigned char *cbm_extract_binary_from_zip(const unsigned char *data, int data_len, int *out_len) {
     if (!data || data_len <= 0 || !out_len) {
         return NULL;
@@ -2444,6 +2448,7 @@ static const char *detect_arch(void) {
 
 /* ── Agent config install/refresh (shared by install + update) ── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void cbm_install_agent_configs(const char *home, const char *binary_path, bool force,
                                       bool dry_run) {
     cbm_detected_agents_t agents = cbm_detect_agents(home);
@@ -2678,6 +2683,7 @@ static void cbm_install_agent_configs(const char *home, const char *binary_path,
 
 /* ── Subcommand: install ──────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_cmd_install(int argc, char **argv) {
     parse_auto_answer(argc, argv);
     bool dry_run = false;
@@ -2784,6 +2790,7 @@ int cbm_cmd_install(int argc, char **argv) {
 
 /* ── Subcommand: uninstall ────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_cmd_uninstall(int argc, char **argv) {
     parse_auto_answer(argc, argv);
     bool dry_run = false;
@@ -3018,6 +3025,7 @@ int cbm_cmd_uninstall(int argc, char **argv) {
 
 /* ── Subcommand: update ───────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
 int cbm_cmd_update(int argc, char **argv) {
     parse_auto_answer(argc, argv);
 

@@ -52,6 +52,7 @@ static const char *path_last(CBMArena *a, const char *path) {
 // --- Go imports ---
 // import_declaration -> import_spec_list -> import_spec -> (name, path)
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void parse_go_imports(CBMExtractCtx *ctx) {
     CBMArena *a = ctx->arena;
 
@@ -133,6 +134,7 @@ static void parse_go_imports(CBMExtractCtx *ctx) {
 // import_statement: import X, import X as Y
 // import_from_statement: from X import Y, from X import Y as Z
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void parse_python_imports(CBMExtractCtx *ctx) {
     CBMArena *a = ctx->arena;
 
@@ -244,6 +246,7 @@ static void parse_python_imports(CBMExtractCtx *ctx) {
 // import X from "Y"; import {A, B} from "Y"; import * as X from "Y"
 // const X = require("Y")
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void walk_es_imports(CBMExtractCtx *ctx, TSNode node) {
     CBMArena *a = ctx->arena;
     const char *kind = ts_node_type(node);
@@ -424,6 +427,7 @@ static void parse_rust_imports(CBMExtractCtx *ctx) {
 // --- C/C++ imports ---
 // preproc_include -> path or string_literal
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void parse_c_imports(CBMExtractCtx *ctx) {
     CBMArena *a = ctx->arena;
 
@@ -477,6 +481,7 @@ static void parse_c_imports(CBMExtractCtx *ctx) {
 // --- Ruby imports ---
 // call nodes: require("X"), require_relative("X")
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void parse_ruby_imports(CBMExtractCtx *ctx) {
     CBMArena *a = ctx->arena;
 
@@ -606,6 +611,7 @@ static void parse_lua_imports(CBMExtractCtx *ctx) {
 
 // --- Generic import parsing for languages with simple import_declaration ---
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void parse_generic_imports(CBMExtractCtx *ctx, const char *node_type) {
     CBMArena *a = ctx->arena;
 
@@ -667,6 +673,7 @@ static void parse_generic_imports(CBMExtractCtx *ctx, const char *node_type) {
 // get_top: << "package" (Get["file"])
 // apply where first child is builtin_symbol "Needs" with string arg
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void walk_wolfram_imports(CBMExtractCtx *ctx, TSNode node) {
     CBMArena *a = ctx->arena;
     const char *kind = ts_node_type(node);

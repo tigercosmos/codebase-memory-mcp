@@ -170,6 +170,7 @@ static void registry_visitor(const cbm_gbuf_node_t *node, void *userdata) {
 
 /* ── Incremental pipeline entry point ────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_file_info_t *files,
                                  int file_count) {
     struct timespec t0;

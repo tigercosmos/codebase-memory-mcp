@@ -1616,6 +1616,7 @@ int cbm_store_node_neighbor_names(cbm_store_t *s, int64_t node_id, int limit, ch
     return 0;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_store_batch_count_degrees(cbm_store_t *s, const int64_t *node_ids, int id_count,
                                   const char *edge_type, int *out_in, int *out_out) {
     if (!s || !node_ids || id_count <= 0 || !out_in || !out_out) {
@@ -1933,6 +1934,7 @@ const char *cbm_strip_case_flag(const char *pattern) {
     return buf;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_store_search(cbm_store_t *s, const cbm_search_params_t *params, cbm_search_output_t *out) {
     memset(out, 0, sizeof(*out));
     if (!s || !s->db) {
@@ -2144,6 +2146,7 @@ void cbm_store_search_free(cbm_search_output_t *out) {
 
 /* ── BFS Traversal ──────────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_store_bfs(cbm_store_t *s, int64_t start_id, const char *direction, const char **edge_types,
                   int edge_type_count, int max_depth, int max_results, cbm_traverse_result_t *out) {
     memset(out, 0, sizeof(*out));
@@ -2606,6 +2609,7 @@ bool cbm_is_test_file_path(const char *fp) {
 }
 
 /* File extension → language name mapping */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static const char *ext_to_lang(const char *ext) {
     if (!ext) {
         return NULL;
@@ -2835,6 +2839,7 @@ static int arch_entry_points(cbm_store_t *s, const char *project, cbm_architectu
     return CBM_STORE_OK;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int arch_routes(cbm_store_t *s, const char *project, cbm_architecture_info_t *out) {
     const char *sql = "SELECT name, properties, COALESCE(file_path, '') FROM nodes "
                       "WHERE project=?1 AND label='Route' "
@@ -2957,6 +2962,7 @@ static int arch_hotspots(cbm_store_t *s, const char *project, cbm_architecture_i
     return CBM_STORE_OK;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_boundary_t **out_arr,
                            int *out_count) {
     /* Build nodeID → package map */
@@ -3087,6 +3093,7 @@ static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_bo
     return CBM_STORE_OK;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int arch_packages(cbm_store_t *s, const char *project, cbm_architecture_info_t *out) {
     /* Try Package nodes first */
     const char *sql =
@@ -3222,6 +3229,7 @@ static void classify_layer(const char *pkg, int in, int out_deg, bool has_routes
     (void)pkg;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int arch_layers(cbm_store_t *s, const char *project, cbm_architecture_info_t *out) {
     /* Get boundaries for fan analysis */
     cbm_cross_pkg_boundary_t *boundaries = NULL;
@@ -3385,6 +3393,7 @@ static int arch_layers(cbm_store_t *s, const char *project, cbm_architecture_inf
     return CBM_STORE_OK;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
 static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_info_t *out) {
     const char *sql = "SELECT file_path FROM nodes WHERE project=?1 AND label='File'";
     sqlite3_stmt *stmt = NULL;
@@ -3654,6 +3663,7 @@ static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_
 
 /* ── Louvain community detection ───────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
 int cbm_louvain(const int64_t *nodes, int node_count, const cbm_louvain_edge_t *edges,
                 int edge_count, cbm_louvain_result_t **out, int *out_count) {
     if (node_count <= 0) {
@@ -4055,6 +4065,7 @@ static bool is_canonical_section(const char *name) {
     return false;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 cbm_adr_sections_t cbm_adr_parse_sections(const char *content) {
     cbm_adr_sections_t result;
     memset(&result, 0, sizeof(result));
@@ -4147,6 +4158,7 @@ cbm_adr_sections_t cbm_adr_parse_sections(const char *content) {
     return result;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 char *cbm_adr_render(const cbm_adr_sections_t *sections) {
     if (!sections || sections->count == 0) {
         return heap_strdup("");

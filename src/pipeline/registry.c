@@ -342,6 +342,7 @@ static cbm_resolution_t resolve_same_module(const cbm_registry_t *r, const char 
 }
 
 /* Strategy 3+4: Name lookup + suffix match */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static cbm_resolution_t resolve_name_lookup(const cbm_registry_t *r, const char *callee_name,
                                             const char *module_qn, const char **import_vals,
                                             int import_count) {

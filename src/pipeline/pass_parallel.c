@@ -80,6 +80,7 @@ static const char *itoa_log(int val) {
 }
 
 /* Append a JSON-escaped string value to buf at position *pos. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void append_json_string(char *buf, size_t bufsize, size_t *pos, const char *key,
                                const char *val) {
     if (!val || !val[0]) {
@@ -361,6 +362,7 @@ typedef struct {
     _Atomic int next_file_idx;
 } extract_ctx_t;
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void extract_worker(int worker_id, void *ctx_ptr) {
     extract_ctx_t *ec = ctx_ptr;
     extract_worker_state_t *ws = &ec->workers[worker_id];
@@ -594,6 +596,7 @@ int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *files, int fi
 
 /* ── Phase 3B: Serial Registry Build ─────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_build_registry_from_cache(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                                   int file_count, CBMFileResult **result_cache) {
     cbm_log_info("parallel.registry.start", "files", itoa_log(file_count));
@@ -710,6 +713,7 @@ typedef struct {
 
 /* Append arg data as JSON to edge properties: ,"args":[{"i":0,"e":"x","v":"val"},...]
  * Returns new position in buffer. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static size_t append_args_json(char *buf, size_t bufsize, size_t pos, const CBMCall *call) {
     if (call->arg_count == 0 || pos >= bufsize - 20) {
         return pos;
@@ -766,6 +770,7 @@ static size_t append_args_json(char *buf, size_t bufsize, size_t pos, const CBMC
 
 /* Classify a resolved call by library identity and emit the appropriate edge.
  * Extracted from resolve_worker to keep cognitive complexity under threshold. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void emit_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
                               const cbm_gbuf_node_t *target, const CBMCall *call,
                               const cbm_resolution_t *res, const char *module_qn,
@@ -944,6 +949,7 @@ static void emit_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
     }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
 static void resolve_worker(int worker_id, void *ctx_ptr) {
     resolve_ctx_t *rc = ctx_ptr;
     resolve_worker_state_t *ws = &rc->workers[worker_id];

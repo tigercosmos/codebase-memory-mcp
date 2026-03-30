@@ -177,6 +177,7 @@ const char *cbm_confidence_band(double score) {
 
 /* ── Path matching ─────────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 const char *cbm_normalize_path(const char *input) {
     static CBM_TLS char buf[1024];
     if (!input || !*input) {
@@ -255,6 +256,7 @@ static void normalize_to_buf(const char *input, char *out, int out_size) {
     out[len] = '\0';
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 bool cbm_paths_match(const char *call_path, const char *route_path) {
     char norm_call[1024];
     char norm_route[1024];
@@ -403,6 +405,7 @@ static double segment_jaccard(const char *norm_call, const char *norm_route) {
     return (double)intersect / (double)max_len;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 double cbm_path_match_score(const char *call_path, const char *route_path) {
     char norm_call[1024];
     char norm_route[1024];
@@ -751,6 +754,7 @@ int cbm_extract_json_string_paths(const char *text, char **out, int max_out) {
 
 /* ── Route extraction: Python ──────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_extract_python_routes(const char *name, const char *qn, const char **decorators, int ndec,
                               cbm_route_handler_t *out, int max_out) {
     if (!decorators || ndec <= 0) {
@@ -832,6 +836,7 @@ int cbm_extract_python_routes(const char *name, const char *qn, const char **dec
 
 /* ── Route extraction: Go gin/chi ──────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_extract_go_routes(const char *name, const char *qn, const char *source,
                           cbm_route_handler_t *out, int max_out) {
     if (!source || !*source) {
@@ -1097,6 +1102,7 @@ int cbm_extract_go_routes(const char *name, const char *qn, const char *source,
 
 /* ── Route extraction: Java Spring ─────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_extract_java_routes(const char *name, const char *qn, const char **decorators, int ndec,
                             cbm_route_handler_t *out, int max_out) {
     if (!decorators || ndec <= 0) {
@@ -1191,6 +1197,7 @@ int cbm_extract_java_routes(const char *name, const char *qn, const char **decor
 
 /* ── Route extraction: Kotlin Ktor ─────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_extract_ktor_routes(const char *name, const char *qn, const char *source,
                             cbm_route_handler_t *out, int max_out) {
     if (!source || !*source) {
@@ -1289,6 +1296,7 @@ static bool is_express_receiver(const char *receiver) {
     return false;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_extract_express_routes(const char *name, const char *qn, const char *source,
                                cbm_route_handler_t *out, int max_out) {
     if (!source || !*source) {
@@ -1472,6 +1480,7 @@ char *cbm_read_source_lines_disk(const char *root_dir, const char *rel_path, int
 
 /* ── Read source lines from cached buffer ──────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 char *cbm_read_source_lines_cached(const char *source, int source_len, int start_line,
                                    int end_line) {
     if (!source || source_len <= 0 || start_line <= 0 || end_line < start_line) {

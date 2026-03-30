@@ -134,6 +134,7 @@ bool cbm_is_test_func_name(const char *name) {
 
 /* Try to derive the production file path from a test file path.
  * Returns heap-allocated string or NULL. Caller must free(). */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static char *test_to_prod_path(const char *test_path) {
     if (!test_path) {
         return NULL;
@@ -208,6 +209,7 @@ static char *test_to_prod_path(const char *test_path) {
     return NULL;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_pipeline_pass_tests(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count) {
     cbm_log_info("pass.start", "pass", "tests");
     (void)files;

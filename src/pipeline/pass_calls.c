@@ -66,6 +66,7 @@ static const char *itoa_log(int val) {
 
 /* Build per-file import map from cached extraction result or graph buffer edges.
  * Returns parallel arrays of (local_name, module_qn) pairs. Caller frees. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
                             const CBMFileResult *result, const char ***out_keys,
                             const char ***out_vals, int *out_count) {
@@ -161,6 +162,7 @@ static void free_import_map(const char **keys, const char **vals, int count) {
     }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count) {
     cbm_log_info("pass.start", "pass", "calls", "files", itoa_log(file_count));
 
@@ -409,6 +411,7 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
  * creates CALLS edges from the endpoint to the dependency function.
  * Without this, FastAPI auth/DI functions appear as dead code (in_degree=0). */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void cbm_pipeline_pass_fastapi_depends(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                                        int file_count) {
     cbm_regex_t depends_re;

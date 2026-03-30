@@ -54,6 +54,7 @@ static void recompute_state(WalkState *state, const char *module_qn) {
 }
 
 // Compute function QN for scope tracking (mirrors cbm_enclosing_func_qn logic).
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static const char *compute_func_qn(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec,
                                    WalkState *state) {
     (void)spec;
@@ -251,6 +252,7 @@ static void handle_string_refs(CBMExtractCtx *ctx, TSNode node, const WalkState 
 /* Recursively walk YAML block_mapping_pair nodes, building dotted key paths.
  * Emits string_refs with key_path for leaf values that are URLs or config values.
  * Example: body.operational_info.post_url → "https://..." */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void walk_yaml_mapping(CBMExtractCtx *ctx, TSNode node, const char *prefix) {
     uint32_t nc = ts_node_named_child_count(node);
     for (uint32_t i = 0; i < nc; i++) {
@@ -386,6 +388,7 @@ static const char *infer_broker(const char *file_path, const char *source_key) {
 
 /* Scan a YAML mapping for source+target key pairs.
  * Collects all key-value pairs at this level and one level deep (for nested config:). */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void scan_mapping_for_bindings(CBMExtractCtx *ctx, TSNode mapping) {
     const char *sources[8] = {NULL};
     const char *source_keys[8] = {NULL};
@@ -504,6 +507,7 @@ static void scan_yaml_for_infra_bindings(CBMExtractCtx *ctx, TSNode node) {
  * where one is a source key (topic, queue_name) and another is a
  * target key (uri, push_endpoint). Handles nested blocks like
  * push_config { push_endpoint = "..." }. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void scan_hcl_block_for_bindings(CBMExtractCtx *ctx, TSNode block) {
     const char *sources[8] = {NULL};
     const char *source_keys[8] = {NULL};
@@ -630,6 +634,7 @@ static void handle_yaml_nested(CBMExtractCtx *ctx, TSNode node) {
 
 // --- Main unified cursor walk ---
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void cbm_extract_unified(CBMExtractCtx *ctx) {
     const CBMLangSpec *spec = cbm_lang_spec(ctx->language);
     if (!spec) {

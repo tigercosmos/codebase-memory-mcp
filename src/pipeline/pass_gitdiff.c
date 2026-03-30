@@ -35,6 +35,7 @@ void cbm_parse_range(const char *s, int *out_start, int *out_count) {
     *out_count = (int)strtol(comma + 1, NULL, 10);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_parse_name_status(const char *output, cbm_changed_file_t *out, int max_out) {
     if (!output || !out || max_out <= 0) {
         return 0;
@@ -109,6 +110,7 @@ int cbm_parse_name_status(const char *output, cbm_changed_file_t *out, int max_o
     return count;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_parse_hunks(const char *output, cbm_changed_hunk_t *out, int max_out) {
     if (!output || !out || max_out <= 0) {
         return 0;

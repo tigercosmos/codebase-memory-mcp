@@ -297,6 +297,7 @@ bool cbm_is_secret_binding(const char *key, const char *value) {
 
 /* ── Clean JSON brackets ────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void cbm_clean_json_brackets(const char *s, char *out, size_t out_sz) {
     if (!s || !out || out_sz == 0) {
         return;
@@ -466,6 +467,7 @@ static void df_parse_arg(const char *line, cbm_dockerfile_result_t *r) {
     }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void df_parse_directives(const char *line, cbm_dockerfile_result_t *r) {
     /* WORKDIR */
     if (strncasecmp(line, "WORKDIR", 7) == 0 && (line[7] == ' ' || line[7] == '\t')) {
@@ -568,6 +570,7 @@ int cbm_parse_dockerfile_source(const char *source, cbm_dockerfile_result_t *out
 
 /* ── Dotenv parser ──────────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_parse_dotenv_source(const char *source, cbm_dotenv_result_t *out) {
     if (!source || !out) {
         return -1;
@@ -779,6 +782,7 @@ static void shell_parse_docker(const char *line, cbm_shell_result_t *r) {
     }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_parse_shell_source(const char *source, cbm_shell_result_t *out) {
     if (!source || !out) {
         return -1;
@@ -933,6 +937,7 @@ static int tf_extract_ident(const char *p, const char *keyword, char *out, size_
     return (int)(end - p + 1);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_parse_terraform_source(const char *source, cbm_terraform_result_t *out) {
     if (!source || !out) {
         return -1;

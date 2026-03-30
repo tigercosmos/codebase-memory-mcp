@@ -180,6 +180,7 @@ static void free_seen_dir_key(const char *key, void *val, void *ud) {
 /* ── Pass 1: Structure ──────────────────────────────────────────── */
 
 /* Create Project, Folder/Package, and File nodes in the graph buffer. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int pass_structure(cbm_pipeline_t *p, const cbm_file_info_t *files, int file_count) {
     cbm_log_info("pass.start", "pass", "structure", "files", itoa_buf(file_count));
 
@@ -325,6 +326,7 @@ static void *gh_compute_thread_fn(void *arg) {
 /* Process infra bindings: topic→URL pairs from IaC configs.
  * Creates Route nodes for endpoints and HANDLES edges linking
  * topic Routes to endpoint Routes (bridging the gap). */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void cbm_pipeline_process_infra_bindings(cbm_gbuf_t *gbuf, const cbm_file_info_t *files,
                                                 CBMFileResult **result_cache, int file_count) {
     int bindings = 0;
@@ -369,6 +371,7 @@ static void cbm_pipeline_process_infra_bindings(cbm_gbuf_t *gbuf, const cbm_file
     }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void cbm_pipeline_extract_infra_routes(cbm_gbuf_t *gbuf, const cbm_file_info_t *files,
                                               CBMFileResult **result_cache, int file_count) {
     for (int i = 0; i < file_count; i++) {
@@ -402,6 +405,7 @@ static void cbm_pipeline_extract_infra_routes(cbm_gbuf_t *gbuf, const cbm_file_i
 
 /* ── Pipeline run ────────────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
 int cbm_pipeline_run(cbm_pipeline_t *p) {
     if (!p) {
         return -1;

@@ -13,6 +13,7 @@
 // --- Throw/Raise extraction ---
 
 // Process a single node for throw extraction (called from iterative walker).
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void process_throw_node(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
     const char *kind = ts_node_type(node);
 
@@ -105,6 +106,7 @@ static void walk_throws(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec
 // --- Read/Write detection (iterative) ---
 
 #define READWRITE_STACK_CAP 512
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void walk_readwrites(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec) {
     TSNode stack[READWRITE_STACK_CAP];
     int top = 0;
@@ -159,6 +161,7 @@ void cbm_extract_semantic(CBMExtractCtx *ctx) {
 
 // --- Unified handlers ---
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void handle_throws(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, WalkState *state) {
     bool has_throws = spec->throw_node_types && spec->throw_node_types[0];
     bool has_clause = spec->throws_clause_field && spec->throws_clause_field[0];

@@ -697,6 +697,7 @@ static cbm_store_t *resolve_store(cbm_mcp_server_t *srv, const char *project) {
 }
 
 /* Build a helpful error listing available projects. Caller must free() result. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static char *build_project_list_error(const char *reason) {
     char dir_path[1024];
     cache_dir(dir_path, sizeof(dir_path));
@@ -762,6 +763,7 @@ static char *build_project_list_error(const char *reason) {
 
 /* list_projects: scan cache directory for .db files.
  * Each project is a single .db file — no central registry needed. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static char *handle_list_projects(cbm_mcp_server_t *srv, const char *args) {
     (void)srv;
     (void)args;
@@ -1219,6 +1221,7 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
     return result;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     char *func_name = cbm_mcp_get_string_arg(args, "function_name");
     char *project = cbm_mcp_get_string_arg(args, "project");
@@ -1620,6 +1623,7 @@ static char *snippet_suggestions(const char *input, cbm_node_t *nodes, int count
 }
 
 /* Build an enriched snippet response for a resolved node. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static char *build_snippet_response(cbm_mcp_server_t *srv, cbm_node_t *node,
                                     const char *match_method, bool include_neighbors,
                                     cbm_node_t *alternatives, int alt_count) {
@@ -1954,6 +1958,7 @@ static void build_grep_cmd(char *cmd, size_t cmd_sz, bool use_regex, bool scoped
 }
 
 /* Phase 4: assemble JSON output from search results */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static char *assemble_search_output(search_result_t *sr, int sr_count, grep_match_t *raw,
                                     int raw_count, int gm_count, int limit, int mode,
                                     int context_lines, const char *root_path) {
@@ -2126,6 +2131,7 @@ static char *assemble_search_output(search_result_t *sr, int sr_count, grep_matc
     return result;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
 static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     char *pattern = cbm_mcp_get_string_arg(args, "pattern");
     char *project = cbm_mcp_get_string_arg(args, "project");
@@ -2595,6 +2601,7 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
 
 /* ── manage_adr ───────────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
     char *project = cbm_mcp_get_string_arg(args, "project");
     char *mode_str = cbm_mcp_get_string_arg(args, "mode");
@@ -3081,6 +3088,7 @@ char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
 
 /* ── Event loop ───────────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_mcp_server_run(cbm_mcp_server_t *srv, FILE *in, FILE *out) {
     char *line = NULL;
     size_t cap = 0;

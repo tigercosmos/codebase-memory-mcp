@@ -202,6 +202,7 @@ static bool fp_ends_with(const char *fp, const char *suffix) {
     return fplen >= sflen && strcmp(fp + fplen - sflen, suffix) == 0;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_pipeline_implements_go(cbm_pipeline_ctx_t *ctx) {
     int edge_count = 0;
 
@@ -299,6 +300,7 @@ int cbm_pipeline_implements_go(cbm_pipeline_ctx_t *ctx) {
     return edge_count;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_pipeline_pass_semantic(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                                int file_count) {
     cbm_log_info("pass.start", "pass", "semantic", "files", itoa_log(file_count));

@@ -439,6 +439,7 @@ static bool str_contains(const char *haystack, const char *needle) {
     return strstr(haystack, needle) != NULL;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 CBMLanguage cbm_disambiguate_m(const char *path) {
     if (!path) {
         return CBM_LANG_MATLAB;

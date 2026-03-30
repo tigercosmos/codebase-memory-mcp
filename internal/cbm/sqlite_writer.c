@@ -447,6 +447,7 @@ static void pb_add_cell(PageBuilder *pb, const uint8_t *cell, int cell_len) {
 //   - Lookup: X ≤ K0 → cell[0].left_child, K0 < X ≤ K1 → cell[1].left_child, etc.
 //   - Table keys: varint(rowid)
 //   - Index keys: varint(payload_len) + payload (full index record)
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static uint32_t pb_build_interior(PageBuilder *pb, bool is_index) {
     if (!pb->leaves) {
         return 0;
@@ -919,6 +920,7 @@ static uint32_t write_table_btree(FILE *fp, uint32_t *next_page, const uint8_t *
 }
 
 // Write leaf pages for an index, returns root page.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static uint32_t write_index_btree(FILE *fp, uint32_t *next_page, uint8_t **cells, int *cell_lens,
                                   int count) {
     if (count == 0) {

@@ -71,6 +71,7 @@ static bool is_checked_exception(const char *name) {
 }
 
 /* Build per-file import map from cached extraction result or graph buffer edges. */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
                             const CBMFileResult *result, const char ***out_keys,
                             const char ***out_vals, int *out_count) {
@@ -180,6 +181,7 @@ static const cbm_gbuf_node_t *find_enclosing_node(cbm_pipeline_ctx_t *ctx, const
     return node;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_pipeline_pass_usages(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                              int file_count) {
     cbm_log_info("pass.start", "pass", "usages", "files", itoa_log(file_count));

@@ -117,6 +117,7 @@ typedef struct {
     int indent;
 } stack_entry_t;
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 cbm_yaml_node_t *cbm_yaml_parse(const char *text, int len) {
     if (!text || len <= 0) {
         return node_new(YAML_MAP);

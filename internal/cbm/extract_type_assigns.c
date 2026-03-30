@@ -10,6 +10,7 @@
 
 // Extract class/type name from a constructor expression.
 // e.g., new Foo() -> "Foo", Foo() -> "Foo" (if uppercase), Foo{} -> "Foo"
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static const char *extract_constructor_type(CBMArena *a, TSNode rhs, const char *source,
                                             CBMLanguage lang) {
     const char *kind = ts_node_type(rhs);
@@ -77,6 +78,7 @@ static const char *extract_constructor_type(CBMArena *a, TSNode rhs, const char 
 }
 
 // Walk AST for assignment patterns where RHS is a constructor call.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void walk_type_assigns(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
     const char *kind = ts_node_type(node);
 
@@ -189,6 +191,7 @@ void cbm_extract_type_assigns(CBMExtractCtx *ctx) {
 
 // --- Unified handler ---
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void handle_type_assigns(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec,
                          WalkState *state) {
     const char *kind = ts_node_type(node);

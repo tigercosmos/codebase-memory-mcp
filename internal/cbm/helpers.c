@@ -545,6 +545,7 @@ static const char *module_parents_matlab[] = {"source_file", NULL};
 static const char *module_parents_form[] = {"source_file", NULL};
 static const char *module_parents_magma[] = {"source_file", NULL};
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 bool cbm_is_module_level(TSNode node, CBMLanguage lang) {
     TSNode parent = ts_node_parent(node);
     if (ts_node_is_null(parent)) {
@@ -727,6 +728,7 @@ static size_t strip_ext_len(const char *s, size_t len) {
     return len;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 char *cbm_fqn_compute(CBMArena *a, const char *project, const char *rel_path, const char *name) {
     // Build: project.path1.path2.filename.name
     // where rel_path = "path1/path2/filename.ext"
@@ -832,6 +834,7 @@ char *cbm_fqn_folder(CBMArena *a, const char *project, const char *rel_dir) {
 
 /* ── String literal classifier ──────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static bool is_url_like(const char *s, int len) {
     if (len < 3) {
         return false;

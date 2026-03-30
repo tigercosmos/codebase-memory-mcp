@@ -88,6 +88,7 @@ static bool lean_is_in_type_position(TSNode node) {
 }
 
 // Extract callee name from a call node
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static char *extract_callee_name(CBMArena *a, TSNode node, const char *source, CBMLanguage lang) {
     // Lean 4: apply — name field is callee. Skip if in a type annotation position.
     // Must be checked before the generic "name" field handler below.
@@ -278,6 +279,7 @@ static char *extract_callee_name(CBMArena *a, TSNode node, const char *source, C
 
 // Walk AST for call nodes (iterative)
 #define CALLS_STACK_CAP 512
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void walk_calls(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec) {
     TSNode stack[CALLS_STACK_CAP];
     int top = 0;
@@ -385,6 +387,7 @@ void cbm_extract_calls(CBMExtractCtx *ctx) {
 /* Extract all arguments from a call expression into call->args[].
  * Captures expression text, resolved constants, keyword names, and
  * dotted field chains (member_expression → "payload.info.url"). */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void extract_call_args(CBMExtractCtx *ctx, TSNode args, CBMCall *call) {
     uint32_t argc = ts_node_named_child_count(args);
     int positional_idx = 0;
@@ -429,6 +432,7 @@ static void extract_call_args(CBMExtractCtx *ctx, TSNode args, CBMCall *call) {
     }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void handle_calls(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, WalkState *state) {
     if (!spec->call_node_types || !spec->call_node_types[0]) {
         return;

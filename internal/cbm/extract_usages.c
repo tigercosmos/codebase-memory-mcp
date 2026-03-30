@@ -72,6 +72,7 @@ static bool is_reference_node(TSNode node, CBMLanguage lang) {
 
 // Iterative usage walker — explicit stack
 #define USAGES_STACK_CAP 4096
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void walk_usages(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec) {
     TSNode stack[USAGES_STACK_CAP];
     int top = 0;

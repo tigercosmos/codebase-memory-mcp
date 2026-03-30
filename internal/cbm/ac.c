@@ -72,6 +72,7 @@ static void queue_free(Queue *q) {
 //   alpha_size  — alphabet size (256 if alpha_map is NULL)
 //
 // Returns a heap-allocated automaton. Caller must call cbm_ac_free().
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 CBMAutomaton *cbm_ac_build(const char **patterns, const int *lengths, int count,
                            const uint8_t *alpha_map, int alpha_size) {
     if (count <= 0) {

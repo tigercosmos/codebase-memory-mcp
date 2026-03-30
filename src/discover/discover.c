@@ -226,6 +226,7 @@ static void fl_add(file_list_t *fl, const char *abs_path, const char *rel_path, 
 
 /* ── Recursive walk ──────────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void walk_dir(const char *dir_path, const char *rel_prefix, const cbm_discover_opts_t *opts,
                      const cbm_gitignore_t *gitignore, const cbm_gitignore_t *cbmignore,
                      file_list_t *out) {

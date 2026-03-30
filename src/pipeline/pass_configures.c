@@ -33,6 +33,7 @@ bool cbm_is_env_var_name(const char *s) {
     return has_upper;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_normalize_config_key(const char *key, char *norm_out, size_t norm_sz) {
     if (!key || !norm_out || norm_sz == 0) {
         return 0;

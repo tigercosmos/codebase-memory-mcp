@@ -40,6 +40,7 @@ static TSNode func_name_node(TSNode node) {
 }
 
 // Resolve the name node for a function, handling language-specific quirks
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
 static TSNode resolve_func_name(TSNode node, CBMLanguage lang, const char *source) {
     const char *kind = ts_node_type(node);
 
@@ -398,6 +399,7 @@ static bool is_js_exported(TSNode node) {
 }
 
 // Extract docstring from the node's leading comment
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static const char *extract_docstring(CBMArena *a, TSNode node, const char *source,
                                      CBMLanguage lang) {
     // Go: type_spec is inside type_declaration; comment is before type_declaration
@@ -498,6 +500,7 @@ static const char *decorator_method_name(const char *attr_text) {
  * Pure AST approach: walks the decorator node's call children to find:
  * 1. The function/attribute name → infer HTTP method
  * 2. The first string argument → route path */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void extract_route_from_decorators(CBMArena *a, TSNode func_node, const char *source,
                                           const CBMLangSpec *spec, const char **out_path,
                                           const char **out_method) {
@@ -583,6 +586,7 @@ static void extract_route_from_decorators(CBMArena *a, TSNode func_node, const c
 }
 
 // Extract decorator names from preceding decorator/annotation nodes
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static const char **extract_decorators(CBMArena *a, TSNode node, const char *source,
                                        CBMLanguage lang, const CBMLangSpec *spec) {
     if (!spec->decorator_node_types || !spec->decorator_node_types[0]) {
@@ -657,6 +661,7 @@ static const char **extract_decorators(CBMArena *a, TSNode node, const char *sou
 }
 
 // Extract base class names from a class node
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static const char **extract_base_classes(CBMArena *a, TSNode node, const char *source,
                                          CBMLanguage lang) {
     (void)lang;
@@ -841,6 +846,7 @@ static char *clean_type_name(CBMArena *a, const char *raw) {
 
 // Extract param_names from a parameter list node.
 // Returns NULL-terminated arena-allocated array.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static const char **extract_param_names(CBMArena *a, TSNode params, const char *source,
                                         CBMLanguage lang) {
     (void)lang;
@@ -910,6 +916,7 @@ static const char **extract_param_names(CBMArena *a, TSNode params, const char *
 // Extract return_types from a return type node.
 // Parses Go-style multi-return (T1, T2) and single return types.
 // Returns NULL-terminated arena-allocated array.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static const char **extract_return_types(CBMArena *a, TSNode rt_node, const char *source,
                                          CBMLanguage lang) {
     (void)lang;
@@ -979,6 +986,7 @@ static const char **extract_return_types(CBMArena *a, TSNode rt_node, const char
 
 // Extract param_types from a parameter list node.
 // Returns NULL-terminated arena-allocated array.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static const char **extract_param_types(CBMArena *a, TSNode params, const char *source,
                                         CBMLanguage lang) {
     if (ts_node_is_null(params)) {
@@ -1131,6 +1139,7 @@ static const char **extract_param_types(CBMArena *a, TSNode params, const char *
 
 // --- Function definition extraction ---
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void extract_func_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
     CBMArena *a = ctx->arena;
 
@@ -1272,6 +1281,7 @@ static void extract_func_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec 
 
 // --- Class definition extraction ---
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
 static void extract_class_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
     CBMArena *a = ctx->arena;
     const char *kind = ts_node_type(node);
@@ -1587,6 +1597,7 @@ static TSNode find_class_body(TSNode class_node, CBMLanguage lang) {
 }
 
 // Helper: try to extract method name from a node, with fallbacks
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static TSNode resolve_method_name(TSNode child, CBMLanguage lang) {
     TSNode name_node = func_name_node(child);
     if (!ts_node_is_null(name_node)) {
@@ -1661,6 +1672,7 @@ static TSNode resolve_method_name(TSNode child, CBMLanguage lang) {
 }
 
 // Push a single method definition
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void push_method_def(CBMExtractCtx *ctx, TSNode child, const char *class_qn,
                             const CBMLangSpec *spec, TSNode name_node) {
     CBMArena *a = ctx->arena;
@@ -1741,6 +1753,7 @@ static void push_method_def(CBMExtractCtx *ctx, TSNode child, const char *class_
 }
 
 // Extract methods inside a class body
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void extract_class_methods(CBMExtractCtx *ctx, TSNode class_node, const char *class_qn,
                                   const CBMLangSpec *spec) {
     TSNode body = find_class_body(class_node, ctx->language);
@@ -1872,6 +1885,7 @@ static void extract_rust_impl(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
 
 // --- Elixir def/defp/defmodule ---
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void extract_elixir_call(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
     CBMArena *a = ctx->arena;
 
@@ -2049,6 +2063,7 @@ static const char *extract_java_field_name(CBMArena *a, TSNode field, const char
 
 /* ── Variable name extractors by language group ─────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void extract_vars_mainstream(CBMExtractCtx *ctx, TSNode node, CBMArena *a,
                                     const char *kind) {
     (void)kind;
@@ -2153,6 +2168,7 @@ static void extract_vars_mainstream(CBMExtractCtx *ctx, TSNode node, CBMArena *a
     }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void extract_vars_dynamic(CBMExtractCtx *ctx, TSNode node, CBMArena *a, const char *kind) {
     switch (ctx->language) {
     case CBM_LANG_PHP: {
@@ -2288,6 +2304,7 @@ static void extract_vars_dynamic(CBMExtractCtx *ctx, TSNode node, CBMArena *a, c
     }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void extract_vars_jvm(CBMExtractCtx *ctx, TSNode node, CBMArena *a) {
     switch (ctx->language) {
     case CBM_LANG_SCALA: {
@@ -2344,6 +2361,7 @@ static void extract_vars_jvm(CBMExtractCtx *ctx, TSNode node, CBMArena *a) {
     }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void extract_vars_config(CBMExtractCtx *ctx, TSNode node, CBMArena *a, const char *kind) {
     switch (ctx->language) {
     case CBM_LANG_YAML: {
@@ -2652,6 +2670,7 @@ static void extract_variables(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec
 // Extract typed struct/class fields for cross-file LSP resolution (C/C++/CUDA/Go/Java/Rust etc.)
 // Creates "Field" label definitions with return_type set to the field's type text.
 // These are later collected by DefsToLSPDefs to build FieldDefs pipe-separated strings.
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void extract_class_fields(CBMExtractCtx *ctx, TSNode class_node, const char *class_qn,
                                  const CBMLangSpec *spec) {
     if (!spec->field_node_types || !spec->field_node_types[0]) {
@@ -2819,6 +2838,7 @@ static void push_nested_class_nodes(TSNode body, const CBMLangSpec *spec, walk_d
     }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void walk_defs(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec, int depth_unused) {
     (void)depth_unused;
     walk_defs_frame_t stack[CBM_WALK_DEFS_STACK_CAP];

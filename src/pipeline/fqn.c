@@ -49,6 +49,7 @@ static char *join_segments(const char **segments, int count) {
 
 /* ── Public API ──────────────────────────────────────────────────── */
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 char *cbm_pipeline_fqn_compute(const char *project, const char *rel_path, const char *name) {
     if (!project) {
         return strdup("");

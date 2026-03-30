@@ -65,6 +65,7 @@ static const char *itoa_log(int val) {
 /* Append a JSON-escaped string value to buf at position *pos.
  * Writes: ,"key":"escaped_value"
  * Handles: \, ", \n, \r, \t */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void append_json_string(char *buf, size_t bufsize, size_t *pos, const char *key,
                                const char *val) {
     if (!val || !val[0]) {
@@ -195,6 +196,7 @@ static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def)
     }
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_pipeline_pass_definitions(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                                   int file_count) {
     cbm_log_info("pass.start", "pass", "definitions", "files", itoa_log(file_count));

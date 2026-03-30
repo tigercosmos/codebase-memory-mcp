@@ -142,6 +142,7 @@ static void extract_return_type_refs(CBMExtractCtx *ctx, TSNode func_node, const
 }
 
 // Walk function body for type references (casts, type assertions, local var types, generics).
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void walk_body_type_refs(CBMExtractCtx *ctx, TSNode node, const char *func_qn) {
     const char *kind = ts_node_type(node);
 
@@ -296,6 +297,7 @@ void cbm_extract_type_refs(CBMExtractCtx *ctx) {
 // The cursor visits both, so this single handler replaces the old
 // walk_type_refs + walk_body_type_refs split.
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 void handle_type_refs(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec, WalkState *state) {
     if (!spec->function_node_types || !spec->function_node_types[0]) {
         return;

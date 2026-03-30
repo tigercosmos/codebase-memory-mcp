@@ -60,6 +60,7 @@ int cbm_split_camel_case(const char *s, char **out, int max_out) {
     return count;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_tokenize_decorator(const char *dec, char **out, int max_out) {
     if (!dec || !out || max_out <= 0) {
         return 0;
@@ -273,6 +274,7 @@ static int cmp_str(const void *a, const void *b) {
     return strcmp(*(const char **)a, *(const char **)b);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_pipeline_pass_decorator_tags(cbm_gbuf_t *gbuf, const char *project) {
     if (!gbuf || !project) {
         return 0;

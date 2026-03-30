@@ -206,6 +206,7 @@ static const char *path_basename(const char *path) {
     return slash ? slash + 1 : path;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int collect_manifest_deps(const cbm_gbuf_node_t *const *vars, int var_count,
                                  dep_entry_t *out, int max_out) {
     int n = 0;
@@ -264,6 +265,7 @@ static int collect_manifest_deps(const cbm_gbuf_node_t *const *vars, int var_cou
     return n;
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int strategy_dep_imports(cbm_gbuf_t *gb) {
     const cbm_gbuf_node_t **vars = NULL;
     int var_count = 0;
@@ -351,6 +353,7 @@ static int strategy_dep_imports(cbm_gbuf_t *gb) {
 /* ── Strategy 3: Config File Path → Code String Reference ───────── */
 
 /* Disk-based fallback: reads source from disk (sequential pipeline path). */
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int strategy_file_refs_disk(cbm_gbuf_t *gb, const char *project, const char *repo_path) {
     /* Collect config Module nodes */
     const cbm_gbuf_node_t **modules = NULL;

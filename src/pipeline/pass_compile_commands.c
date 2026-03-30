@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include "yyjson/yyjson.h"
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_split_command(const char *cmd, char **out, int max_out) {
     if (!cmd || !out || max_out <= 0) {
         return 0;
@@ -74,6 +75,7 @@ static char *resolve_path(const char *path, const char *directory) {
     return strdup(path);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 cbm_compile_flags_t *cbm_extract_flags(const char **args, int argc, const char *directory) {
     cbm_compile_flags_t *f = calloc(1, sizeof(*f));
     if (!f) {
@@ -145,6 +147,7 @@ void cbm_compile_flags_free(cbm_compile_flags_t *f) {
     free(f);
 }
 
+// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_parse_compile_commands(const char *json_data, const char *repo_path, char ***out_paths,
                                cbm_compile_flags_t ***out_flags) {
     if (!json_data || !repo_path || !out_paths || !out_flags) {

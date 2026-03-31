@@ -497,7 +497,7 @@ static void extract_worker(int worker_id, void *ctx_ptr) {
     cbm_slab_destroy_thread();
 }
 
-int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *files, int file_count,
+int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count,
                          CBMFileResult **result_cache, _Atomic int64_t *shared_ids,
                          int worker_count) {
     if (file_count == 0) {

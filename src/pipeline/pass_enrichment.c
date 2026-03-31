@@ -60,13 +60,37 @@ int cbm_split_camel_case(const char *s, char **out, int max_out) {
     return count;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Strip decorator syntax: leading @, #[...], and arguments (...).
+ * Operates in-place on buf. Returns pointer to the cleaned token start. */
+static char *strip_decorator_syntax(char *buf) {
+    char *p = buf;
+    if (*p == '@') {
+        p++;
+    }
+    if (p[0] == '#' && p[1] == '[') {
+        p += 2;
+        size_t plen = strlen(p);
+        if (plen > 0 && p[plen - 1] == ']') {
+            p[plen - 1] = '\0';
+        }
+    }
+    char *paren = strchr(p, '(');
+    if (paren) {
+        *paren = '\0';
+    }
+    for (char *c = p; *c; c++) {
+        if (*c == '.' || *c == '_' || *c == '-' || *c == ':' || *c == '/') {
+            *c = ' ';
+        }
+    }
+    return p;
+}
+
 int cbm_tokenize_decorator(const char *dec, char **out, int max_out) {
     if (!dec || !out || max_out <= 0) {
         return 0;
     }
 
-    /* Work on a copy */
     char buf[256];
     size_t len = strlen(dec);
     if (len >= sizeof(buf)) {
@@ -75,58 +99,26 @@ int cbm_tokenize_decorator(const char *dec, char **out, int max_out) {
     memcpy(buf, dec, len);
     buf[len] = '\0';
 
-    char *p = buf;
+    char *p = strip_decorator_syntax(buf);
 
-    /* Strip leading @ */
-    if (*p == '@') {
-        p++;
-    }
-    /* Strip leading #[ and trailing ] */
-    if (p[0] == '#' && p[1] == '[') {
-        p += 2;
-        size_t plen = strlen(p);
-        if (plen > 0 && p[plen - 1] == ']') {
-            p[plen - 1] = '\0';
-        }
-    }
-
-    /* Strip arguments: everything from first ( onwards */
-    char *paren = strchr(p, '(');
-    if (paren) {
-        *paren = '\0';
-    }
-
-    /* Replace delimiters with spaces: . _ - : / */
-    for (char *c = p; *c; c++) {
-        if (*c == '.' || *c == '_' || *c == '-' || *c == ':' || *c == '/') {
-            *c = ' ';
-        }
-    }
-
-    /* Process each part: split camelCase, lowercase, filter stopwords */
     int count = 0;
     char *saveptr = NULL;
     char *part = strtok_r(p, " ", &saveptr);
 
     while (part && count < max_out) {
-        /* Split camelCase */
         char *camel_parts[16];
         int camel_count = cbm_split_camel_case(part, camel_parts, 16);
 
         for (int i = 0; i < camel_count && count < max_out; i++) {
-            /* Lowercase */
             for (char *c = camel_parts[i]; *c; c++) {
                 *c = (char)tolower((unsigned char)*c);
             }
-
-            /* Filter: must be >= 2 chars and not a stopword */
             if (strlen(camel_parts[i]) >= 2 && !is_decorator_stopword(camel_parts[i])) {
                 out[count++] = camel_parts[i];
             } else {
                 free(camel_parts[i]);
             }
         }
-
         part = strtok_r(NULL, " ", &saveptr);
     }
 
@@ -274,20 +266,26 @@ static int cmp_str(const void *a, const void *b) {
     return strcmp(*(const char **)a, *(const char **)b);
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-int cbm_pipeline_pass_decorator_tags(cbm_gbuf_t *gbuf, const char *project) {
-    if (!gbuf || !project) {
-        return 0;
+/* Free tagged_node_t array. */
+static void free_tagged_nodes(tagged_node_t *nodes, int count) {
+    for (int n = 0; n < count; n++) {
+        free(nodes[n].qualified_name);
+        for (int w = 0; w < nodes[n].word_count; w++) {
+            free(nodes[n].words[w]);
+        }
+        free(nodes[n].words);
     }
+    free(nodes);
+}
 
+/* Phase 1: Collect decorated nodes and count word frequency. */
+static int collect_decorated_nodes(cbm_gbuf_t *gbuf, tagged_node_t **out_nodes,
+                                   CBMHashTable *word_counts) {
     static const char *labels[] = {"Function", "Method", "Class"};
     static const int nlabels = 3;
-
-    /* Phase 1: Collect decorated nodes and count word frequency */
     tagged_node_t *nodes = NULL;
     int node_count = 0;
     int node_cap = 0;
-    CBMHashTable *word_counts = cbm_ht_create(128);
 
     for (int l = 0; l < nlabels; l++) {
         const cbm_gbuf_node_t **found = NULL;
@@ -303,28 +301,68 @@ int cbm_pipeline_pass_decorator_tags(cbm_gbuf_t *gbuf, const char *project) {
             if (wc <= 0) {
                 continue;
             }
-
-            /* Grow array if needed */
             if (node_count >= node_cap) {
                 node_cap = node_cap ? node_cap * 2 : 64;
                 nodes = safe_realloc(nodes, sizeof(tagged_node_t) * node_cap);
             }
-
             tagged_node_t *tn = &nodes[node_count++];
             tn->node_id = found[i]->id;
             tn->qualified_name = strdup(found[i]->qualified_name);
             tn->words = words;
             tn->word_count = wc;
-
-            /* Update word counts */
             for (int w = 0; w < wc; w++) {
                 intptr_t cnt = (intptr_t)cbm_ht_get(word_counts, words[w]);
                 cbm_ht_set(word_counts, words[w], (void *)(cnt + 1));
             }
         }
-        /* gbuf data is borrowed — no free needed */
     }
 
+    *out_nodes = nodes;
+    return node_count;
+}
+
+/* Phase 3: Apply candidate tags to nodes in the gbuf. */
+static int apply_decorator_tags(cbm_gbuf_t *gbuf, tagged_node_t *nodes, int node_count,
+                                CBMHashTable *candidates) {
+    int tagged = 0;
+    for (int n = 0; n < node_count; n++) {
+        char *tag_words[256];
+        int tag_count = 0;
+        for (int w = 0; w < nodes[n].word_count; w++) {
+            if (cbm_ht_get(candidates, nodes[n].words[w]) && tag_count < 256) {
+                tag_words[tag_count++] = nodes[n].words[w];
+            }
+        }
+        if (tag_count == 0) {
+            continue;
+        }
+        qsort(tag_words, tag_count, sizeof(char *), cmp_str);
+
+        const cbm_gbuf_node_t *gn = cbm_gbuf_find_by_qn(gbuf, nodes[n].qualified_name);
+        if (!gn) {
+            continue;
+        }
+
+        const char *props = gn->properties_json ? gn->properties_json : "{}";
+        char *new_props = inject_decorator_tags(props, tag_words, tag_count);
+        if (new_props) {
+            cbm_gbuf_upsert_node(gbuf, gn->label, gn->name, gn->qualified_name, gn->file_path,
+                                 gn->start_line, gn->end_line, new_props);
+            free(new_props);
+            tagged++;
+        }
+    }
+    return tagged;
+}
+
+int cbm_pipeline_pass_decorator_tags(cbm_gbuf_t *gbuf, const char *project) {
+    if (!gbuf || !project) {
+        return 0;
+    }
+
+    CBMHashTable *word_counts = cbm_ht_create(128);
+    tagged_node_t *nodes = NULL;
+    int node_count = collect_decorated_nodes(gbuf, &nodes, word_counts);
     if (node_count == 0) {
         cbm_ht_free(word_counts);
         free(nodes);
@@ -334,7 +372,6 @@ int cbm_pipeline_pass_decorator_tags(cbm_gbuf_t *gbuf, const char *project) {
     /* Phase 2: Determine candidates (words on 2+ nodes) */
     CBMHashTable *candidates = cbm_ht_create(64);
     int candidate_count = 0;
-
     for (int n = 0; n < node_count; n++) {
         for (int w = 0; w < nodes[n].word_count; w++) {
             const char *word = nodes[n].words[w];
@@ -346,65 +383,12 @@ int cbm_pipeline_pass_decorator_tags(cbm_gbuf_t *gbuf, const char *project) {
         }
     }
 
-    if (candidate_count == 0) {
-        for (int n = 0; n < node_count; n++) {
-            free(nodes[n].qualified_name);
-            for (int w = 0; w < nodes[n].word_count; w++) {
-                free(nodes[n].words[w]);
-            }
-            free(nodes[n].words);
-        }
-        free(nodes);
-        cbm_ht_free(word_counts);
-        cbm_ht_free(candidates);
-        return 0;
-    }
-
-    /* Phase 3: Tag each node with its candidate words */
     int tagged = 0;
-    for (int n = 0; n < node_count; n++) {
-        char *tag_words[256];
-        int tag_count = 0;
-        for (int w = 0; w < nodes[n].word_count; w++) {
-            if (cbm_ht_get(candidates, nodes[n].words[w]) && tag_count < 256) {
-                tag_words[tag_count++] = nodes[n].words[w];
-            }
-        }
-
-        if (tag_count == 0) {
-            continue;
-        }
-
-        /* Sort tags alphabetically */
-        qsort(tag_words, tag_count, sizeof(char *), cmp_str);
-
-        /* Look up node in gbuf (borrowed pointer) */
-        const cbm_gbuf_node_t *gn = cbm_gbuf_find_by_qn(gbuf, nodes[n].qualified_name);
-        if (!gn) {
-            continue;
-        }
-
-        /* Inject decorator_tags into properties_json */
-        const char *props = gn->properties_json ? gn->properties_json : "{}";
-        char *new_props = inject_decorator_tags(props, tag_words, tag_count);
-        if (new_props) {
-            /* Re-upsert with updated properties — gbuf frees old, copies new */
-            cbm_gbuf_upsert_node(gbuf, gn->label, gn->name, gn->qualified_name, gn->file_path,
-                                 gn->start_line, gn->end_line, new_props);
-            free(new_props);
-            tagged++;
-        }
+    if (candidate_count > 0) {
+        tagged = apply_decorator_tags(gbuf, nodes, node_count, candidates);
     }
 
-    /* Cleanup */
-    for (int n = 0; n < node_count; n++) {
-        free(nodes[n].qualified_name);
-        for (int w = 0; w < nodes[n].word_count; w++) {
-            free(nodes[n].words[w]);
-        }
-        free(nodes[n].words);
-    }
-    free(nodes);
+    free_tagged_nodes(nodes, node_count);
     cbm_ht_free(word_counts);
     cbm_ht_free(candidates);
 

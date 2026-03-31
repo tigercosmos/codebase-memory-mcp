@@ -696,40 +696,45 @@ static cbm_store_t *resolve_store(cbm_mcp_server_t *srv, const char *project) {
     return srv->store;
 }
 
+/* Scan cache dir for .db files, writing comma-separated quoted names into out.
+ * Returns the number of projects found. */
+static int collect_db_project_names(const char *dir_path, char *out, size_t out_sz) {
+    int count = 0;
+    int offset = 0;
+    cbm_dir_t *d = cbm_opendir(dir_path);
+    if (!d) {
+        return 0;
+    }
+    cbm_dirent_t *entry;
+    while ((entry = cbm_readdir(d)) != NULL) {
+        const char *n = entry->name;
+        size_t len = strlen(n);
+        if (len < 4 || strcmp(n + len - 3, ".db") != 0) {
+            continue;
+        }
+        if (strncmp(n, "tmp-", 4) == 0 || strncmp(n, "_", 1) == 0) {
+            continue;
+        }
+        if (count > 0 && offset < (int)out_sz - 2) {
+            out[offset++] = ',';
+        }
+        int wrote = snprintf(out + offset, out_sz - (size_t)offset, "\"%.*s\"", (int)(len - 3), n);
+        if (wrote > 0) {
+            offset += wrote;
+        }
+        count++;
+    }
+    cbm_closedir(d);
+    return count;
+}
+
 /* Build a helpful error listing available projects. Caller must free() result. */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static char *build_project_list_error(const char *reason) {
     char dir_path[1024];
     cache_dir(dir_path, sizeof(dir_path));
 
-    /* Collect project names from .db files */
     char projects[4096] = "";
-    int count = 0;
-    cbm_dir_t *d = cbm_opendir(dir_path);
-    if (d) {
-        int offset = 0;
-        cbm_dirent_t *entry;
-        while ((entry = cbm_readdir(d)) != NULL) {
-            const char *n = entry->name;
-            size_t len = strlen(n);
-            if (len < 4 || strcmp(n + len - 3, ".db") != 0) {
-                continue;
-            }
-            if (strncmp(n, "tmp-", 4) == 0 || strncmp(n, "_", 1) == 0) {
-                continue;
-            }
-            if (count > 0 && offset < (int)sizeof(projects) - 2) {
-                projects[offset++] = ',';
-            }
-            int wrote = snprintf(projects + offset, sizeof(projects) - (size_t)offset, "\"%.*s\"",
-                                 (int)(len - 3), n);
-            if (wrote > 0) {
-                offset += wrote;
-            }
-            count++;
-        }
-        cbm_closedir(d);
-    }
+    int count = collect_db_project_names(dir_path, projects, sizeof(projects));
 
     enum { ERR_BUF_SZ = 5120 };
     char buf[ERR_BUF_SZ];
@@ -761,9 +766,58 @@ static char *build_project_list_error(const char *reason) {
 
 /* ── Tool handler implementations ─────────────────────────────── */
 
+/* Return true if filename is a valid project .db file (not temp/internal). */
+static bool is_project_db_file(const char *name, size_t len) {
+    if (len < 4 || strcmp(name + len - 3, ".db") != 0) {
+        return false;
+    }
+    if (strncmp(name, "tmp-", 4) == 0 || strncmp(name, "_", 1) == 0 ||
+        strncmp(name, ":memory:", 8) == 0) {
+        return false;
+    }
+    return true;
+}
+
+/* Open a .db file briefly, collect node/edge counts and root_path,
+ * then append a JSON entry to arr. */
+static void build_project_json_entry(yyjson_mut_doc *doc, yyjson_mut_val *arr, const char *dir_path,
+                                     const char *name, size_t name_len, const struct stat *st) {
+    char project_name[1024];
+    snprintf(project_name, sizeof(project_name), "%.*s", (int)(name_len - 3), name);
+
+    char full_path[2048];
+    snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, name);
+
+    cbm_store_t *pstore = cbm_store_open_path(full_path);
+    int nodes = 0;
+    int edges = 0;
+    char root_path_buf[1024] = "";
+    if (pstore) {
+        nodes = cbm_store_count_nodes(pstore, project_name);
+        edges = cbm_store_count_edges(pstore, project_name);
+        cbm_project_t proj = {0};
+        if (cbm_store_get_project(pstore, project_name, &proj) == CBM_STORE_OK) {
+            if (proj.root_path) {
+                snprintf(root_path_buf, sizeof(root_path_buf), "%s", proj.root_path);
+            }
+            free((void *)proj.name);
+            free((void *)proj.indexed_at);
+            free((void *)proj.root_path);
+        }
+        cbm_store_close(pstore);
+    }
+
+    yyjson_mut_val *p = yyjson_mut_obj(doc);
+    yyjson_mut_obj_add_strcpy(doc, p, "name", project_name);
+    yyjson_mut_obj_add_strcpy(doc, p, "root_path", root_path_buf);
+    yyjson_mut_obj_add_int(doc, p, "nodes", nodes);
+    yyjson_mut_obj_add_int(doc, p, "edges", edges);
+    yyjson_mut_obj_add_int(doc, p, "size_bytes", (int64_t)st->st_size);
+    yyjson_mut_arr_add_val(arr, p);
+}
+
 /* list_projects: scan cache directory for .db files.
  * Each project is a single .db file — no central registry needed. */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static char *handle_list_projects(cbm_mcp_server_t *srv, const char *args) {
     (void)srv;
     (void)args;
@@ -783,57 +837,16 @@ static char *handle_list_projects(cbm_mcp_server_t *srv, const char *args) {
         while ((entry = cbm_readdir(d)) != NULL) {
             const char *name = entry->name;
             size_t len = strlen(name);
-
-            /* Must end with .db and be at least 4 chars (x.db) */
-            if (len < 4 || strcmp(name + len - 3, ".db") != 0) {
+            if (!is_project_db_file(name, len)) {
                 continue;
             }
-
-            /* Skip temp/internal files */
-            if (strncmp(name, "tmp-", 4) == 0 || strncmp(name, "_", 1) == 0 ||
-                strncmp(name, ":memory:", 8) == 0) {
-                continue;
-            }
-
-            /* Extract project name = filename without .db suffix */
-            char project_name[1024];
-            snprintf(project_name, sizeof(project_name), "%.*s", (int)(len - 3), name);
-
-            /* Get file metadata */
             char full_path[2048];
             snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, name);
             struct stat st;
             if (stat(full_path, &st) != 0) {
                 continue;
             }
-
-            /* Open briefly to get node/edge count + root_path */
-            cbm_store_t *pstore = cbm_store_open_path(full_path);
-            int nodes = 0;
-            int edges = 0;
-            char root_path_buf[1024] = "";
-            if (pstore) {
-                nodes = cbm_store_count_nodes(pstore, project_name);
-                edges = cbm_store_count_edges(pstore, project_name);
-                cbm_project_t proj = {0};
-                if (cbm_store_get_project(pstore, project_name, &proj) == CBM_STORE_OK) {
-                    if (proj.root_path) {
-                        snprintf(root_path_buf, sizeof(root_path_buf), "%s", proj.root_path);
-                    }
-                    free((void *)proj.name);
-                    free((void *)proj.indexed_at);
-                    free((void *)proj.root_path);
-                }
-                cbm_store_close(pstore);
-            }
-
-            yyjson_mut_val *p = yyjson_mut_obj(doc);
-            yyjson_mut_obj_add_strcpy(doc, p, "name", project_name);
-            yyjson_mut_obj_add_strcpy(doc, p, "root_path", root_path_buf);
-            yyjson_mut_obj_add_int(doc, p, "nodes", nodes);
-            yyjson_mut_obj_add_int(doc, p, "edges", edges);
-            yyjson_mut_obj_add_int(doc, p, "size_bytes", (int64_t)st.st_size);
-            yyjson_mut_arr_add_val(arr, p);
+            build_project_json_entry(doc, arr, dir_path, name, len, &st);
         }
         cbm_closedir(d);
     }
@@ -1221,7 +1234,70 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
     return result;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Resolve edge types from args: explicit array > mode-based > default ("CALLS").
+ * Writes types into out_types (max 16). Returns the parsed yyjson_doc if explicit
+ * edge_types were found (caller must keep alive until types are consumed), or NULL. */
+static yyjson_doc *resolve_trace_edge_types(const char *args, const char *mode,
+                                            const char **out_types, int *out_count) {
+    static const char *mode_calls[] = {"CALLS"};
+    static const char *mode_data_flow[] = {"CALLS", "DATA_FLOWS"};
+    static const char *mode_cross_svc[] = {"HTTP_CALLS", "ASYNC_CALLS", "DATA_FLOWS", "CALLS"};
+
+    *out_count = 0;
+
+    yyjson_doc *et_doc = yyjson_read(args, strlen(args), 0);
+    if (et_doc) {
+        yyjson_val *et_arr = yyjson_obj_get(yyjson_doc_get_root(et_doc), "edge_types");
+        if (et_arr && yyjson_is_arr(et_arr)) {
+            size_t idx2;
+            size_t max2;
+            yyjson_val *val2;
+            yyjson_arr_foreach(et_arr, idx2, max2, val2) {
+                if (yyjson_is_str(val2) && *out_count < 16) {
+                    out_types[(*out_count)++] = yyjson_get_str(val2);
+                }
+            }
+        }
+    }
+
+    if (*out_count > 0) {
+        return et_doc; /* caller must keep alive — pointers reference doc memory */
+    }
+
+    yyjson_doc_free(et_doc); /* no explicit types found, free */
+
+    const char **defaults = mode_calls;
+    int n_defaults = 1;
+    if (mode && strcmp(mode, "data_flow") == 0) {
+        defaults = mode_data_flow;
+        n_defaults = 2;
+    } else if (mode && strcmp(mode, "cross_service") == 0) {
+        defaults = mode_cross_svc;
+        n_defaults = 4;
+    }
+    for (int i = 0; i < n_defaults; i++) {
+        out_types[i] = defaults[i];
+    }
+    *out_count = n_defaults;
+    return NULL;
+}
+
+/* Convert BFS traversal results into a yyjson_mut array of {name, qualified_name, hop}. */
+static yyjson_mut_val *bfs_to_json_array(yyjson_mut_doc *doc, cbm_traverse_result_t *tr) {
+    yyjson_mut_val *arr = yyjson_mut_arr(doc);
+    for (int i = 0; i < tr->visited_count; i++) {
+        yyjson_mut_val *item = yyjson_mut_obj(doc);
+        yyjson_mut_obj_add_str(doc, item, "name",
+                               tr->visited[i].node.name ? tr->visited[i].node.name : "");
+        yyjson_mut_obj_add_str(
+            doc, item, "qualified_name",
+            tr->visited[i].node.qualified_name ? tr->visited[i].node.qualified_name : "");
+        yyjson_mut_obj_add_int(doc, item, "hop", tr->visited[i].hop);
+        yyjson_mut_arr_add_val(arr, item);
+    }
+    return arr;
+}
+
 static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     char *func_name = cbm_mcp_get_string_arg(args, "function_name");
     char *project = cbm_mcp_get_string_arg(args, "project");
@@ -1290,50 +1366,9 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     }
 
     /* Edge types: explicit > mode-based > default */
-    static const char *mode_calls[] = {"CALLS"};
-    static const char *mode_data_flow[] = {"CALLS", "DATA_FLOWS"};
-    static const char *mode_cross_svc[] = {"HTTP_CALLS", "ASYNC_CALLS", "DATA_FLOWS", "CALLS"};
-
     const char *edge_types[16];
     int edge_type_count = 0;
-
-    /* Try parsing explicit edge_types array from args */
-    yyjson_doc *et_doc = yyjson_read(args, strlen(args), 0);
-    if (et_doc) {
-        yyjson_val *et_arr = yyjson_obj_get(yyjson_doc_get_root(et_doc), "edge_types");
-        if (et_arr && yyjson_is_arr(et_arr)) {
-            size_t idx2;
-            size_t max2;
-            yyjson_val *val2;
-            yyjson_arr_foreach(et_arr, idx2, max2, val2) {
-                if (yyjson_is_str(val2) && edge_type_count < 16) {
-                    edge_types[edge_type_count++] = yyjson_get_str(val2);
-                }
-            }
-        }
-    }
-
-    yyjson_doc *et_doc_keep = et_doc;
-    if (edge_type_count == 0) {
-        /* Select defaults by mode */
-        const char **defaults = mode_calls;
-        int n_defaults = 1;
-        if (mode && strcmp(mode, "data_flow") == 0) {
-            defaults = mode_data_flow;
-            n_defaults = 2;
-        } else if (mode && strcmp(mode, "cross_service") == 0) {
-            defaults = mode_cross_svc;
-            n_defaults = 4;
-        }
-        for (int i = 0; i < n_defaults; i++) {
-            edge_types[i] = defaults[i];
-        }
-        edge_type_count = n_defaults;
-        if (et_doc_keep) {
-            yyjson_doc_free(et_doc_keep);
-            et_doc_keep = NULL;
-        }
-    }
+    yyjson_doc *et_doc_keep = resolve_trace_edge_types(args, mode, edge_types, &edge_type_count);
 
     /* Run BFS for each requested direction.
      * IMPORTANT: yyjson_mut_obj_add_str borrows pointers — we must keep
@@ -1347,37 +1382,13 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     if (do_outbound) {
         cbm_store_bfs(store, nodes[0].id, "outbound", edge_types, edge_type_count, depth, 100,
                       &tr_out);
-
-        yyjson_mut_val *callees = yyjson_mut_arr(doc);
-        for (int i = 0; i < tr_out.visited_count; i++) {
-            yyjson_mut_val *item = yyjson_mut_obj(doc);
-            yyjson_mut_obj_add_str(doc, item, "name",
-                                   tr_out.visited[i].node.name ? tr_out.visited[i].node.name : "");
-            yyjson_mut_obj_add_str(
-                doc, item, "qualified_name",
-                tr_out.visited[i].node.qualified_name ? tr_out.visited[i].node.qualified_name : "");
-            yyjson_mut_obj_add_int(doc, item, "hop", tr_out.visited[i].hop);
-            yyjson_mut_arr_add_val(callees, item);
-        }
-        yyjson_mut_obj_add_val(doc, root, "callees", callees);
+        yyjson_mut_obj_add_val(doc, root, "callees", bfs_to_json_array(doc, &tr_out));
     }
 
     if (do_inbound) {
         cbm_store_bfs(store, nodes[0].id, "inbound", edge_types, edge_type_count, depth, 100,
                       &tr_in);
-
-        yyjson_mut_val *callers = yyjson_mut_arr(doc);
-        for (int i = 0; i < tr_in.visited_count; i++) {
-            yyjson_mut_val *item = yyjson_mut_obj(doc);
-            yyjson_mut_obj_add_str(doc, item, "name",
-                                   tr_in.visited[i].node.name ? tr_in.visited[i].node.name : "");
-            yyjson_mut_obj_add_str(
-                doc, item, "qualified_name",
-                tr_in.visited[i].node.qualified_name ? tr_in.visited[i].node.qualified_name : "");
-            yyjson_mut_obj_add_int(doc, item, "hop", tr_in.visited[i].hop);
-            yyjson_mut_arr_add_val(callers, item);
-        }
-        yyjson_mut_obj_add_val(doc, root, "callers", callers);
+        yyjson_mut_obj_add_val(doc, root, "callers", bfs_to_json_array(doc, &tr_in));
     }
 
     /* Serialize BEFORE freeing traversal results (yyjson borrows strings) */
@@ -1622,8 +1633,95 @@ static char *snippet_suggestions(const char *input, cbm_node_t *nodes, int count
     return result;
 }
 
+/* Enrich a mutable JSON object with key-value pairs from a node's properties_json.
+ * Returns the parsed yyjson_doc (caller frees AFTER serialization — zero-copy). */
+static yyjson_doc *enrich_node_properties(yyjson_mut_doc *doc, yyjson_mut_val *obj,
+                                          const char *properties_json) {
+    if (!properties_json || properties_json[0] == '\0') {
+        return NULL;
+    }
+    yyjson_doc *props_doc = yyjson_read(properties_json, strlen(properties_json), 0);
+    if (!props_doc) {
+        return NULL;
+    }
+    yyjson_val *props_root = yyjson_doc_get_root(props_doc);
+    if (!props_root || !yyjson_is_obj(props_root)) {
+        yyjson_doc_free(props_doc);
+        return NULL;
+    }
+    yyjson_obj_iter iter;
+    yyjson_obj_iter_init(props_root, &iter);
+    yyjson_val *key;
+    while ((key = yyjson_obj_iter_next(&iter))) {
+        yyjson_val *val = yyjson_obj_iter_get_val(key);
+        const char *k = yyjson_get_str(key);
+        if (!k) {
+            continue;
+        }
+        if (yyjson_is_str(val)) {
+            yyjson_mut_obj_add_str(doc, obj, k, yyjson_get_str(val));
+        } else if (yyjson_is_bool(val)) {
+            yyjson_mut_obj_add_bool(doc, obj, k, yyjson_get_bool(val));
+        } else if (yyjson_is_int(val)) {
+            yyjson_mut_obj_add_int(doc, obj, k, yyjson_get_int(val));
+        } else if (yyjson_is_real(val)) {
+            yyjson_mut_obj_add_real(doc, obj, k, yyjson_get_real(val));
+        }
+    }
+    return props_doc; /* caller frees after serialization */
+}
+
+/* Resolve an absolute path from root_path + file_path, verify containment,
+ * and read source lines. Sets *out_abs_path (caller frees). Returns source
+ * string (caller frees) or NULL if path is invalid/unreadable. */
+static char *resolve_snippet_source(const char *root_path, const char *file_path, int start,
+                                    int end, char **out_abs_path) {
+    *out_abs_path = NULL;
+    if (!root_path || !file_path) {
+        return NULL;
+    }
+    size_t apsz = strlen(root_path) + strlen(file_path) + 2;
+    char *abs_path = malloc(apsz);
+    snprintf(abs_path, apsz, "%s/%s", root_path, file_path);
+
+    char real_root[4096];
+    char real_file[4096];
+    bool path_ok = false;
+#ifdef _WIN32
+    if (_fullpath(real_root, root_path, sizeof(real_root)) &&
+        _fullpath(real_file, abs_path, sizeof(real_file))) {
+        cbm_normalize_path_sep(real_root);
+        cbm_normalize_path_sep(real_file);
+#else
+    if (realpath(root_path, real_root) && realpath(abs_path, real_file)) {
+#endif
+        size_t root_len = strlen(real_root);
+        if (strncmp(real_file, real_root, root_len) == 0 &&
+            (real_file[root_len] == '/' || real_file[root_len] == '\0')) {
+            path_ok = true;
+        }
+    }
+    *out_abs_path = abs_path;
+    if (path_ok) {
+        return read_file_lines(abs_path, start, end);
+    }
+    return NULL;
+}
+
 /* Build an enriched snippet response for a resolved node. */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Add a string array to a JSON object (no-op if count == 0). */
+static void add_string_array(yyjson_mut_doc *doc, yyjson_mut_val *obj, const char *key,
+                             char **strings, int count) {
+    if (count <= 0) {
+        return;
+    }
+    yyjson_mut_val *arr = yyjson_mut_arr(doc);
+    for (int i = 0; i < count; i++) {
+        yyjson_mut_arr_add_str(doc, arr, strings[i]);
+    }
+    yyjson_mut_obj_add_val(doc, obj, key, arr);
+}
+
 static char *build_snippet_response(cbm_mcp_server_t *srv, cbm_node_t *node,
                                     const char *match_method, bool include_neighbors,
                                     cbm_node_t *alternatives, int alt_count) {
@@ -1631,38 +1729,8 @@ static char *build_snippet_response(cbm_mcp_server_t *srv, cbm_node_t *node,
 
     int start = node->start_line > 0 ? node->start_line : 1;
     int end = node->end_line > start ? node->end_line : start + SNIPPET_DEFAULT_LINES;
-    char *source = NULL;
-
-    /* Build absolute path and verify it's within the project root.
-     * Prevents path traversal via crafted file_path (e.g., "../../.ssh/id_rsa"). */
     char *abs_path = NULL;
-    if (root_path && node->file_path) {
-        size_t apsz = strlen(root_path) + strlen(node->file_path) + 2;
-        abs_path = malloc(apsz);
-        snprintf(abs_path, apsz, "%s/%s", root_path, node->file_path);
-
-        /* Path containment: resolve symlinks/../ and verify file stays within root */
-        char real_root[4096];
-        char real_file[4096];
-        bool path_ok = false;
-#ifdef _WIN32
-        if (_fullpath(real_root, root_path, sizeof(real_root)) &&
-            _fullpath(real_file, abs_path, sizeof(real_file))) {
-            cbm_normalize_path_sep(real_root);
-            cbm_normalize_path_sep(real_file);
-#else
-        if (realpath(root_path, real_root) && realpath(abs_path, real_file)) {
-#endif
-            size_t root_len = strlen(real_root);
-            if (strncmp(real_file, real_root, root_len) == 0 &&
-                (real_file[root_len] == '/' || real_file[root_len] == '\0')) {
-                path_ok = true;
-            }
-        }
-        if (path_ok) {
-            source = read_file_lines(abs_path, start, end);
-        }
-    }
+    char *source = resolve_snippet_source(root_path, node->file_path, start, end, &abs_path);
 
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root_obj = yyjson_mut_obj(doc);
@@ -1694,37 +1762,8 @@ static char *build_snippet_response(cbm_mcp_server_t *srv, cbm_node_t *node,
         yyjson_mut_obj_add_str(doc, root_obj, "match_method", match_method);
     }
 
-    /* Enrich with node properties.
-     * props_doc is freed AFTER serialization since yyjson_mut_obj_add_str
-     * stores pointers into it (zero-copy). */
-    yyjson_doc *props_doc = NULL;
-    if (node->properties_json && node->properties_json[0] != '\0') {
-        props_doc = yyjson_read(node->properties_json, strlen(node->properties_json), 0);
-        if (props_doc) {
-            yyjson_val *props_root = yyjson_doc_get_root(props_doc);
-            if (props_root && yyjson_is_obj(props_root)) {
-                yyjson_obj_iter iter;
-                yyjson_obj_iter_init(props_root, &iter);
-                yyjson_val *key;
-                while ((key = yyjson_obj_iter_next(&iter))) {
-                    yyjson_val *val = yyjson_obj_iter_get_val(key);
-                    const char *k = yyjson_get_str(key);
-                    if (!k) {
-                        continue;
-                    }
-                    if (yyjson_is_str(val)) {
-                        yyjson_mut_obj_add_str(doc, root_obj, k, yyjson_get_str(val));
-                    } else if (yyjson_is_bool(val)) {
-                        yyjson_mut_obj_add_bool(doc, root_obj, k, yyjson_get_bool(val));
-                    } else if (yyjson_is_int(val)) {
-                        yyjson_mut_obj_add_int(doc, root_obj, k, yyjson_get_int(val));
-                    } else if (yyjson_is_real(val)) {
-                        yyjson_mut_obj_add_real(doc, root_obj, k, yyjson_get_real(val));
-                    }
-                }
-            }
-        }
-    }
+    /* Enrich with node properties (freed AFTER serialization — zero-copy). */
+    yyjson_doc *props_doc = enrich_node_properties(doc, root_obj, node->properties_json);
 
     /* Caller/callee counts — store already resolved by calling handler */
     cbm_store_t *store = srv->store;
@@ -1734,8 +1773,6 @@ static char *build_snippet_response(cbm_mcp_server_t *srv, cbm_node_t *node,
     yyjson_mut_obj_add_int(doc, root_obj, "callers", in_deg);
     yyjson_mut_obj_add_int(doc, root_obj, "callees", out_deg);
 
-    /* Include neighbor names (opt-in).
-     * Strings stored by yyjson reference — freed after serialization. */
     char **nb_callers = NULL;
     int nb_caller_count = 0;
     char **nb_callees = NULL;
@@ -1743,20 +1780,8 @@ static char *build_snippet_response(cbm_mcp_server_t *srv, cbm_node_t *node,
     if (include_neighbors) {
         cbm_store_node_neighbor_names(store, node->id, 10, &nb_callers, &nb_caller_count,
                                       &nb_callees, &nb_callee_count);
-        if (nb_caller_count > 0) {
-            yyjson_mut_val *arr = yyjson_mut_arr(doc);
-            for (int i = 0; i < nb_caller_count; i++) {
-                yyjson_mut_arr_add_str(doc, arr, nb_callers[i]);
-            }
-            yyjson_mut_obj_add_val(doc, root_obj, "caller_names", arr);
-        }
-        if (nb_callee_count > 0) {
-            yyjson_mut_val *arr = yyjson_mut_arr(doc);
-            for (int i = 0; i < nb_callee_count; i++) {
-                yyjson_mut_arr_add_str(doc, arr, nb_callees[i]);
-            }
-            yyjson_mut_obj_add_val(doc, root_obj, "callee_names", arr);
-        }
+        add_string_array(doc, root_obj, "caller_names", nb_callers, nb_caller_count);
+        add_string_array(doc, root_obj, "callee_names", nb_callees, nb_callee_count);
     }
 
     /* Alternatives (when auto-resolved from ambiguous) */
@@ -1957,8 +1982,118 @@ static void build_grep_cmd(char *cmd, size_t cmd_sz, bool use_regex, bool scoped
     }
 }
 
+/* Build deduplicated file list from search results + raw matches. */
+static yyjson_mut_val *build_dedup_files_array(yyjson_mut_doc *doc, search_result_t *sr,
+                                               int output_count, grep_match_t *raw, int raw_count) {
+    yyjson_mut_val *files_arr = yyjson_mut_arr(doc);
+    char *seen_files[512];
+    int seen_count = 0;
+    for (int fi = 0; fi < output_count; fi++) {
+        bool dup = false;
+        for (int j = 0; j < seen_count; j++) {
+            if (strcmp(seen_files[j], sr[fi].file) == 0) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup && seen_count < 512) {
+            seen_files[seen_count++] = sr[fi].file;
+            yyjson_mut_arr_add_str(doc, files_arr, sr[fi].file);
+        }
+    }
+    for (int fi = 0; fi < raw_count && seen_count < 512; fi++) {
+        bool dup = false;
+        for (int j = 0; j < seen_count; j++) {
+            if (strcmp(seen_files[j], raw[fi].file) == 0) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) {
+            seen_files[seen_count++] = raw[fi].file;
+            yyjson_mut_arr_add_str(doc, files_arr, raw[fi].file);
+        }
+    }
+    return files_arr;
+}
+
+/* Attach source or context lines to a search result JSON item. */
+static void attach_result_source(yyjson_mut_doc *doc, yyjson_mut_val *item, search_result_t *r,
+                                 int mode, int context_lines, const char *root_path) {
+    enum { MODE_FULL = 1 };
+    if (r->start_line <= 0 || r->end_line <= 0) {
+        return;
+    }
+    char abs_path[1024];
+    snprintf(abs_path, sizeof(abs_path), "%s/%s", root_path, r->file);
+
+    if (mode == MODE_FULL) {
+        char *source = read_file_lines(abs_path, r->start_line, r->end_line);
+        if (source) {
+            sanitize_ascii(source);
+            yyjson_mut_obj_add_strcpy(doc, item, "source", source);
+            free(source);
+        }
+    } else if (context_lines > 0 && r->match_count > 0) {
+        int ctx_start = r->match_lines[0] - context_lines;
+        int ctx_end = r->match_lines[r->match_count - 1] + context_lines;
+        if (ctx_start < 1) {
+            ctx_start = 1;
+        }
+        char *ctx = read_file_lines(abs_path, ctx_start, ctx_end);
+        if (ctx) {
+            sanitize_ascii(ctx);
+            yyjson_mut_obj_add_strcpy(doc, item, "context", ctx);
+            yyjson_mut_obj_add_int(doc, item, "context_start", ctx_start);
+            free(ctx);
+        }
+    }
+}
+
+/* Build directory distribution object from search results (top-level dir → count). */
+static yyjson_mut_val *build_dir_distribution(yyjson_mut_doc *doc, search_result_t *sr,
+                                              int sr_count) {
+    yyjson_mut_val *dirs = yyjson_mut_obj(doc);
+    char dir_names[64][128];
+    int dir_counts[64];
+    int dir_n = 0;
+    for (int di = 0; di < sr_count; di++) {
+        char top[128] = "";
+        const char *slash = strchr(sr[di].file, '/');
+        if (slash) {
+            size_t dlen = (size_t)(slash - sr[di].file + 1);
+            if (dlen >= sizeof(top)) {
+                dlen = sizeof(top) - 1;
+            }
+            memcpy(top, sr[di].file, dlen);
+            top[dlen] = '\0';
+        } else {
+            snprintf(top, sizeof(top), "%s", sr[di].file);
+        }
+        int found = -1;
+        for (int d = 0; d < dir_n; d++) {
+            if (strcmp(dir_names[d], top) == 0) {
+                found = d;
+                break;
+            }
+        }
+        if (found >= 0) {
+            dir_counts[found]++;
+        } else if (dir_n < 64) {
+            snprintf(dir_names[dir_n], sizeof(dir_names[0]), "%s", top);
+            dir_counts[dir_n] = 1;
+            dir_n++;
+        }
+    }
+    for (int d = 0; d < dir_n; d++) {
+        yyjson_mut_val *key = yyjson_mut_strcpy(doc, dir_names[d]);
+        yyjson_mut_val *val = yyjson_mut_int(doc, dir_counts[d]);
+        yyjson_mut_obj_add(dirs, key, val);
+    }
+    return dirs;
+}
+
 /* Phase 4: assemble JSON output from search results */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static char *assemble_search_output(search_result_t *sr, int sr_count, grep_match_t *raw,
                                     int raw_count, int gm_count, int limit, int mode,
                                     int context_lines, const char *root_path) {
@@ -1971,36 +2106,8 @@ static char *assemble_search_output(search_result_t *sr, int sr_count, grep_matc
     int output_count = sr_count < limit ? sr_count : limit;
 
     if (mode == MODE_FILES) {
-        yyjson_mut_val *files_arr = yyjson_mut_arr(doc);
-        char *seen_files[512];
-        int seen_count = 0;
-        for (int fi = 0; fi < output_count; fi++) {
-            bool dup = false;
-            for (int j = 0; j < seen_count; j++) {
-                if (strcmp(seen_files[j], sr[fi].file) == 0) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (!dup && seen_count < 512) {
-                seen_files[seen_count++] = sr[fi].file;
-                yyjson_mut_arr_add_str(doc, files_arr, sr[fi].file);
-            }
-        }
-        for (int fi = 0; fi < raw_count && seen_count < 512; fi++) {
-            bool dup = false;
-            for (int j = 0; j < seen_count; j++) {
-                if (strcmp(seen_files[j], raw[fi].file) == 0) {
-                    dup = true;
-                    break;
-                }
-            }
-            if (!dup) {
-                seen_files[seen_count++] = raw[fi].file;
-                yyjson_mut_arr_add_str(doc, files_arr, raw[fi].file);
-            }
-        }
-        yyjson_mut_obj_add_val(doc, root_obj, "files", files_arr);
+        yyjson_mut_obj_add_val(doc, root_obj, "files",
+                               build_dedup_files_array(doc, sr, output_count, raw, raw_count));
     } else {
         yyjson_mut_val *results_arr = yyjson_mut_arr(doc);
         for (int ri = 0; ri < output_count; ri++) {
@@ -2021,36 +2128,7 @@ static char *assemble_search_output(search_result_t *sr, int sr_count, grep_matc
                 yyjson_mut_arr_add_int(doc, ml, r->match_lines[j]);
             }
             yyjson_mut_obj_add_val(doc, item, "match_lines", ml);
-
-            if (r->start_line > 0 && r->end_line > 0) {
-                char abs_path[1024];
-                snprintf(abs_path, sizeof(abs_path), "%s/%s", root_path, r->file);
-
-                if (mode == MODE_FULL) {
-                    char *source = read_file_lines(abs_path, r->start_line, r->end_line);
-                    if (source) {
-                        sanitize_ascii(source);
-                        yyjson_mut_obj_add_strcpy(doc, item, "source", source);
-                        free(source);
-                    }
-                } else if (context_lines > 0 && r->match_count > 0) {
-                    int first_match = r->match_lines[0];
-                    int last_match = r->match_lines[r->match_count - 1];
-                    int ctx_start = first_match - context_lines;
-                    int ctx_end = last_match + context_lines;
-                    if (ctx_start < 1) {
-                        ctx_start = 1;
-                    }
-                    char *ctx = read_file_lines(abs_path, ctx_start, ctx_end);
-                    if (ctx) {
-                        sanitize_ascii(ctx);
-                        yyjson_mut_obj_add_strcpy(doc, item, "context", ctx);
-                        yyjson_mut_obj_add_int(doc, item, "context_start", ctx_start);
-                        free(ctx);
-                    }
-                }
-            }
-
+            attach_result_source(doc, item, r, mode, context_lines, root_path);
             yyjson_mut_arr_add_val(results_arr, item);
         }
         yyjson_mut_obj_add_val(doc, root_obj, "results", results_arr);
@@ -2068,47 +2146,7 @@ static char *assemble_search_output(search_result_t *sr, int sr_count, grep_matc
         yyjson_mut_obj_add_val(doc, root_obj, "raw_matches", raw_arr);
     }
 
-    /* Directory distribution */
-    {
-        yyjson_mut_val *dirs = yyjson_mut_obj(doc);
-        char dir_names[64][128];
-        int dir_counts[64];
-        int dir_n = 0;
-        for (int di = 0; di < sr_count; di++) {
-            char top[128] = "";
-            const char *slash = strchr(sr[di].file, '/');
-            if (slash) {
-                size_t dlen = (size_t)(slash - sr[di].file + 1);
-                if (dlen >= sizeof(top)) {
-                    dlen = sizeof(top) - 1;
-                }
-                memcpy(top, sr[di].file, dlen);
-                top[dlen] = '\0';
-            } else {
-                snprintf(top, sizeof(top), "%s", sr[di].file);
-            }
-            int found = -1;
-            for (int d = 0; d < dir_n; d++) {
-                if (strcmp(dir_names[d], top) == 0) {
-                    found = d;
-                    break;
-                }
-            }
-            if (found >= 0) {
-                dir_counts[found]++;
-            } else if (dir_n < 64) {
-                snprintf(dir_names[dir_n], sizeof(dir_names[0]), "%s", top);
-                dir_counts[dir_n] = 1;
-                dir_n++;
-            }
-        }
-        for (int d = 0; d < dir_n; d++) {
-            yyjson_mut_val *key = yyjson_mut_strcpy(doc, dir_names[d]);
-            yyjson_mut_val *val = yyjson_mut_int(doc, dir_counts[d]);
-            yyjson_mut_obj_add(dirs, key, val);
-        }
-        yyjson_mut_obj_add_val(doc, root_obj, "directories", dirs);
-    }
+    yyjson_mut_obj_add_val(doc, root_obj, "directories", build_dir_distribution(doc, sr, sr_count));
 
     /* Summary stats */
     yyjson_mut_obj_add_int(doc, root_obj, "total_grep_matches", gm_count);
@@ -2131,7 +2169,252 @@ static char *assemble_search_output(search_result_t *sr, int sr_count, grep_matc
     return result;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
+/* Read grep output from fp, parse file:line:content format, apply path filter,
+ * and return a dynamically-allocated grep_match_t array. */
+/* Strip root path prefix from a file path. */
+static const char *strip_root_prefix(const char *path, const char *root, size_t root_len) {
+    if (strncmp(path, root, root_len) != 0) {
+        return path;
+    }
+    const char *p = path + root_len;
+    if (*p == '/') {
+        p++;
+    }
+    return p;
+}
+
+static grep_match_t *collect_grep_matches(FILE *fp, const char *root_path, size_t root_len,
+                                          bool has_path_filter, cbm_regex_t *path_regex,
+                                          int grep_limit, int *out_count) {
+    int gm_cap = 64;
+    int gm_count = 0;
+    grep_match_t *gm = malloc(gm_cap * sizeof(grep_match_t));
+    char line[2048];
+
+    while (fgets(line, sizeof(line), fp) && gm_count < grep_limit) {
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+            line[--len] = '\0';
+        }
+        if (len == 0) {
+            continue;
+        }
+
+        char *colon1 = strchr(line, ':');
+        if (!colon1) {
+            continue;
+        }
+        char *colon2 = strchr(colon1 + 1, ':');
+        if (!colon2) {
+            continue;
+        }
+
+        *colon1 = '\0';
+        *colon2 = '\0';
+
+        /* After colon1 truncation, line contains only the file path portion. */
+        const char *path = line;
+        const char *file = strip_root_prefix(path, root_path, root_len);
+
+        if (has_path_filter && cbm_regexec(path_regex, file, 0, NULL, 0) != CBM_REG_OK) {
+            continue;
+        }
+
+        if (gm_count >= gm_cap) {
+            gm_cap *= 2;
+            gm = safe_realloc(gm, gm_cap * sizeof(grep_match_t));
+        }
+        snprintf(gm[gm_count].file, sizeof(gm[0].file), "%s", file);
+        gm[gm_count].line = (int)strtol(colon1 + 1, NULL, 10);
+        snprintf(gm[gm_count].content, sizeof(gm[0].content), "%s", colon2 + 1);
+        sanitize_ascii(gm[gm_count].content);
+        gm_count++;
+    }
+
+    *out_count = gm_count;
+    return gm;
+}
+
+/* Find the tightest node containing a line in a file. Returns index or -1. */
+static int find_tightest_node(cbm_node_t *nodes, int count, int line) {
+    int best = -1;
+    int best_span = MAX_LINE_SPAN;
+    for (int j = 0; j < count; j++) {
+        if (nodes[j].start_line <= line && nodes[j].end_line >= line) {
+            int span = nodes[j].end_line - nodes[j].start_line;
+            if (span < best_span) {
+                best = j;
+                best_span = span;
+            }
+        }
+    }
+    return best;
+}
+
+/* Add a grep hit to the search result set (merge into existing or create new). */
+static void add_to_search_results(search_result_t **sr, int *sr_count, int *sr_cap, cbm_node_t *n,
+                                  int line) {
+    for (int j = 0; j < *sr_count; j++) {
+        if ((*sr)[j].node_id == n->id) {
+            if ((*sr)[j].match_count < 64) {
+                (*sr)[j].match_lines[(*sr)[j].match_count++] = line;
+            }
+            return;
+        }
+    }
+    if (*sr_count >= *sr_cap) {
+        *sr_cap *= 2;
+        *sr = safe_realloc(*sr, *sr_cap * sizeof(search_result_t));
+        memset(&(*sr)[*sr_count], 0, (*sr_cap - *sr_count) * sizeof(search_result_t));
+    }
+    search_result_t *r = &(*sr)[*sr_count];
+    r->node_id = n->id;
+    snprintf(r->node_name, sizeof(r->node_name), "%s", n->name ? n->name : "");
+    snprintf(r->qualified_name, sizeof(r->qualified_name), "%s",
+             n->qualified_name ? n->qualified_name : "");
+    snprintf(r->label, sizeof(r->label), "%s", n->label ? n->label : "");
+    snprintf(r->file, sizeof(r->file), "%s", n->file_path ? n->file_path : "");
+    r->start_line = n->start_line;
+    r->end_line = n->end_line;
+    r->match_lines[0] = line;
+    r->match_count = 1;
+    (*sr_count)++;
+}
+
+/* Match a single grep hit to the tightest containing node, then add to sr or raw. */
+static void classify_grep_hit(grep_match_t *hit, cbm_node_t *file_nodes, int file_node_count,
+                              search_result_t **sr, int *sr_count, int *sr_cap, grep_match_t **raw,
+                              int *raw_count, int *raw_cap) {
+    int best = find_tightest_node(file_nodes, file_node_count, hit->line);
+    if (best >= 0) {
+        add_to_search_results(sr, sr_count, sr_cap, &file_nodes[best], hit->line);
+    } else {
+        if (*raw_count >= *raw_cap) {
+            *raw_cap = (*raw_cap == 0) ? 32 : *raw_cap * 2;
+            *raw = safe_realloc(*raw, *raw_cap * sizeof(grep_match_t));
+        }
+        if (*raw) {
+            (*raw)[(*raw_count)++] = *hit;
+        }
+    }
+}
+
+/* Free a file_nodes array returned from cbm_store_find_nodes_by_file. */
+static void free_file_nodes(cbm_node_t *nodes, int count) {
+    for (int j = 0; j < count; j++) {
+        free((void *)nodes[j].project);
+        free((void *)nodes[j].label);
+        free((void *)nodes[j].name);
+        free((void *)nodes[j].qualified_name);
+        free((void *)nodes[j].file_path);
+        free((void *)nodes[j].properties_json);
+    }
+    free(nodes);
+}
+
+/* Classify all grep matches file-by-file into search results and raw hits. */
+static void classify_all_grep_hits(grep_match_t *gm, int gm_count, cbm_store_t *store,
+                                   const char *project, search_result_t **sr, int *sr_count,
+                                   int *sr_cap, grep_match_t **raw, int *raw_count, int *raw_cap) {
+    qsort(gm, gm_count, sizeof(grep_match_t), (int (*)(const void *, const void *))strcmp);
+    int i = 0;
+    while (i < gm_count) {
+        const char *cur_file = gm[i].file;
+        int file_start = i;
+        while (i < gm_count && strcmp(gm[i].file, cur_file) == 0) {
+            i++;
+        }
+        cbm_node_t *file_nodes = NULL;
+        int file_node_count = 0;
+        if (store) {
+            cbm_store_find_nodes_by_file(store, project, cur_file, &file_nodes, &file_node_count);
+        }
+        for (int mi = file_start; mi < i; mi++) {
+            classify_grep_hit(&gm[mi], file_nodes, file_node_count, sr, sr_count, sr_cap, raw,
+                              raw_count, raw_cap);
+        }
+        free_file_nodes(file_nodes, file_node_count);
+    }
+}
+
+/* Write indexed file list for scoped grep. Returns true if scoped. */
+static bool write_scoped_filelist(cbm_mcp_server_t *srv, const char *project, const char *root_path,
+                                  const char *filelist) {
+    cbm_store_t *pre_store = resolve_store(srv, project);
+    if (!pre_store) {
+        return false;
+    }
+    char **indexed_files = NULL;
+    int indexed_count = 0;
+    if (cbm_store_list_files(pre_store, project, &indexed_files, &indexed_count) != CBM_STORE_OK ||
+        indexed_count == 0) {
+        return false;
+    }
+    FILE *fl = fopen(filelist, "w");
+    bool ok = false;
+    if (fl) {
+        for (int fi = 0; fi < indexed_count; fi++) {
+            fprintf(fl, "%s/%s\n", root_path, indexed_files[fi]);
+        }
+        fclose(fl);
+        ok = true;
+    }
+    for (int fi = 0; fi < indexed_count; fi++) {
+        free(indexed_files[fi]);
+    }
+    free(indexed_files);
+    return ok;
+}
+
+/* Parse search mode string (0=compact, 1=full, 2=files). */
+static int parse_search_mode(const char *mode_str) {
+    if (!mode_str) {
+        return 0;
+    }
+    if (strcmp(mode_str, "full") == 0) {
+        return 1;
+    }
+    if (strcmp(mode_str, "files") == 0) {
+        return 2;
+    }
+    return 0;
+}
+
+/* Validate shell-safe arguments for search. */
+static bool validate_search_args(const char *root_path, const char *file_pattern) {
+    if (!cbm_validate_shell_arg(root_path)) {
+        return false;
+    }
+    if (file_pattern && !cbm_validate_shell_arg(file_pattern)) {
+        return false;
+    }
+    return true;
+}
+
+/* Write pattern to a temp file for grep -f. Returns true on success. */
+static bool write_pattern_file(char *tmpfile, int tmpfile_sz, const char *pattern) {
+#ifdef _WIN32
+    snprintf(tmpfile, tmpfile_sz, "/tmp/cbm_search_%d.pat", (int)_getpid());
+#else
+    snprintf(tmpfile, tmpfile_sz, "/tmp/cbm_search_%d.pat", (int)getpid());
+#endif
+    FILE *tf = fopen(tmpfile, "w");
+    if (!tf) {
+        return false;
+    }
+    fprintf(tf, "%s\n", pattern);
+    fclose(tf);
+    return true;
+}
+
+/* Compile a path filter regex. Returns true if compiled successfully. */
+static bool compile_path_filter(const char *filter, cbm_regex_t *re) {
+    if (!filter || !filter[0]) {
+        return false;
+    }
+    return cbm_regcomp(re, filter, CBM_REG_EXTENDED | CBM_REG_NOSUB) == CBM_REG_OK;
+}
+
 static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     char *pattern = cbm_mcp_get_string_arg(args, "pattern");
     char *project = cbm_mcp_get_string_arg(args, "project");
@@ -2142,31 +2425,13 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     int context_lines = cbm_mcp_get_int_arg(args, "context", 0);
     bool use_regex = cbm_mcp_get_bool_arg(args, "regex");
 
-    /* Parse mode: compact (default), full, files */
-    enum { MODE_COMPACT, MODE_FULL, MODE_FILES };
-    int mode = MODE_COMPACT;
-    if (mode_str) {
-        if (strcmp(mode_str, "full") == 0) {
-            mode = MODE_FULL;
-        } else if (strcmp(mode_str, "files") == 0) {
-            mode = MODE_FILES;
-        }
-        free(mode_str);
-    }
+    int mode = parse_search_mode(mode_str);
+    free(mode_str);
 
-    /* Compile path_filter regex if provided */
     cbm_regex_t path_regex;
-    bool has_path_filter = false;
-    if (path_filter && path_filter[0]) {
-        if (cbm_regcomp(&path_regex, path_filter, CBM_REG_EXTENDED | CBM_REG_NOSUB) == CBM_REG_OK) {
-            has_path_filter = true;
-        }
-        free(path_filter);
-        path_filter = NULL;
-    } else {
-        free(path_filter);
-        path_filter = NULL;
-    }
+    bool has_path_filter = compile_path_filter(path_filter, &path_regex);
+    free(path_filter);
+    path_filter = NULL;
 
     if (!pattern) {
         free(project);
@@ -2195,9 +2460,7 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
         return _res;
     }
 
-    /* Reject shell metacharacters in user-supplied arguments */
-    if (!cbm_validate_shell_arg(root_path) ||
-        (file_pattern && !cbm_validate_shell_arg(file_pattern))) {
+    if (!validate_search_args(root_path, file_pattern)) {
         free(root_path);
         free(pattern);
         free(project);
@@ -2206,23 +2469,14 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     }
 
     /* ── Phase 1: Grep scan ──────────────────────────────────── */
-
     char tmpfile[256];
-#ifdef _WIN32
-    snprintf(tmpfile, sizeof(tmpfile), "/tmp/cbm_search_%d.pat", (int)_getpid());
-#else
-    snprintf(tmpfile, sizeof(tmpfile), "/tmp/cbm_search_%d.pat", (int)getpid());
-#endif
-    FILE *tf = fopen(tmpfile, "w");
-    if (!tf) {
+    if (!write_pattern_file(tmpfile, sizeof(tmpfile), pattern)) {
         free(root_path);
         free(pattern);
         free(project);
         free(file_pattern);
         return cbm_mcp_text_result("search failed: temp file", true);
     }
-    (void)fprintf(tf, "%s\n", pattern);
-    (void)fclose(tf);
 
     /* No grep-level match limit — let grep find all matches, then dedup and
      * cap in our code. The -m flag caused results from large vendored files
@@ -2238,27 +2492,7 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     snprintf(filelist, sizeof(filelist), "%s.files", tmpfile);
     bool scoped = false;
 
-    cbm_store_t *pre_store = resolve_store(srv, project);
-    if (pre_store) {
-        char **indexed_files = NULL;
-        int indexed_count = 0;
-        if (cbm_store_list_files(pre_store, project, &indexed_files, &indexed_count) ==
-                CBM_STORE_OK &&
-            indexed_count > 0) {
-            FILE *fl = fopen(filelist, "w");
-            if (fl) {
-                for (int fi = 0; fi < indexed_count; fi++) {
-                    fprintf(fl, "%s/%s\n", root_path, indexed_files[fi]);
-                }
-                fclose(fl);
-                scoped = true;
-            }
-            for (int fi = 0; fi < indexed_count; fi++) {
-                free(indexed_files[fi]);
-            }
-            free(indexed_files);
-        }
-    }
+    scoped = write_scoped_filelist(srv, project, root_path, filelist);
 
     char cmd[4096];
     build_grep_cmd(cmd, sizeof(cmd), use_regex, scoped, file_pattern, tmpfile, filelist, root_path);
@@ -2277,56 +2511,9 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     }
 
     /* Collect grep matches into array */
-    int gm_cap = 64;
     int gm_count = 0;
-    grep_match_t *gm = malloc(gm_cap * sizeof(grep_match_t));
-    char line[2048];
-    size_t root_len = strlen(root_path);
-
-    while (fgets(line, sizeof(line), fp) && gm_count < grep_limit) {
-        size_t len = strlen(line);
-        while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
-            line[--len] = '\0';
-        }
-        if (len == 0) {
-            continue;
-        }
-
-        char *colon1 = strchr(line, ':');
-        if (!colon1) {
-            continue;
-        }
-        char *colon2 = strchr(colon1 + 1, ':');
-        if (!colon2) {
-            continue;
-        }
-
-        *colon1 = '\0';
-        *colon2 = '\0';
-
-        const char *file = line;
-        if (strncmp(file, root_path, root_len) == 0) {
-            file += root_len;
-            if (*file == '/') {
-                file++;
-            }
-        }
-
-        /* Apply path_filter regex — skip files that don't match */
-        if (has_path_filter && cbm_regexec(&path_regex, file, 0, NULL, 0) != CBM_REG_OK) {
-            continue;
-        }
-
-        if (gm_count >= gm_cap) {
-            gm_cap *= 2;
-            gm = safe_realloc(gm, gm_cap * sizeof(grep_match_t));
-        }
-        snprintf(gm[gm_count].file, sizeof(gm[0].file), "%s", file);
-        gm[gm_count].line = (int)strtol(colon1 + 1, NULL, 10);
-        snprintf(gm[gm_count].content, sizeof(gm[0].content), "%s", colon2 + 1);
-        sanitize_ascii(gm[gm_count].content);
-        gm_count++;
-    }
+    grep_match_t *gm = collect_grep_matches(fp, root_path, strlen(root_path), has_path_filter,
+                                            &path_regex, grep_limit, &gm_count);
     cbm_pclose(fp);
     cbm_unlink(tmpfile);
     if (scoped) {
@@ -2350,95 +2537,8 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     /* Sort matches by file path for contiguous per-file processing */
     qsort(gm, gm_count, sizeof(grep_match_t), (int (*)(const void *, const void *))strcmp);
 
-    /* Process matches file-by-file (contiguous runs after sort) */
-    int i = 0;
-    while (i < gm_count) {
-        const char *cur_file = gm[i].file;
-        int file_start = i;
-
-        /* Find end of this file's run */
-        while (i < gm_count && strcmp(gm[i].file, cur_file) == 0) {
-            i++;
-        }
-        int file_end = i; /* [file_start, file_end) */
-
-        /* One SQL query: load all nodes in this file */
-        cbm_node_t *file_nodes = NULL;
-        int file_node_count = 0;
-        if (store) {
-            cbm_store_find_nodes_by_file(store, project, cur_file, &file_nodes, &file_node_count);
-        }
-
-        /* Match each grep hit to tightest containing node (in-memory) */
-        for (int mi = file_start; mi < file_end; mi++) {
-            int best = -1;
-            int best_span = MAX_LINE_SPAN;
-            for (int j = 0; j < file_node_count; j++) {
-                if (file_nodes[j].start_line <= gm[mi].line &&
-                    file_nodes[j].end_line >= gm[mi].line) {
-                    int span = file_nodes[j].end_line - file_nodes[j].start_line;
-                    if (span < best_span) {
-                        best = j;
-                        best_span = span;
-                    }
-                }
-            }
-
-            if (best >= 0) {
-                cbm_node_t *n = &file_nodes[best];
-
-                /* Dedup: check if node already in results */
-                int existing = -1;
-                for (int j = 0; j < sr_count; j++) {
-                    if (sr[j].node_id == n->id) {
-                        existing = j;
-                        break;
-                    }
-                }
-
-                if (existing >= 0) {
-                    if (sr[existing].match_count < 64) {
-                        sr[existing].match_lines[sr[existing].match_count++] = gm[mi].line;
-                    }
-                } else {
-                    if (sr_count >= sr_cap) {
-                        sr_cap *= 2;
-                        sr = safe_realloc(sr, sr_cap * sizeof(search_result_t));
-                        memset(&sr[sr_count], 0, (sr_cap - sr_count) * sizeof(search_result_t));
-                    }
-                    search_result_t *r = &sr[sr_count];
-                    r->node_id = n->id;
-                    snprintf(r->node_name, sizeof(r->node_name), "%s", n->name ? n->name : "");
-                    snprintf(r->qualified_name, sizeof(r->qualified_name), "%s",
-                             n->qualified_name ? n->qualified_name : "");
-                    snprintf(r->label, sizeof(r->label), "%s", n->label ? n->label : "");
-                    snprintf(r->file, sizeof(r->file), "%s", n->file_path ? n->file_path : "");
-                    r->start_line = n->start_line;
-                    r->end_line = n->end_line;
-                    r->match_lines[0] = gm[mi].line;
-                    r->match_count = 1;
-                    sr_count++;
-                }
-            } else {
-                if (raw_count >= raw_cap) {
-                    raw_cap *= 2;
-                    raw = safe_realloc(raw, raw_cap * sizeof(grep_match_t));
-                }
-                raw[raw_count++] = gm[mi];
-            }
-        }
-
-        /* Free file nodes */
-        for (int j = 0; j < file_node_count; j++) {
-            free((void *)file_nodes[j].project);
-            free((void *)file_nodes[j].label);
-            free((void *)file_nodes[j].name);
-            free((void *)file_nodes[j].qualified_name);
-            free((void *)file_nodes[j].file_path);
-            free((void *)file_nodes[j].properties_json);
-        }
-        free(file_nodes);
-    }
+    classify_all_grep_hits(gm, gm_count, store, project, &sr, &sr_count, &sr_cap, &raw, &raw_count,
+                           &raw_cap);
 
     /* Phase 3: batch degree query — ONE query for all results instead of 2×N */
     if (store && sr_count > 0) {
@@ -2601,7 +2701,57 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
 
 /* ── manage_adr ───────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* ADR "sections" mode: list markdown headers from file. */
+static void adr_list_sections(yyjson_mut_doc *doc, yyjson_mut_val *root_obj, const char *adr_path) {
+    yyjson_mut_val *sections = yyjson_mut_arr(doc);
+    FILE *fp = fopen(adr_path, "r");
+    if (fp) {
+        char line[1024];
+        while (fgets(line, sizeof(line), fp)) {
+            if (line[0] == '#') {
+                size_t len = strlen(line);
+                while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
+                    line[--len] = '\0';
+                }
+                yyjson_mut_arr_add_strcpy(doc, sections, line);
+            }
+        }
+        (void)fclose(fp);
+    }
+    yyjson_mut_obj_add_val(doc, root_obj, "sections", sections);
+}
+
+/* ADR "get" mode: read content from file. Returns heap buffer (caller frees
+ * AFTER serialization since yyjson borrows the pointer). */
+static char *adr_read_content(yyjson_mut_doc *doc, yyjson_mut_val *root_obj, const char *adr_path) {
+    FILE *fp = fopen(adr_path, "r");
+    if (fp) {
+        (void)fseek(fp, 0, SEEK_END);
+        long sz = ftell(fp);
+        if (sz < 0) {
+            sz = 0;
+        }
+        (void)fseek(fp, 0, SEEK_SET);
+        char *buf = malloc((size_t)sz + 1);
+        size_t n = (sz > 0) ? fread(buf, 1, (size_t)sz, fp) : 0;
+        buf[n] = '\0';
+        (void)fclose(fp);
+        yyjson_mut_obj_add_str(doc, root_obj, "content", buf);
+        return buf;
+    }
+    yyjson_mut_obj_add_str(doc, root_obj, "content", "");
+    yyjson_mut_obj_add_str(doc, root_obj, "status", "no_adr");
+    yyjson_mut_obj_add_str(
+        doc, root_obj, "adr_hint",
+        "No ADR yet. Create one with manage_adr(mode='update', "
+        "content='## PURPOSE\\n...\\n\\n## STACK\\n...\\n\\n## ARCHITECTURE\\n..."
+        "\\n\\n## PATTERNS\\n...\\n\\n## TRADEOFFS\\n...\\n\\n## PHILOSOPHY\\n...'). "
+        "For guided creation: explore the codebase with get_architecture, "
+        "then draft and store. Sections: PURPOSE, STACK, ARCHITECTURE, "
+        "PATTERNS, TRADEOFFS, PHILOSOPHY.");
+    return NULL;
+}
+
 static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
     char *project = cbm_mcp_get_string_arg(args, "project");
     char *mode_str = cbm_mcp_get_string_arg(args, "mode");
@@ -2624,13 +2774,12 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
     char adr_path[4096];
     snprintf(adr_path, sizeof(adr_path), "%s/adr.md", adr_dir);
 
-    char *adr_buf = NULL; /* freed after yy_doc_to_str — yyjson holds pointer, not copy */
+    char *adr_buf = NULL;
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root_obj = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root_obj);
 
     if (strcmp(mode_str, "update") == 0 && content) {
-        /* Create dir if needed */
         cbm_mkdir(adr_dir);
         FILE *fp = fopen(adr_path, "w");
         if (fp) {
@@ -2641,53 +2790,14 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
             yyjson_mut_obj_add_str(doc, root_obj, "status", "write_error");
         }
     } else if (strcmp(mode_str, "sections") == 0) {
-        /* List section headers from ADR */
-        FILE *fp = fopen(adr_path, "r");
-        yyjson_mut_val *sections = yyjson_mut_arr(doc);
-        if (fp) {
-            char line[1024];
-            while (fgets(line, sizeof(line), fp)) {
-                if (line[0] == '#') {
-                    size_t len = strlen(line);
-                    while (len > 0 && (line[len - 1] == '\n' || line[len - 1] == '\r')) {
-                        line[--len] = '\0';
-                    }
-                    yyjson_mut_arr_add_strcpy(doc, sections, line);
-                }
-            }
-            (void)fclose(fp);
-        }
-        yyjson_mut_obj_add_val(doc, root_obj, "sections", sections);
+        adr_list_sections(doc, root_obj, adr_path);
     } else {
-        /* get: read ADR content */
-        FILE *fp = fopen(adr_path, "r");
-        if (fp) {
-            (void)fseek(fp, 0, SEEK_END);
-            long sz = ftell(fp);
-            (void)fseek(fp, 0, SEEK_SET);
-            adr_buf = malloc(sz + 1);
-            size_t n = fread(adr_buf, 1, sz, fp);
-            adr_buf[n] = '\0';
-            (void)fclose(fp);
-            yyjson_mut_obj_add_str(doc, root_obj, "content", adr_buf);
-            /* do NOT free adr_buf here: yyjson stores the pointer, not a copy */
-        } else {
-            yyjson_mut_obj_add_str(doc, root_obj, "content", "");
-            yyjson_mut_obj_add_str(doc, root_obj, "status", "no_adr");
-            yyjson_mut_obj_add_str(
-                doc, root_obj, "adr_hint",
-                "No ADR yet. Create one with manage_adr(mode='update', "
-                "content='## PURPOSE\\n...\\n\\n## STACK\\n...\\n\\n## ARCHITECTURE\\n..."
-                "\\n\\n## PATTERNS\\n...\\n\\n## TRADEOFFS\\n...\\n\\n## PHILOSOPHY\\n...'). "
-                "For guided creation: explore the codebase with get_architecture, "
-                "then draft and store. Sections: PURPOSE, STACK, ARCHITECTURE, "
-                "PATTERNS, TRADEOFFS, PHILOSOPHY.");
-        }
+        adr_buf = adr_read_content(doc, root_obj, adr_path);
     }
 
     char *json = yy_doc_to_str(doc);
     yyjson_mut_doc_free(doc);
-    free(adr_buf); /* safe to free now — doc has been serialized */
+    free(adr_buf);
     free(root_path);
     free(project);
     free(mode_str);
@@ -3086,9 +3196,96 @@ char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
     return out;
 }
 
+/* Handle a Content-Length-framed message (LSP-style transport).
+ * Reads headers, body, processes request, writes framed response. */
+static void handle_content_length_frame(cbm_mcp_server_t *srv, FILE *in, FILE *out, char **line,
+                                        size_t *cap, int content_len) {
+    /* Skip blank line(s) between header and body */
+    while (cbm_getline(line, cap, in) > 0) {
+        size_t hlen = strlen(*line);
+        while (hlen > 0 && ((*line)[hlen - 1] == '\n' || (*line)[hlen - 1] == '\r')) {
+            (*line)[--hlen] = '\0';
+        }
+        if (hlen == 0) {
+            break;
+        }
+    }
+
+    char *body = malloc((size_t)content_len + 1);
+    if (!body) {
+        return;
+    }
+    size_t nread = fread(body, 1, (size_t)content_len, in);
+    body[nread] = '\0';
+
+    char *resp = cbm_mcp_server_handle(srv, body);
+    free(body);
+
+    if (resp) {
+        size_t rlen = strlen(resp);
+        (void)fprintf(out, "Content-Length: %zu\r\n\r\n%s", rlen, resp);
+        (void)fflush(out);
+        free(resp);
+    }
+}
+
+#ifndef _WIN32
+/* Unix 3-phase poll: non-blocking fd check, FILE* buffer peek, blocking poll.
+ * Returns: 1 = data ready, 0 = timeout (evicted idle stores), -1 = error/EOF. */
+static int poll_for_input_unix(cbm_mcp_server_t *srv, int fd, FILE *in) {
+    struct pollfd pfd = {.fd = fd, .events = POLLIN};
+    int pr = poll(&pfd, 1, 0); /* Phase 1: non-blocking */
+
+    if (pr < 0) {
+        return -1;
+    }
+    if (pr > 0) {
+        return 1;
+    }
+
+    /* Phase 2: peek FILE* buffer */
+    int saved_flags = fcntl(fd, F_GETFL);
+    if (saved_flags < 0) {
+        /* fcntl failed — fall through to blocking poll */
+        pr = poll(&pfd, 1, STORE_IDLE_TIMEOUT_S * 1000);
+        if (pr < 0) {
+            return -1;
+        }
+        if (pr == 0) {
+            cbm_mcp_server_evict_idle(srv, STORE_IDLE_TIMEOUT_S);
+            return 0;
+        }
+        return 1;
+    }
+
+    (void)fcntl(fd, F_SETFL, saved_flags | O_NONBLOCK);
+    int c = fgetc(in);
+    (void)fcntl(fd, F_SETFL, saved_flags);
+
+    if (c == EOF) {
+        if (feof(in)) {
+            return -1; /* true EOF */
+        }
+        clearerr(in);
+        /* Phase 3: blocking poll */
+        pr = poll(&pfd, 1, STORE_IDLE_TIMEOUT_S * 1000);
+        if (pr < 0) {
+            return -1;
+        }
+        if (pr == 0) {
+            cbm_mcp_server_evict_idle(srv, STORE_IDLE_TIMEOUT_S);
+            return 0;
+        }
+        return 1;
+    }
+
+    (void)ungetc(c, in);
+    return 1;
+}
+#endif
+
 /* ── Event loop ───────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_mcp_server_run(cbm_mcp_server_t *srv, FILE *in, FILE *out) {
     char *line = NULL;
     size_t cap = 0;
@@ -3125,62 +3322,12 @@ int cbm_mcp_server_run(cbm_mcp_server_t *srv, FILE *in, FILE *out) {
             continue;
         }
 #else
-        /* Phase 1: non-blocking poll — catches data already in the kernel fd
-         * AND handles the case where a prior getline() drained the kernel fd
-         * into libc's FILE* buffer (raw fd appears empty but data is buffered).
-         * We always try a zero-timeout poll first; if it misses buffered data,
-         * phase 2 below catches it via an explicit FILE* peek. */
-        struct pollfd pfd = {.fd = fd, .events = POLLIN};
-        int pr = poll(&pfd, 1, 0); /* non-blocking */
-
+        int pr = poll_for_input_unix(srv, fd, in);
         if (pr < 0) {
-            break; /* error or signal */
+            break;
         }
         if (pr == 0) {
-            /* Raw fd appears empty. Check whether libc has already buffered
-             * data from a previous over-read by peeking one byte via fgetc.
-             * IMPORTANT: temporarily set O_NONBLOCK so fgetc() returns
-             * immediately when the FILE* buffer AND kernel fd are both empty
-             * (EAGAIN → EOF + ferror). Without this, fgetc() on a blocking fd
-             * would block indefinitely, preventing the Phase 3 idle eviction
-             * timeout from ever firing. */
-            int saved_flags = fcntl(fd, F_GETFL);
-            if (saved_flags < 0) {
-                /* fcntl failed (should not happen on a valid fd) — skip the
-                 * FILE* peek and fall straight through to the blocking poll so
-                 * idle eviction still fires on timeout. */
-                pr = poll(&pfd, 1, STORE_IDLE_TIMEOUT_S * 1000);
-                if (pr < 0) {
-                    break;
-                }
-                if (pr == 0) {
-                    cbm_mcp_server_evict_idle(srv, STORE_IDLE_TIMEOUT_S);
-                    continue;
-                }
-            } else {
-                (void)fcntl(fd, F_SETFL, saved_flags | O_NONBLOCK);
-                int c = fgetc(in);
-                (void)fcntl(fd, F_SETFL, saved_flags); /* restore blocking */
-                if (c == EOF) {
-                    if (feof(in)) {
-                        break; /* true EOF */
-                    }
-                    /* No buffered data (EAGAIN from non-blocking read) — clear
-                     * the ferror indicator set by EAGAIN, then blocking poll. */
-                    clearerr(in);
-                    pr = poll(&pfd, 1, STORE_IDLE_TIMEOUT_S * 1000);
-                    if (pr < 0) {
-                        break;
-                    }
-                    if (pr == 0) {
-                        cbm_mcp_server_evict_idle(srv, STORE_IDLE_TIMEOUT_S);
-                        continue;
-                    }
-                } else {
-                    /* Buffered data found — push back and fall through to getline */
-                    (void)ungetc(c, in);
-                }
-            }
+            continue; /* timeout — idle stores evicted */
         }
 #endif
 
@@ -3197,45 +3344,11 @@ int cbm_mcp_server_run(cbm_mcp_server_t *srv, FILE *in, FILE *out) {
             continue;
         }
 
-        /* Content-Length framing support (LSP-style transport).
-         * Some MCP clients (OpenCode, VS Code extensions) send:
-         *   Content-Length: <n>\r\n\r\n<json>
-         * instead of bare JSONL. Detect the header, read the payload,
-         * and respond with the same framing. */
+        /* Content-Length framing (LSP-style transport) */
         if (strncmp(line, "Content-Length:", 15) == 0) {
             int content_len = (int)strtol(line + 15, NULL, 10);
-            if (content_len <= 0 || content_len > 10 * 1024 * 1024) {
-                continue; /* invalid or too large */
-            }
-
-            /* Skip blank line(s) between header and body */
-            while (cbm_getline(&line, &cap, in) > 0) {
-                size_t hlen = strlen(line);
-                while (hlen > 0 && (line[hlen - 1] == '\n' || line[hlen - 1] == '\r')) {
-                    line[--hlen] = '\0';
-                }
-                if (hlen == 0) {
-                    break; /* found the blank separator */
-                }
-                /* Skip other headers (e.g. Content-Type) */
-            }
-
-            /* Read exact content_len bytes */
-            char *body = malloc((size_t)content_len + 1);
-            if (!body) {
-                continue;
-            }
-            size_t nread = fread(body, 1, (size_t)content_len, in);
-            body[nread] = '\0';
-
-            char *resp = cbm_mcp_server_handle(srv, body);
-            free(body);
-
-            if (resp) {
-                size_t rlen = strlen(resp);
-                (void)fprintf(out, "Content-Length: %zu\r\n\r\n%s", rlen, resp);
-                (void)fflush(out);
-                free(resp);
+            if (content_len > 0 && content_len <= 10 * 1024 * 1024) {
+                handle_content_length_frame(srv, in, out, &line, &cap, content_len);
             }
             continue;
         }

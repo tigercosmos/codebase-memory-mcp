@@ -61,6 +61,99 @@ static void queue_free(Queue *q) {
     free(q->data);
 }
 
+// Phase 1: Build trie (goto function) from patterns. Returns state count.
+static int ac_build_trie(CBMAutomaton *ac, const char **patterns, const int *lengths, int count) {
+    int alpha_size = ac->alpha_size;
+    int num_states = 1; // state 0 = root
+
+    for (int p = 0; p < count; p++) {
+        int state = 0;
+        for (int j = 0; j < lengths[p]; j++) {
+            int c = ac->alpha_map[(unsigned char)patterns[p][j]];
+            int idx = (state * alpha_size) + c;
+            if (ac->go_table[idx] == -1) {
+                ac->go_table[idx] = num_states++;
+            }
+            state = ac->go_table[idx];
+        }
+        if (p < CBM_AC_MAX_BITMASK) {
+            ac->output[state] |= (1ULL << p);
+        }
+        ac->output_list[state] = p;
+    }
+
+    // Root self-loops for unmatched bytes.
+    for (int c = 0; c < alpha_size; c++) {
+        if (ac->go_table[c] == -1) {
+            ac->go_table[c] = 0;
+        }
+    }
+    return num_states;
+}
+
+// Phase 2: Build failure function via BFS + compute full goto table.
+static void ac_build_failure(CBMAutomaton *ac, int num_states) {
+    int alpha_size = ac->alpha_size;
+    int *fail = (int *)calloc(num_states, sizeof(int));
+
+    Queue q;
+    queue_init(&q, num_states);
+
+    for (int c = 0; c < alpha_size; c++) {
+        int s = ac->go_table[c];
+        if (s != 0) {
+            fail[s] = 0;
+            queue_push(&q, s);
+        }
+    }
+
+    while (!queue_empty(&q)) {
+        int r = queue_pop(&q);
+        for (int c = 0; c < alpha_size; c++) {
+            int idx = (r * alpha_size) + c;
+            int s = ac->go_table[idx];
+            if (s != -1) {
+                fail[s] = ac->go_table[(fail[r] * alpha_size) + c];
+                ac->output[s] |= ac->output[fail[s]];
+                if (ac->output_next[s] == -1 && ac->output_list[fail[s]] != -1) {
+                    ac->output_next[s] = fail[s];
+                }
+                queue_push(&q, s);
+            } else {
+                ac->go_table[idx] = ac->go_table[(fail[r] * alpha_size) + c];
+            }
+        }
+    }
+
+    free(fail);
+    queue_free(&q);
+}
+
+// Shrink allocations to exact state count.
+static void ac_shrink_tables(CBMAutomaton *ac, int num_states, int max_states) {
+    if (num_states >= max_states) {
+        return;
+    }
+    int alpha_size = ac->alpha_size;
+    void *tmp;
+    tmp = realloc(ac->go_table, (size_t)num_states * alpha_size * sizeof(int));
+    if (tmp) {
+        ac->go_table = (int *)tmp;
+    }
+    tmp = realloc(ac->output, (size_t)num_states * sizeof(uint64_t));
+    if (tmp) {
+        ac->output = (uint64_t *)tmp;
+    }
+    tmp = realloc(ac->output_list, (size_t)num_states * sizeof(int));
+    if (tmp) {
+        ac->output_list = (int *)tmp;
+    }
+    tmp = realloc(ac->output_next, (size_t)num_states * sizeof(int));
+    if (tmp) {
+        ac->output_next = (int *)tmp;
+    }
+}
+
 // cbm_ac_build constructs an Aho-Corasick automaton from a set of patterns.
 //
 // Parameters:
@@ -72,7 +165,6 @@ static void queue_free(Queue *q) {
 //   alpha_size  — alphabet size (256 if alpha_map is NULL)
 //
 // Returns a heap-allocated automaton. Caller must call cbm_ac_free().
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 CBMAutomaton *cbm_ac_build(const char **patterns, const int *lengths, int count,
                            const uint8_t *alpha_map, int alpha_size) {
     if (count <= 0) {
@@ -82,7 +174,6 @@ CBMAutomaton *cbm_ac_build(const char **patterns, const int *lengths, int count,
         alpha_size = 256;
     }
 
-    // Estimate max states: sum of pattern lengths + 1 (root).
     int max_states = 1;
     for (int i = 0; i < count; i++) {
         max_states += lengths[i];
@@ -92,7 +183,6 @@ CBMAutomaton *cbm_ac_build(const char **patterns, const int *lengths, int count,
     ac->alpha_size = alpha_size;
     ac->num_patterns = count;
 
-    // Set up alphabet mapping.
     if (alpha_map) {
         memcpy(ac->alpha_map, alpha_map, 256);
     } else {
@@ -101,7 +191,6 @@ CBMAutomaton *cbm_ac_build(const char **patterns, const int *lengths, int count,
         }
     }
 
-    // Allocate goto table and output arrays.
     ac->go_table = (int *)malloc((size_t)max_states * alpha_size * sizeof(int));
     memset(ac->go_table, -1, (size_t)max_states * alpha_size * sizeof(int));
     ac->output = (uint64_t *)calloc(max_states, sizeof(uint64_t));
@@ -112,98 +201,10 @@ CBMAutomaton *cbm_ac_build(const char **patterns, const int *lengths, int count,
         ac->output_next[i] = -1;
     }
 
-    int num_states = 1; // state 0 = root
-
-    // Phase 1: Build trie (goto function) from patterns.
-    for (int p = 0; p < count; p++) {
-        int state = 0;
-        for (int j = 0; j < lengths[p]; j++) {
-            int c = ac->alpha_map[(unsigned char)patterns[p][j]];
-            int idx = (state * alpha_size) + c;
-            if (ac->go_table[idx] == -1) {
-                ac->go_table[idx] = num_states++;
-            }
-            state = ac->go_table[idx];
-        }
-        // Mark this state as accepting pattern p.
-        if (p < CBM_AC_MAX_BITMASK) {
-            ac->output[state] |= (1ULL << p);
-        }
-        // Append to output list.
-        ac->output_list[state] = p;
-    }
-
-    // Root self-loops for unmatched bytes.
-    for (int c = 0; c < alpha_size; c++) {
-        if (ac->go_table[c] == -1) {
-            ac->go_table[c] = 0;
-        }
-    }
-
-    // Phase 2: Build failure function via BFS + compute full goto table.
-    // We store failure links temporarily in a separate array.
-    int *fail = (int *)calloc(num_states, sizeof(int));
-
-    Queue q;
-    queue_init(&q, num_states);
-
-    // Depth-1 states: failure → root.
-    for (int c = 0; c < alpha_size; c++) {
-        int s = ac->go_table[c]; // root's goto for c
-        if (s != 0) {
-            fail[s] = 0;
-            queue_push(&q, s);
-        }
-    }
-
-    // BFS: compute failure links and fill in missing goto entries.
-    while (!queue_empty(&q)) {
-        int r = queue_pop(&q);
-        for (int c = 0; c < alpha_size; c++) {
-            int idx = (r * alpha_size) + c;
-            int s = ac->go_table[idx];
-            if (s != -1) {
-                // s exists in trie
-                fail[s] = ac->go_table[(fail[r] * alpha_size) + c];
-                // Merge output: dictionary suffix links.
-                ac->output[s] |= ac->output[fail[s]];
-                // Chain output list (for >64 pattern mode).
-                if (ac->output_next[s] == -1 && ac->output_list[fail[s]] != -1) {
-                    ac->output_next[s] = fail[s];
-                }
-                queue_push(&q, s);
-            } else {
-                // Fill missing transition: follow failure link.
-                ac->go_table[idx] = ac->go_table[(fail[r] * alpha_size) + c];
-            }
-        }
-    }
-
-    free(fail);
-    queue_free(&q);
-
+    int num_states = ac_build_trie(ac, patterns, lengths, count);
+    ac_build_failure(ac, num_states);
     ac->num_states = num_states;
-
-    // Reallocate to exact size (optional, saves memory for large automatons).
-    if (num_states < max_states) {
-        void *tmp;
-        tmp = realloc(ac->go_table, (size_t)num_states * alpha_size * sizeof(int));
-        if (tmp) {
-            ac->go_table = (int *)tmp;
-        }
-        tmp = realloc(ac->output, (size_t)num_states * sizeof(uint64_t));
-        if (tmp) {
-            ac->output = (uint64_t *)tmp;
-        }
-        tmp = realloc(ac->output_list, (size_t)num_states * sizeof(int));
-        if (tmp) {
-            ac->output_list = (int *)tmp;
-        }
-        tmp = realloc(ac->output_next, (size_t)num_states * sizeof(int));
-        if (tmp) {
-            ac->output_next = (int *)tmp;
-        }
-    }
+    ac_shrink_tables(ac, num_states, max_states);
 
     return ac;
 }

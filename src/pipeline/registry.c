@@ -341,8 +341,37 @@ static cbm_resolution_t resolve_same_module(const cbm_registry_t *r, const char 
     return empty_result();
 }
 
+/* Strategy 4: multiple candidates with import filtering. */
+static cbm_resolution_t resolve_multi_with_imports(const qn_array_t *arr, const char *module_qn,
+                                                   const char **import_vals, int import_count) {
+    const char *filtered[256];
+    int fcount = 0;
+    for (int i = 0; i < arr->count && fcount < 256; i++) {
+        if (is_import_reachable(arr->items[i], import_vals, import_count)) {
+            filtered[fcount++] = arr->items[i];
+        }
+    }
+    if (fcount == 1) {
+        double conf = candidate_count_penalty(CONF_SUFFIX_MATCH, arr->count);
+        return (cbm_resolution_t){filtered[0], "suffix_match", conf, arr->count};
+    }
+    if (fcount > 1) {
+        const char *best = best_by_import_distance(filtered, fcount, module_qn);
+        if (best) {
+            double conf = candidate_count_penalty(CONF_SUFFIX_MATCH, fcount);
+            return (cbm_resolution_t){best, "suffix_match", conf, fcount};
+        }
+    }
+    /* No import-reachable — use all candidates with penalty */
+    const char *best = best_by_import_distance((const char **)arr->items, arr->count, module_qn);
+    if (best) {
+        double conf = candidate_count_penalty(CONF_SUFFIX_MATCH * 0.5, arr->count);
+        return (cbm_resolution_t){best, "suffix_match", conf, arr->count};
+    }
+    return empty_result();
+}
+
 /* Strategy 3+4: Name lookup + suffix match */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static cbm_resolution_t resolve_name_lookup(const cbm_registry_t *r, const char *callee_name,
                                             const char *module_qn, const char **import_vals,
                                             int import_count) {
@@ -362,42 +391,14 @@ static cbm_resolution_t resolve_name_lookup(const cbm_registry_t *r, const char 
         return (cbm_resolution_t){arr->items[0], "unique_name", conf, 1};
     }
 
-    /* Strategy 4: multiple candidates — filter by import reachability, then best by distance */
+    /* Strategy 4: multiple candidates */
     if (import_vals && import_count > 0) {
-        const char *filtered[256];
-        int fcount = 0;
-        for (int i = 0; i < arr->count && fcount < 256; i++) {
-            if (is_import_reachable(arr->items[i], import_vals, import_count)) {
-                filtered[fcount++] = arr->items[i];
-            }
-        }
-        if (fcount == 1) {
-            double conf = candidate_count_penalty(CONF_SUFFIX_MATCH, arr->count);
-            return (cbm_resolution_t){filtered[0], "suffix_match", conf, arr->count};
-        }
-        if (fcount > 1) {
-            const char *best = best_by_import_distance(filtered, fcount, module_qn);
-            if (best) {
-                double conf = candidate_count_penalty(CONF_SUFFIX_MATCH, fcount);
-                return (cbm_resolution_t){best, "suffix_match", conf, fcount};
-            }
-        }
-        if (fcount == 0) {
-            /* No import-reachable — use all candidates with penalty */
-            const char *best =
-                best_by_import_distance((const char **)arr->items, arr->count, module_qn);
-            if (best) {
-                double conf = candidate_count_penalty(CONF_SUFFIX_MATCH * 0.5, arr->count);
-                return (cbm_resolution_t){best, "suffix_match", conf, arr->count};
-            }
-        }
-    } else {
-        const char *best =
-            best_by_import_distance((const char **)arr->items, arr->count, module_qn);
-        if (best) {
-            double conf = candidate_count_penalty(CONF_SUFFIX_MATCH, arr->count);
-            return (cbm_resolution_t){best, "suffix_match", conf, arr->count};
-        }
+        return resolve_multi_with_imports(arr, module_qn, import_vals, import_count);
+    }
+    const char *best = best_by_import_distance((const char **)arr->items, arr->count, module_qn);
+    if (best) {
+        double conf = candidate_count_penalty(CONF_SUFFIX_MATCH, arr->count);
+        return (cbm_resolution_t){best, "suffix_match", conf, arr->count};
     }
     return empty_result();
 }

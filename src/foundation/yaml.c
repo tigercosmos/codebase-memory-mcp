@@ -117,7 +117,121 @@ typedef struct {
     int indent;
 } stack_entry_t;
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Parse a list item "- value" and add to the correct parent. */
+static void parse_list_item(const char *content, int content_len, cbm_yaml_node_t *parent) {
+    const char *item_start = content + 2;
+    int item_len = content_len - 2;
+    while (item_len > 0 && isspace((unsigned char)item_start[0])) {
+        item_start++;
+        item_len--;
+    }
+
+    /* If parent is a map, the list items belong to the last child */
+    cbm_yaml_node_t *list_parent = parent;
+    if (parent->type == YAML_MAP && parent->child_count > 0) {
+        cbm_yaml_node_t *last = parent->children[parent->child_count - 1];
+        if (last->type == YAML_LIST) {
+            list_parent = last;
+        }
+    }
+
+    cbm_yaml_node_t *item = node_new(YAML_SCALAR);
+    if (item) {
+        item->value = trim_dup(item_start, item_start + item_len);
+        node_add_child(list_parent, item);
+    }
+}
+
+/* Strip inline comments from a value string (not inside quotes).
+ * Returns the adjusted length. */
+static int strip_inline_comment(const char *after, int after_len) {
+    if (after_len > 0 && after[0] != '"' && after[0] != '\'') {
+        for (int i = 0; i < after_len; i++) {
+            if (after[i] == '#' && i > 0 && after[i - 1] == ' ') {
+                after_len = i;
+                while (after_len > 0 && isspace((unsigned char)after[after_len - 1])) {
+                    after_len--;
+                }
+                break;
+            }
+        }
+    }
+    return after_len;
+}
+
+/* Peek ahead to check if next content line is a list item. */
+static bool peek_is_list(const char *eol, const char *end) {
+    const char *peek = (eol < end) ? eol + 1 : end;
+    while (peek < end) {
+        const char *peek_eol = memchr(peek, '\n', (size_t)(end - peek));
+        if (!peek_eol) {
+            peek_eol = end;
+        }
+        int pi = leading_spaces(peek);
+        const char *pc = peek + pi;
+        int pcl = (int)(peek_eol - pc);
+        if (pcl > 0 && pc[pcl - 1] == '\r') {
+            pcl--;
+        }
+        if (pcl == 0 || pc[0] == '#') {
+            peek = (peek_eol < end) ? peek_eol + 1 : end;
+            continue;
+        }
+        return pc[0] == '-';
+    }
+    return false;
+}
+
+/* Parse a "key: value" or "key:" line. */
+static void parse_key_line(const char *content, int content_len, int indent,
+                           cbm_yaml_node_t *parent, stack_entry_t *stack, int *stack_depth,
+                           const char *eol, const char *end) {
+    const char *colon = memchr(content, ':', (size_t)content_len);
+    if (!colon) {
+        return;
+    }
+
+    char *key = trim_dup(content, colon);
+    if (!key) {
+        return;
+    }
+
+    /* After colon: value or nothing */
+    const char *after = colon + 1;
+    int after_len = content_len - (int)(after - content);
+    while (after_len > 0 && isspace((unsigned char)*after)) {
+        after++;
+        after_len--;
+    }
+
+    after_len = strip_inline_comment(after, after_len);
+
+    if (after_len > 0) {
+        /* "key: value" — scalar */
+        cbm_yaml_node_t *child = node_new(YAML_SCALAR);
+        if (child) {
+            child->key = key;
+            child->value = trim_dup(after, after + after_len);
+            node_add_child(parent, child);
+        } else {
+            free(key);
+        }
+    } else {
+        /* "key:" — could be map or list (determined by next lines) */
+        bool is_list = peek_is_list(eol, end);
+        cbm_yaml_node_t *child = node_new(is_list ? YAML_LIST : YAML_MAP);
+        if (child) {
+            child->key = key;
+            node_add_child(parent, child);
+            if (*stack_depth < 32) {
+                stack[(*stack_depth)++] = (stack_entry_t){.node = child, .indent = indent};
+            }
+        } else {
+            free(key);
+        }
+    }
+}
+
 cbm_yaml_node_t *cbm_yaml_parse(const char *text, int len) {
     if (!text || len <= 0) {
         return node_new(YAML_MAP);
@@ -166,117 +280,10 @@ cbm_yaml_node_t *cbm_yaml_parse(const char *text, int len) {
         }
         cbm_yaml_node_t *parent = stack[stack_depth - 1].node;
 
-        /* Check for list item: "- value" */
         if (content[0] == '-' && content_len >= 2 && content[1] == ' ') {
-            /* Ensure parent is a list (or convert map parent's last child) */
-            const char *item_start = content + 2;
-            int item_len = content_len - 2;
-            while (item_len > 0 && isspace((unsigned char)item_start[0])) {
-                item_start++;
-                item_len--;
-            }
-
-            /* If parent is a map, the list items belong to the last child */
-            cbm_yaml_node_t *list_parent = parent;
-            if (parent->type == YAML_MAP && parent->child_count > 0) {
-                cbm_yaml_node_t *last = parent->children[parent->child_count - 1];
-                if (last->type == YAML_LIST) {
-                    list_parent = last;
-                }
-            }
-
-            cbm_yaml_node_t *item = node_new(YAML_SCALAR);
-            if (item) {
-                item->value = trim_dup(item_start, item_start + item_len);
-                node_add_child(list_parent, item);
-            }
-
-            p = (eol < end) ? eol + 1 : end;
-            continue;
-        }
-
-        /* Find colon separator for "key: value" or "key:" */
-        const char *colon = memchr(content, ':', (size_t)content_len);
-        if (!colon) {
-            /* Not a valid YAML line — skip */
-            p = (eol < end) ? eol + 1 : end;
-            continue;
-        }
-
-        char *key = trim_dup(content, colon);
-        if (!key) {
-            p = (eol < end) ? eol + 1 : end;
-            continue;
-        }
-
-        /* After colon: value or nothing */
-        const char *after = colon + 1;
-        int after_len = content_len - (int)(after - content);
-        while (after_len > 0 && isspace((unsigned char)*after)) {
-            after++;
-            after_len--;
-        }
-
-        /* Strip inline comments (but not inside quoted strings) */
-        if (after_len > 0 && after[0] != '"' && after[0] != '\'') {
-            for (int i = 0; i < after_len; i++) {
-                if (after[i] == '#' && i > 0 && after[i - 1] == ' ') {
-                    after_len = i;
-                    while (after_len > 0 && isspace((unsigned char)after[after_len - 1])) {
-                        after_len--;
-                    }
-                    break;
-                }
-            }
-        }
-
-        if (after_len > 0) {
-            /* "key: value" — scalar */
-            cbm_yaml_node_t *child = node_new(YAML_SCALAR);
-            if (child) {
-                child->key = key;
-                child->value = trim_dup(after, after + after_len);
-                node_add_child(parent, child);
-            } else {
-                free(key);
-            }
+            parse_list_item(content, content_len, parent);
         } else {
-            /* "key:" — could be map or list (determined by next lines) */
-            /* Peek ahead to check if next content line is a list item */
-            const char *peek = (eol < end) ? eol + 1 : end;
-            bool is_list = false;
-            while (peek < end) {
-                const char *peek_eol = memchr(peek, '\n', (size_t)(end - peek));
-                if (!peek_eol) {
-                    peek_eol = end;
-                }
-                int pi = leading_spaces(peek);
-                const char *pc = peek + pi;
-                int pcl = (int)(peek_eol - pc);
-                if (pcl > 0 && pc[pcl - 1] == '\r') {
-                    pcl--;
-                }
-                if (pcl == 0 || pc[0] == '#') {
-                    peek = (peek_eol < end) ? peek_eol + 1 : end;
-                    continue;
-                }
-                if (pc[0] == '-') {
-                    is_list = true;
-                }
-                break;
-            }
-
-            cbm_yaml_node_t *child = node_new(is_list ? YAML_LIST : YAML_MAP);
-            if (child) {
-                child->key = key;
-                node_add_child(parent, child);
-                /* Push onto stack */
-                if (stack_depth < 32) {
-                    stack[stack_depth++] = (stack_entry_t){.node = child, .indent = indent};
-                }
-            } else {
-                free(key);
-            }
+            parse_key_line(content, content_len, indent, parent, stack, &stack_depth, eol, end);
         }
 
         p = (eol < end) ? eol + 1 : end;

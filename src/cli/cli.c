@@ -161,63 +161,61 @@ const char *cbm_detect_shell_rc(const char *home_dir) {
 
 /* ── CLI binary detection ─────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Search for an executable named `name` in the PATH environment variable.
+ * Returns the full path in `out` (max out_sz) if found, else empty string. */
+static bool find_in_path(const char *name, char *out, size_t out_sz) {
+    const char *path_env = getenv("PATH");
+    if (!path_env) {
+        return false;
+    }
+    char path_copy[4096];
+    snprintf(path_copy, sizeof(path_copy), "%s", path_env);
+    char *saveptr;
+    char *dir = strtok_r(path_copy, ":", &saveptr);
+    while (dir) {
+        snprintf(out, out_sz, "%s/%s", dir, name);
+        struct stat st;
+        if (stat(out, &st) == 0 && (st.st_mode & S_IXUSR)) {
+            return true;
+        }
+        dir = strtok_r(NULL, ":", &saveptr);
+    }
+    return false;
+}
+
+/* Check if a path exists and is executable. */
+static bool is_executable(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0 && (st.st_mode & S_IXUSR);
+}
+
 const char *cbm_find_cli(const char *name, const char *home_dir) {
     static char buf[512];
     if (!name || !name[0]) {
         return "";
     }
-
-    /* Check PATH first */
-    const char *path_env = getenv("PATH");
-    if (path_env) {
-        char path_copy[4096];
-        snprintf(path_copy, sizeof(path_copy), "%s", path_env);
-        char *saveptr;
-        char *dir = strtok_r(path_copy, ":", &saveptr);
-        while (dir) {
-            snprintf(buf, sizeof(buf), "%s/%s", dir, name);
-            struct stat st;
-            if (stat(buf, &st) == 0 && (st.st_mode & S_IXUSR)) {
-                return buf;
-            }
-            dir = strtok_r(NULL, ":", &saveptr);
-        }
+    if (find_in_path(name, buf, sizeof(buf))) {
+        return buf;
     }
-
-    /* Check common install locations */
-    if (home_dir && home_dir[0]) {
-        const char *candidates[] = {
-            "/usr/local/bin/%s",
-            NULL, /* filled dynamically */
-            NULL,
-            NULL,
-            NULL,
-        };
-        char paths[5][512];
-        snprintf(paths[0], sizeof(paths[0]), "/usr/local/bin/%s", name);
-        snprintf(paths[1], sizeof(paths[1]), "%s/.npm/bin/%s", home_dir, name);
-        snprintf(paths[2], sizeof(paths[2]), "%s/.local/bin/%s", home_dir, name);
-        snprintf(paths[3], sizeof(paths[3]), "%s/.cargo/bin/%s", home_dir, name);
+    if (!home_dir || !home_dir[0]) {
+        return "";
+    }
+    char paths[5][512];
+    snprintf(paths[0], sizeof(paths[0]), "/usr/local/bin/%s", name);
+    snprintf(paths[1], sizeof(paths[1]), "%s/.npm/bin/%s", home_dir, name);
+    snprintf(paths[2], sizeof(paths[2]), "%s/.local/bin/%s", home_dir, name);
+    snprintf(paths[3], sizeof(paths[3]), "%s/.cargo/bin/%s", home_dir, name);
 #ifdef __APPLE__
-        snprintf(paths[4], sizeof(paths[4]), "/opt/homebrew/bin/%s", name);
+    snprintf(paths[4], sizeof(paths[4]), "/opt/homebrew/bin/%s", name);
 #else
-        paths[4][0] = '\0';
+    paths[4][0] = '\0';
 #endif
-        (void)candidates;
-
-        for (int i = 0; i < 5; i++) {
-            if (!paths[i][0]) {
-                continue;
-            }
-            struct stat st;
-            if (stat(paths[i], &st) == 0 && (st.st_mode & S_IXUSR)) {
-                snprintf(buf, sizeof(buf), "%s", paths[i]);
-                return buf;
-            }
+    for (int i = 0; i < 5; i++) {
+        if (paths[i][0] && is_executable(paths[i])) {
+            snprintf(buf, sizeof(buf), "%s", paths[i]);
+            return buf;
         }
     }
-
     return "";
 }
 
@@ -866,7 +864,11 @@ int cbm_remove_zed_mcp(const char *config_path) {
 
 /* ── Agent detection ──────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+static bool dir_exists(const char *path) {
+    struct stat st;
+    return stat(path, &st) == 0 && S_ISDIR(st.st_mode);
+}
+
 cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
     cbm_detected_agents_t agents;
     memset(&agents, 0, sizeof(agents));
@@ -875,76 +877,45 @@ cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
     }
 
     char path[1024];
-    struct stat st;
 
-    /* Claude Code: ~/.claude/ */
     snprintf(path, sizeof(path), "%s/.claude", home_dir);
-    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-        agents.claude_code = true;
-    }
+    agents.claude_code = dir_exists(path);
 
-    /* Codex CLI: ~/.codex/ */
     snprintf(path, sizeof(path), "%s/.codex", home_dir);
-    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-        agents.codex = true;
-    }
+    agents.codex = dir_exists(path);
 
-    /* Gemini CLI: ~/.gemini/ */
     snprintf(path, sizeof(path), "%s/.gemini", home_dir);
-    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-        agents.gemini = true;
-    }
+    agents.gemini = dir_exists(path);
 
-    /* Zed: platform-specific config dir */
 #ifdef __APPLE__
     snprintf(path, sizeof(path), "%s/Library/Application Support/Zed", home_dir);
 #else
     snprintf(path, sizeof(path), "%s/.config/zed", home_dir);
 #endif
-    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-        agents.zed = true;
-    }
+    agents.zed = dir_exists(path);
 
-    /* OpenCode: binary on PATH */
-    const char *oc = cbm_find_cli("opencode", home_dir);
-    if (oc[0]) {
-        agents.opencode = true;
-    }
+    agents.opencode = cbm_find_cli("opencode", home_dir)[0] != '\0';
 
-    /* Antigravity: ~/.gemini/antigravity/ */
     snprintf(path, sizeof(path), "%s/.gemini/antigravity", home_dir);
-    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
+    if (dir_exists(path)) {
         agents.antigravity = true;
-        agents.gemini = true; /* parent dir implies gemini */
+        agents.gemini = true;
     }
 
-    /* Aider: binary on PATH */
-    const char *ai = cbm_find_cli("aider", home_dir);
-    if (ai[0]) {
-        agents.aider = true;
-    }
+    agents.aider = cbm_find_cli("aider", home_dir)[0] != '\0';
 
-    /* KiloCode: globalStorage dir */
     snprintf(path, sizeof(path), "%s/.config/Code/User/globalStorage/kilocode.kilo-code", home_dir);
-    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-        agents.kilocode = true;
-    }
+    agents.kilocode = dir_exists(path);
 
-    /* VS Code: User config dir */
 #ifdef __APPLE__
     snprintf(path, sizeof(path), "%s/Library/Application Support/Code/User", home_dir);
 #else
     snprintf(path, sizeof(path), "%s/.config/Code/User", home_dir);
 #endif
-    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-        agents.vscode = true;
-    }
+    agents.vscode = dir_exists(path);
 
-    /* OpenClaw: ~/.openclaw/ dir */
     snprintf(path, sizeof(path), "%s/.openclaw", home_dir);
-    if (stat(path, &st) == 0 && S_ISDIR(st.st_mode)) {
-        agents.openclaw = true;
-    }
+    agents.openclaw = dir_exists(path);
 
     return agents;
 }
@@ -1691,14 +1662,9 @@ int cbm_ensure_path(const char *bin_dir, const char *rc_file, bool dry_run) {
 
 /* ── Tar.gz extraction ────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-unsigned char *cbm_extract_binary_from_targz(const unsigned char *data, int data_len,
-                                             int *out_len) {
-    if (!data || data_len <= 0 || !out_len) {
-        return NULL;
-    }
-
-    /* Decompress gzip */
+/* Decompress gzip data into a malloc'd buffer. Returns NULL on failure.
+ * *out_total receives the decompressed size. Caller must free the result. */
+static unsigned char *gzip_decompress(const unsigned char *data, int data_len, size_t *out_total) {
     z_stream strm = {0};
     strm.next_in = (unsigned char *)(uintptr_t)data;
     strm.avail_in = (unsigned int)data_len;
@@ -1707,7 +1673,6 @@ unsigned char *cbm_extract_binary_from_targz(const unsigned char *data, int data
         return NULL;
     }
 
-    /* Allocate decompression buffer (up to 500MB) */
     size_t buf_cap = (size_t)data_len * 10;
     if (buf_cap < 4096) {
         buf_cap = 4096;
@@ -1752,58 +1717,82 @@ unsigned char *cbm_extract_binary_from_targz(const unsigned char *data, int data
         free(decompressed);
         return NULL;
     }
+    *out_total = total;
+    return decompressed;
+}
+
+/* Check if a tar block is all zeros (end of archive). */
+static bool is_tar_end_of_archive(const unsigned char *hdr) {
+    for (int i = 0; i < 512; i++) {
+        if (hdr[i] != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Try to extract the target binary from a tar entry. Returns malloc'd data or NULL. */
+static unsigned char *tar_try_extract_binary(const unsigned char *hdr, char typeflag,
+                                             const char *name, const unsigned char *archive,
+                                             size_t data_pos, long file_size, size_t total,
+                                             int *out_len) {
+    (void)hdr;
+    if (typeflag != '0' && typeflag != '\0') {
+        return NULL;
+    }
+    const char *basename = strrchr(name, '/');
+    basename = basename ? basename + 1 : name;
+    if (strncmp(basename, TAR_BINARY_NAME, TAR_BINARY_NAME_LEN) != 0) {
+        return NULL;
+    }
+    if (data_pos + (size_t)file_size > total) {
+        return NULL;
+    }
+    unsigned char *result = malloc((size_t)file_size);
+    if (!result) {
+        return NULL;
+    }
+    memcpy(result, archive + data_pos, (size_t)file_size);
+    *out_len = (int)file_size;
+    return result;
+}
+
+unsigned char *cbm_extract_binary_from_targz(const unsigned char *data, int data_len,
+                                             int *out_len) {
+    if (!data || data_len <= 0 || !out_len) {
+        return NULL;
+    }
+
+    size_t total = 0;
+    unsigned char *decompressed = gzip_decompress(data, data_len, &total);
+    if (!decompressed) {
+        return NULL;
+    }
 
     /* Parse tar: find entry starting with "codebase-memory-mcp" */
     size_t pos = 0;
     while (pos + 512 <= total) {
-        /* Tar header is 512 bytes */
         const unsigned char *hdr = decompressed + pos;
 
-        /* Check for end-of-archive (two zero blocks) */
-        bool all_zero = true;
-        for (int i = 0; i < 512 && all_zero; i++) {
-            if (hdr[i] != 0) {
-                all_zero = false;
-            }
-        }
-        if (all_zero) {
+        if (is_tar_end_of_archive(hdr)) {
             break;
         }
 
-        /* Extract filename (bytes 0-99) */
         char name[TAR_NAME_LEN] = {0};
         memcpy(name, hdr, TAR_NAME_LEN - 1);
-
-        /* Extract size from octal field */
         char size_str[TAR_SIZE_LEN] = {0};
         memcpy(size_str, hdr + TAR_SIZE_OFFSET, TAR_SIZE_LEN - 1);
         long file_size = strtol(size_str, NULL, 8);
-
-        /* Extract type flag (byte 156) */
         char typeflag = (char)hdr[TAR_TYPE_OFFSET];
+        pos += 512;
 
-        pos += 512; /* skip header */
-
-        /* Check if this is a regular file with our binary name */
-        if (typeflag == '0' || typeflag == '\0') {
-            /* Get basename */
-            const char *basename = strrchr(name, '/');
-            basename = basename ? basename + 1 : name;
-
-            if (strncmp(basename, TAR_BINARY_NAME, TAR_BINARY_NAME_LEN) == 0) {
-                if (pos + (size_t)file_size <= total) {
-                    unsigned char *result = malloc((size_t)file_size);
-                    if (result) {
-                        memcpy(result, decompressed + pos, (size_t)file_size);
-                        *out_len = (int)file_size;
-                        free(decompressed);
-                        return result;
-                    }
-                }
-            }
+        unsigned char *found = tar_try_extract_binary(hdr, typeflag, name, decompressed, pos,
+                                                      file_size, total, out_len);
+        if (found) {
+            free(decompressed);
+            return found;
         }
 
-        /* Skip to next 512-byte boundary */
         size_t blocks = ((size_t)file_size + TAR_BLOCK_MASK) / TAR_BLOCK_SIZE;
         pos += blocks * 512;
     }
@@ -1814,29 +1803,73 @@ unsigned char *cbm_extract_binary_from_targz(const unsigned char *data, int data
 
 /* ── Zip extraction (in-memory, replaces external unzip) ──────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Zip local file header constants */
+enum {
+    ZIP_SIG_0 = 0x50,
+    ZIP_SIG_1 = 0x4B,
+    ZIP_SIG_2 = 0x03,
+    ZIP_SIG_3 = 0x04,
+    ZIP_HDR_SZ = 30,
+    ZIP_OFF_METHOD = 8,
+    ZIP_OFF_COMP = 18,
+    ZIP_OFF_UNCOMP = 22,
+    ZIP_OFF_NAMELEN = 26,
+    ZIP_OFF_EXTRALEN = 28,
+    ZIP_STORED = 0,
+    ZIP_DEFLATE = 8
+};
+static const uint32_t ZIP_MAX_UNCOMP = 500U * 1024U * 1024U;
+
+/* Decompress a single zip entry (stored or deflated). Returns malloc'd buffer
+ * or NULL on failure. *out_len receives the decompressed size. */
+static unsigned char *zip_extract_entry(const unsigned char *file_data, uint16_t method,
+                                        uint32_t comp_size, uint32_t uncomp_size, int *out_len) {
+    if (method == ZIP_STORED) {
+        if (comp_size > ZIP_MAX_UNCOMP) {
+            return NULL;
+        }
+        unsigned char *out = malloc(comp_size);
+        if (!out) {
+            return NULL;
+        }
+        memcpy(out, file_data, comp_size);
+        *out_len = (int)comp_size;
+        return out;
+    }
+    if (method == ZIP_DEFLATE) {
+        if (uncomp_size > ZIP_MAX_UNCOMP) {
+            return NULL;
+        }
+        unsigned char *out = malloc(uncomp_size);
+        if (!out) {
+            return NULL;
+        }
+        z_stream strm = {0};
+        strm.next_in = (unsigned char *)file_data;
+        strm.avail_in = comp_size;
+        strm.next_out = out;
+        strm.avail_out = uncomp_size;
+        if (inflateInit2(&strm, -MAX_WBITS) != Z_OK) {
+            free(out);
+            return NULL;
+        }
+        int ret = inflate(&strm, Z_FINISH);
+        inflateEnd(&strm);
+        if (ret != Z_STREAM_END) {
+            free(out);
+            return NULL;
+        }
+        *out_len = (int)strm.total_out;
+        return out;
+    }
+    return NULL; /* unknown method */
+}
+
 unsigned char *cbm_extract_binary_from_zip(const unsigned char *data, int data_len, int *out_len) {
     if (!data || data_len <= 0 || !out_len) {
         return NULL;
     }
     *out_len = 0;
-
-    /* Zip local file header layout */
-    enum {
-        ZIP_SIG_0 = 0x50,
-        ZIP_SIG_1 = 0x4B,
-        ZIP_SIG_2 = 0x03,
-        ZIP_SIG_3 = 0x04,
-        ZIP_HDR_SZ = 30,
-        ZIP_OFF_METHOD = 8,
-        ZIP_OFF_COMP = 18,
-        ZIP_OFF_UNCOMP = 22,
-        ZIP_OFF_NAMELEN = 26,
-        ZIP_OFF_EXTRALEN = 28,
-        ZIP_STORED = 0,
-        ZIP_DEFLATE = 8
-    };
-    static const uint32_t ZIP_MAX_UNCOMP = 500U * 1024U * 1024U;
 
     int pos = 0;
     while (pos + ZIP_HDR_SZ <= data_len) {
@@ -1861,78 +1894,31 @@ unsigned char *cbm_extract_binary_from_zip(const unsigned char *data, int data_l
 
         int header_end = pos + ZIP_HDR_SZ + name_len + extra_len;
         if (header_end + (int)comp_size > data_len) {
-            break; /* Truncated */
+            break;
         }
 
-        /* Extract filename */
         char fname[512] = {0};
         int fn_copy = name_len < (int)sizeof(fname) - 1 ? name_len : (int)sizeof(fname) - 1;
         memcpy(fname, data + pos + 30, (size_t)fn_copy);
         fname[fn_copy] = '\0';
 
-        /* Security: reject path traversal */
         if (strstr(fname, "..")) {
             pos = header_end + (int)comp_size;
             continue;
         }
 
-        /* Find the binary — basename match */
         const char *basename = strrchr(fname, '/');
         basename = basename ? basename + 1 : fname;
 
         if (strcmp(basename, "codebase-memory-mcp") == 0 ||
             strcmp(basename, "codebase-memory-mcp.exe") == 0) {
-
-            const unsigned char *file_data = data + header_end;
-
-            if (method == ZIP_STORED) {
-                if (comp_size > ZIP_MAX_UNCOMP) {
-                    return NULL;
-                }
-                unsigned char *out = malloc(comp_size);
-                if (!out) {
-                    return NULL;
-                }
-                memcpy(out, file_data, comp_size);
-                *out_len = (int)comp_size;
-                return out;
-            }
-            if (method == ZIP_DEFLATE) {
-                if (uncomp_size > ZIP_MAX_UNCOMP) {
-                    return NULL;
-                }
-                unsigned char *out = malloc(uncomp_size);
-                if (!out) {
-                    return NULL;
-                }
-                z_stream strm = {0};
-                strm.next_in = (unsigned char *)file_data;
-                strm.avail_in = comp_size;
-                strm.next_out = out;
-                strm.avail_out = uncomp_size;
-
-                /* -MAX_WBITS = raw deflate (no zlib/gzip header) */
-                if (inflateInit2(&strm, -MAX_WBITS) != Z_OK) {
-                    free(out);
-                    return NULL;
-                }
-                int ret = inflate(&strm, Z_FINISH);
-                inflateEnd(&strm);
-                if (ret != Z_STREAM_END) {
-                    free(out);
-                    return NULL;
-                }
-                *out_len = (int)strm.total_out;
-                return out;
-            }
-            /* Unknown compression method */
-            return NULL;
+            return zip_extract_entry(data + header_end, method, comp_size, uncomp_size, out_len);
         }
 
         pos = header_end + (int)comp_size;
     }
 
-    return NULL; /* binary not found */
+    return NULL;
 }
 
 /* ── Index management ─────────────────────────────────────────── */
@@ -2448,242 +2434,226 @@ static const char *detect_arch(void) {
 
 /* ── Agent config install/refresh (shared by install + update) ── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-static void cbm_install_agent_configs(const char *home, const char *binary_path, bool force,
-                                      bool dry_run) {
-    cbm_detected_agents_t agents = cbm_detect_agents(home);
+/* Print detected agent names on a single line. */
+static void print_detected_agents(const cbm_detected_agents_t *a) {
+    struct {
+        bool flag;
+        const char *name;
+    } agents[] = {
+        {a->claude_code, "Claude-Code"},
+        {a->codex, "Codex"},
+        {a->gemini, "Gemini-CLI"},
+        {a->zed, "Zed"},
+        {a->opencode, "OpenCode"},
+        {a->antigravity, "Antigravity"},
+        {a->aider, "Aider"},
+        {a->kilocode, "KiloCode"},
+        {a->vscode, "VS-Code"},
+        {a->openclaw, "OpenClaw"},
+    };
     printf("Detected agents:");
-    if (agents.claude_code) {
-        printf(" Claude-Code");
+    bool any = false;
+    for (int i = 0; i < (int)(sizeof(agents) / sizeof(agents[0])); i++) {
+        if (agents[i].flag) {
+            printf(" %s", agents[i].name);
+            any = true;
+        }
     }
-    if (agents.codex) {
-        printf(" Codex");
-    }
-    if (agents.gemini) {
-        printf(" Gemini-CLI");
-    }
-    if (agents.zed) {
-        printf(" Zed");
-    }
-    if (agents.opencode) {
-        printf(" OpenCode");
-    }
-    if (agents.antigravity) {
-        printf(" Antigravity");
-    }
-    if (agents.aider) {
-        printf(" Aider");
-    }
-    if (agents.kilocode) {
-        printf(" KiloCode");
-    }
-    if (agents.vscode) {
-        printf(" VS-Code");
-    }
-    if (agents.openclaw) {
-        printf(" OpenClaw");
-    }
-    if (!agents.claude_code && !agents.codex && !agents.gemini && !agents.zed && !agents.opencode &&
-        !agents.antigravity && !agents.aider && !agents.kilocode && !agents.vscode &&
-        !agents.openclaw) {
+    if (!any) {
         printf(" (none)");
     }
     printf("\n\n");
+}
 
-    /* Claude Code: skills + MCP + hooks */
-    if (agents.claude_code) {
-        char skills_dir[1024];
-        snprintf(skills_dir, sizeof(skills_dir), "%s/.claude/skills", home);
-        printf("Claude Code:\n");
+/* Install Claude Code-specific configs (skills, MCP, hooks). */
+static void install_claude_code_config(const char *home, const char *binary_path, bool force,
+                                       bool dry_run) {
+    char skills_dir[1024];
+    snprintf(skills_dir, sizeof(skills_dir), "%s/.claude/skills", home);
+    printf("Claude Code:\n");
 
-        int skill_count = cbm_install_skills(skills_dir, force, dry_run);
-        printf("  skills: %d installed\n", skill_count);
+    int skill_count = cbm_install_skills(skills_dir, force, dry_run);
+    printf("  skills: %d installed\n", skill_count);
 
-        if (cbm_remove_old_monolithic_skill(skills_dir, dry_run)) {
-            printf("  removed old monolithic skill\n");
-        }
-
-        char mcp_path[1024];
-        snprintf(mcp_path, sizeof(mcp_path), "%s/.claude/.mcp.json", home);
-        if (!dry_run) {
-            cbm_install_editor_mcp(binary_path, mcp_path);
-        }
-        printf("  mcp: %s\n", mcp_path);
-
-        char mcp_path2[1024];
-        snprintf(mcp_path2, sizeof(mcp_path2), "%s/.claude.json", home);
-        if (!dry_run) {
-            cbm_install_editor_mcp(binary_path, mcp_path2);
-        }
-        printf("  mcp: %s\n", mcp_path2);
-
-        char settings_path[1024];
-        snprintf(settings_path, sizeof(settings_path), "%s/.claude/settings.json", home);
-        if (!dry_run) {
-            cbm_upsert_claude_hooks(settings_path);
-            cbm_install_hook_gate_script(home);
-            cbm_install_session_reminder_script(home);
-            cbm_upsert_session_hooks(settings_path);
-        }
-        printf("  hooks: PreToolUse (code discovery gate)\n");
-        printf("  hooks: SessionStart (MCP usage reminder on startup/resume/clear/compact)\n");
+    if (cbm_remove_old_monolithic_skill(skills_dir, dry_run)) {
+        printf("  removed old monolithic skill\n");
     }
 
-    /* Codex CLI */
-    if (agents.codex) {
-        printf("Codex CLI:\n");
-        char config_path[1024];
-        snprintf(config_path, sizeof(config_path), "%s/.codex/config.toml", home);
-        if (!dry_run) {
-            cbm_upsert_codex_mcp(binary_path, config_path);
-        }
-        printf("  mcp: %s\n", config_path);
+    char mcp_path[1024];
+    snprintf(mcp_path, sizeof(mcp_path), "%s/.claude/.mcp.json", home);
+    if (!dry_run) {
+        cbm_install_editor_mcp(binary_path, mcp_path);
+    }
+    printf("  mcp: %s\n", mcp_path);
 
-        char instr_path[1024];
-        snprintf(instr_path, sizeof(instr_path), "%s/.codex/AGENTS.md", home);
+    char mcp_path2[1024];
+    snprintf(mcp_path2, sizeof(mcp_path2), "%s/.claude.json", home);
+    if (!dry_run) {
+        cbm_install_editor_mcp(binary_path, mcp_path2);
+    }
+    printf("  mcp: %s\n", mcp_path2);
+
+    char settings_path[1024];
+    snprintf(settings_path, sizeof(settings_path), "%s/.claude/settings.json", home);
+    if (!dry_run) {
+        cbm_upsert_claude_hooks(settings_path);
+        cbm_install_hook_gate_script(home);
+        cbm_install_session_reminder_script(home);
+        cbm_upsert_session_hooks(settings_path);
+    }
+    printf("  hooks: PreToolUse (code discovery gate)\n");
+    printf("  hooks: SessionStart (MCP usage reminder on startup/resume/clear/compact)\n");
+}
+
+/* Install MCP config + optional instructions for a generic agent. */
+static void install_generic_agent_config(const char *label, const char *binary_path,
+                                         const char *config_path, const char *instr_path,
+                                         bool dry_run,
+                                         int (*install_mcp)(const char *, const char *)) {
+    printf("%s:\n", label);
+    if (!dry_run) {
+        install_mcp(binary_path, config_path);
+    }
+    printf("  mcp: %s\n", config_path);
+    if (instr_path) {
         if (!dry_run) {
             cbm_upsert_instructions(instr_path, agent_instructions_content);
         }
         printf("  instructions: %s\n", instr_path);
     }
+}
 
-    /* Gemini CLI */
-    if (agents.gemini) {
-        printf("Gemini CLI:\n");
-        char config_path[1024];
-        snprintf(config_path, sizeof(config_path), "%s/.gemini/settings.json", home);
-        if (!dry_run) {
-            cbm_install_editor_mcp(binary_path, config_path);
-        }
-        printf("  mcp: %s\n", config_path);
-
-        char instr_path[1024];
-        snprintf(instr_path, sizeof(instr_path), "%s/.gemini/GEMINI.md", home);
-        if (!dry_run) {
-            cbm_upsert_instructions(instr_path, agent_instructions_content);
-        }
-        printf("  instructions: %s\n", instr_path);
-
-        if (!dry_run) {
-            cbm_upsert_gemini_hooks(config_path);
-        }
-        printf("  hooks: BeforeTool (grep/file search reminder)\n");
+/* Install MCP configs for CLI-based agents (Codex, Gemini, OpenCode, Antigravity, Aider). */
+/* Install Gemini CLI config with hooks. */
+static void install_gemini_config(const char *home, const char *binary_path, bool dry_run) {
+    char cp[1024];
+    char ip[1024];
+    snprintf(cp, sizeof(cp), "%s/.gemini/settings.json", home);
+    snprintf(ip, sizeof(ip), "%s/.gemini/GEMINI.md", home);
+    install_generic_agent_config("Gemini CLI", binary_path, cp, ip, dry_run,
+                                 cbm_install_editor_mcp);
+    if (!dry_run) {
+        cbm_upsert_gemini_hooks(cp);
     }
+    printf("  hooks: BeforeTool (grep/file search reminder)\n");
+}
 
-    /* Zed */
-    if (agents.zed) {
-        printf("Zed:\n");
-        char config_path[1024];
-#ifdef __APPLE__
-        snprintf(config_path, sizeof(config_path),
-                 "%s/Library/Application Support/Zed/settings.json", home);
-#else
-        snprintf(config_path, sizeof(config_path), "%s/.config/zed/settings.json", home);
-#endif
-        if (!dry_run) {
-            cbm_install_zed_mcp(binary_path, config_path);
-        }
-        printf("  mcp: %s\n", config_path);
+static void install_cli_agent_configs(const cbm_detected_agents_t *agents, const char *home,
+                                      const char *binary_path, bool dry_run) {
+    if (agents->codex) {
+        char cp[1024];
+        char ip[1024];
+        snprintf(cp, sizeof(cp), "%s/.codex/config.toml", home);
+        snprintf(ip, sizeof(ip), "%s/.codex/AGENTS.md", home);
+        install_generic_agent_config("Codex CLI", binary_path, cp, ip, dry_run,
+                                     cbm_upsert_codex_mcp);
     }
-
-    /* OpenCode */
-    if (agents.opencode) {
-        printf("OpenCode:\n");
-        char config_path[1024];
-        snprintf(config_path, sizeof(config_path), "%s/.config/opencode/opencode.json", home);
-        if (!dry_run) {
-            cbm_upsert_opencode_mcp(binary_path, config_path);
-        }
-        printf("  mcp: %s\n", config_path);
-
-        char instr_path[1024];
-        snprintf(instr_path, sizeof(instr_path), "%s/.config/opencode/AGENTS.md", home);
-        if (!dry_run) {
-            cbm_upsert_instructions(instr_path, agent_instructions_content);
-        }
-        printf("  instructions: %s\n", instr_path);
+    if (agents->gemini) {
+        install_gemini_config(home, binary_path, dry_run);
     }
-
-    /* Antigravity */
-    if (agents.antigravity) {
-        printf("Antigravity:\n");
-        char config_path[1024];
-        snprintf(config_path, sizeof(config_path), "%s/.gemini/antigravity/mcp_config.json", home);
-        if (!dry_run) {
-            cbm_upsert_antigravity_mcp(binary_path, config_path);
-        }
-        printf("  mcp: %s\n", config_path);
-
-        char instr_path[1024];
-        snprintf(instr_path, sizeof(instr_path), "%s/.gemini/antigravity/AGENTS.md", home);
-        if (!dry_run) {
-            cbm_upsert_instructions(instr_path, agent_instructions_content);
-        }
-        printf("  instructions: %s\n", instr_path);
+    if (agents->opencode) {
+        char cp[1024];
+        char ip[1024];
+        snprintf(cp, sizeof(cp), "%s/.config/opencode/opencode.json", home);
+        snprintf(ip, sizeof(ip), "%s/.config/opencode/AGENTS.md", home);
+        install_generic_agent_config("OpenCode", binary_path, cp, ip, dry_run,
+                                     cbm_upsert_opencode_mcp);
     }
-
-    /* Aider */
-    if (agents.aider) {
+    if (agents->antigravity) {
+        char cp[1024];
+        char ip[1024];
+        snprintf(cp, sizeof(cp), "%s/.gemini/antigravity/mcp_config.json", home);
+        snprintf(ip, sizeof(ip), "%s/.gemini/antigravity/AGENTS.md", home);
+        install_generic_agent_config("Antigravity", binary_path, cp, ip, dry_run,
+                                     cbm_upsert_antigravity_mcp);
+    }
+    if (agents->aider) {
+        char ip[1024];
+        snprintf(ip, sizeof(ip), "%s/CONVENTIONS.md", home);
         printf("Aider:\n");
-        char instr_path[1024];
-        snprintf(instr_path, sizeof(instr_path), "%s/CONVENTIONS.md", home);
         if (!dry_run) {
-            cbm_upsert_instructions(instr_path, agent_instructions_content);
+            cbm_upsert_instructions(ip, agent_instructions_content);
         }
-        printf("  instructions: %s\n", instr_path);
+        printf("  instructions: %s\n", ip);
     }
+}
 
-    /* KiloCode */
-    if (agents.kilocode) {
-        printf("KiloCode:\n");
-        char config_path[1024];
-        snprintf(config_path, sizeof(config_path),
+/* Install MCP configs for editor-based agents (Zed, KiloCode, VS Code, OpenClaw). */
+static void install_editor_agent_configs(const cbm_detected_agents_t *agents, const char *home,
+                                         const char *binary_path, bool dry_run) {
+    if (agents->zed) {
+        char cp[1024];
+#ifdef __APPLE__
+        snprintf(cp, sizeof(cp), "%s/Library/Application Support/Zed/settings.json", home);
+#else
+        snprintf(cp, sizeof(cp), "%s/.config/zed/settings.json", home);
+#endif
+        install_generic_agent_config("Zed", binary_path, cp, NULL, dry_run, cbm_install_zed_mcp);
+    }
+    if (agents->kilocode) {
+        char cp[1024];
+        char ip[1024];
+        snprintf(cp, sizeof(cp),
                  "%s/.config/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json",
                  home);
-        if (!dry_run) {
-            cbm_install_editor_mcp(binary_path, config_path);
-        }
-        printf("  mcp: %s\n", config_path);
-
-        char instr_path[1024];
-        snprintf(instr_path, sizeof(instr_path), "%s/.kilocode/rules/codebase-memory-mcp.md", home);
-        if (!dry_run) {
-            cbm_upsert_instructions(instr_path, agent_instructions_content);
-        }
-        printf("  instructions: %s\n", instr_path);
+        snprintf(ip, sizeof(ip), "%s/.kilocode/rules/codebase-memory-mcp.md", home);
+        install_generic_agent_config("KiloCode", binary_path, cp, ip, dry_run,
+                                     cbm_install_editor_mcp);
     }
-
-    /* VS Code */
-    if (agents.vscode) {
-        printf("VS Code:\n");
-        char config_path[1024];
+    if (agents->vscode) {
+        char cp[1024];
 #ifdef __APPLE__
-        snprintf(config_path, sizeof(config_path),
-                 "%s/Library/Application Support/Code/User/mcp.json", home);
+        snprintf(cp, sizeof(cp), "%s/Library/Application Support/Code/User/mcp.json", home);
 #else
-        snprintf(config_path, sizeof(config_path), "%s/.config/Code/User/mcp.json", home);
+        snprintf(cp, sizeof(cp), "%s/.config/Code/User/mcp.json", home);
 #endif
-        if (!dry_run) {
-            cbm_install_vscode_mcp(binary_path, config_path);
-        }
-        printf("  mcp: %s\n", config_path);
+        install_generic_agent_config("VS Code", binary_path, cp, NULL, dry_run,
+                                     cbm_install_vscode_mcp);
     }
+    if (agents->openclaw) {
+        char cp[1024];
+        snprintf(cp, sizeof(cp), "%s/.openclaw/openclaw.json", home);
+        install_generic_agent_config("OpenClaw", binary_path, cp, NULL, dry_run,
+                                     cbm_install_editor_mcp);
+    }
+}
 
-    /* OpenClaw */
-    if (agents.openclaw) {
-        printf("OpenClaw:\n");
-        char config_path[1024];
-        snprintf(config_path, sizeof(config_path), "%s/.openclaw/openclaw.json", home);
-        if (!dry_run) {
-            cbm_install_editor_mcp(binary_path, config_path);
-        }
-        printf("  mcp: %s\n", config_path);
+static void cbm_install_agent_configs(const char *home, const char *binary_path, bool force,
+                                      bool dry_run) {
+    cbm_detected_agents_t agents = cbm_detect_agents(home);
+    print_detected_agents(&agents);
+
+    if (agents.claude_code) {
+        install_claude_code_config(home, binary_path, force, dry_run);
     }
+    install_cli_agent_configs(&agents, home, binary_path, dry_run);
+    install_editor_agent_configs(&agents, home, binary_path, dry_run);
+}
+
+/* Count .db files in the cache directory. */
+static int count_db_indexes(const char *home) {
+    const char *cache_dir = get_cache_dir(home);
+    if (!cache_dir) {
+        return 0;
+    }
+    cbm_dir_t *d = cbm_opendir(cache_dir);
+    if (!d) {
+        return 0;
+    }
+    int count = 0;
+    cbm_dirent_t *ent;
+    while ((ent = cbm_readdir(d)) != NULL) {
+        size_t len = strlen(ent->name);
+        if (len > 3 && strcmp(ent->name + len - 3, ".db") == 0) {
+            count++;
+        }
+    }
+    cbm_closedir(d);
+    return count;
 }
 
 /* ── Subcommand: install ──────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_cmd_install(int argc, char **argv) {
     parse_auto_answer(argc, argv);
     bool dry_run = false;
@@ -2705,23 +2675,7 @@ int cbm_cmd_install(int argc, char **argv) {
 
     printf("codebase-memory-mcp install %s\n\n", CBM_VERSION);
 
-    /* Step 1: Check for existing indexes */
-    int index_count = 0;
-    const char *cache_dir = get_cache_dir(home);
-    if (cache_dir) {
-        cbm_dir_t *d = cbm_opendir(cache_dir);
-        if (d) {
-            cbm_dirent_t *ent;
-            while ((ent = cbm_readdir(d)) != NULL) {
-                size_t len = strlen(ent->name);
-                if (len > 3 && strcmp(ent->name + len - 3, ".db") == 0) {
-                    index_count++;
-                }
-            }
-            cbm_closedir(d);
-        }
-    }
-
+    int index_count = count_db_indexes(home);
     if (index_count > 0) {
         printf("Found %d existing index(es) that must be rebuilt:\n", index_count);
         cbm_list_indexes(home);
@@ -2790,7 +2744,139 @@ int cbm_cmd_install(int argc, char **argv) {
 
 /* ── Subcommand: uninstall ────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Remove Claude Code agent configs. */
+static void uninstall_claude_code(const char *home, bool dry_run) {
+    char skills_dir[1024];
+    snprintf(skills_dir, sizeof(skills_dir), "%s/.claude/skills", home);
+    int removed = cbm_remove_skills(skills_dir, dry_run);
+    printf("Claude Code: removed %d skill(s)\n", removed);
+
+    char mcp_path[1024];
+    snprintf(mcp_path, sizeof(mcp_path), "%s/.claude/.mcp.json", home);
+    if (!dry_run) {
+        cbm_remove_editor_mcp(mcp_path);
+    }
+    printf("  removed MCP config entry\n");
+
+    char mcp_path2[1024];
+    snprintf(mcp_path2, sizeof(mcp_path2), "%s/.claude.json", home);
+    if (!dry_run) {
+        cbm_remove_editor_mcp(mcp_path2);
+    }
+
+    char settings_path[1024];
+    snprintf(settings_path, sizeof(settings_path), "%s/.claude/settings.json", home);
+    if (!dry_run) {
+        cbm_remove_claude_hooks(settings_path);
+        cbm_remove_session_hooks(settings_path);
+    }
+    printf("  removed PreToolUse + SessionStart hooks\n");
+}
+
+/* Remove MCP + instructions for a generic agent. */
+static void uninstall_agent_mcp_instr(const char *name, const char *config_path,
+                                      const char *instr_path, bool dry_run,
+                                      int (*remove_fn)(const char *)) {
+    if (!dry_run) {
+        remove_fn(config_path);
+    }
+    printf("%s: removed MCP config entry\n", name);
+    if (instr_path) {
+        if (!dry_run) {
+            cbm_remove_instructions(instr_path);
+        }
+        printf("  removed instructions\n");
+    }
+}
+
+/* Remove CLI agent configs (Codex, Gemini, OpenCode, Antigravity, Aider). */
+/* Uninstall Gemini CLI config + hooks. */
+static void uninstall_gemini_config(const char *home, bool dry_run) {
+    char cp[1024];
+    char ip[1024];
+    snprintf(cp, sizeof(cp), "%s/.gemini/settings.json", home);
+    snprintf(ip, sizeof(ip), "%s/.gemini/GEMINI.md", home);
+    if (!dry_run) {
+        cbm_remove_editor_mcp(cp);
+        cbm_remove_gemini_hooks(cp);
+        cbm_remove_instructions(ip);
+    }
+    printf("Gemini CLI: removed MCP config + hooks + instructions\n");
+}
+
+static void uninstall_cli_agents(const cbm_detected_agents_t *agents, const char *home,
+                                 bool dry_run) {
+    if (agents->codex) {
+        char cp[1024];
+        char ip[1024];
+        snprintf(cp, sizeof(cp), "%s/.codex/config.toml", home);
+        snprintf(ip, sizeof(ip), "%s/.codex/AGENTS.md", home);
+        uninstall_agent_mcp_instr("Codex CLI", cp, ip, dry_run, cbm_remove_codex_mcp);
+    }
+    if (agents->gemini) {
+        uninstall_gemini_config(home, dry_run);
+    }
+    if (agents->opencode) {
+        char cp[1024];
+        char ip[1024];
+        snprintf(cp, sizeof(cp), "%s/.config/opencode/opencode.json", home);
+        snprintf(ip, sizeof(ip), "%s/.config/opencode/AGENTS.md", home);
+        uninstall_agent_mcp_instr("OpenCode", cp, ip, dry_run, cbm_remove_opencode_mcp);
+    }
+    if (agents->antigravity) {
+        char cp[1024];
+        char ip[1024];
+        snprintf(cp, sizeof(cp), "%s/.gemini/antigravity/mcp_config.json", home);
+        snprintf(ip, sizeof(ip), "%s/.gemini/antigravity/AGENTS.md", home);
+        uninstall_agent_mcp_instr("Antigravity", cp, ip, dry_run, cbm_remove_antigravity_mcp);
+    }
+    if (agents->aider) {
+        char ip[1024];
+        snprintf(ip, sizeof(ip), "%s/CONVENTIONS.md", home);
+        if (!dry_run) {
+            cbm_remove_instructions(ip);
+        }
+        printf("Aider: removed instructions\n");
+    }
+}
+
+/* Remove editor agent configs (Zed, KiloCode, VS Code, OpenClaw). */
+static void uninstall_editor_agents(const cbm_detected_agents_t *agents, const char *home,
+                                    bool dry_run) {
+    if (agents->zed) {
+        char cp[1024];
+#ifdef __APPLE__
+        snprintf(cp, sizeof(cp), "%s/Library/Application Support/Zed/settings.json", home);
+#else
+        snprintf(cp, sizeof(cp), "%s/.config/zed/settings.json", home);
+#endif
+        uninstall_agent_mcp_instr("Zed", cp, NULL, dry_run, cbm_remove_zed_mcp);
+    }
+    if (agents->kilocode) {
+        char cp[1024];
+        char ip[1024];
+        snprintf(cp, sizeof(cp),
+                 "%s/.config/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json",
+                 home);
+        snprintf(ip, sizeof(ip), "%s/.kilocode/rules/codebase-memory-mcp.md", home);
+        uninstall_agent_mcp_instr("KiloCode", cp, ip, dry_run, cbm_remove_editor_mcp);
+    }
+    if (agents->vscode) {
+        char cp[1024];
+#ifdef __APPLE__
+        snprintf(cp, sizeof(cp), "%s/Library/Application Support/Code/User/mcp.json", home);
+#else
+        snprintf(cp, sizeof(cp), "%s/.config/Code/User/mcp.json", home);
+#endif
+        uninstall_agent_mcp_instr("VS Code", cp, NULL, dry_run, cbm_remove_vscode_mcp);
+    }
+    if (agents->openclaw) {
+        char cp[1024];
+        snprintf(cp, sizeof(cp), "%s/.openclaw/openclaw.json", home);
+        uninstall_agent_mcp_instr("OpenClaw", cp, NULL, dry_run, cbm_remove_editor_mcp);
+    }
+}
+
 int cbm_cmd_uninstall(int argc, char **argv) {
     parse_auto_answer(argc, argv);
     bool dry_run = false;
@@ -2808,188 +2894,15 @@ int cbm_cmd_uninstall(int argc, char **argv) {
 
     printf("codebase-memory-mcp uninstall\n\n");
 
-    /* Step 1: Detect agents and remove per-agent configs */
     cbm_detected_agents_t agents = cbm_detect_agents(home);
-
     if (agents.claude_code) {
-        char skills_dir[1024];
-        snprintf(skills_dir, sizeof(skills_dir), "%s/.claude/skills", home);
-        int removed = cbm_remove_skills(skills_dir, dry_run);
-        printf("Claude Code: removed %d skill(s)\n", removed);
-
-        char mcp_path[1024];
-        snprintf(mcp_path, sizeof(mcp_path), "%s/.claude/.mcp.json", home);
-        if (!dry_run) {
-            cbm_remove_editor_mcp(mcp_path);
-        }
-        printf("  removed MCP config entry\n");
-
-        /* Also remove from new location (Claude Code >=2.1.80) */
-        char mcp_path2[1024];
-        snprintf(mcp_path2, sizeof(mcp_path2), "%s/.claude.json", home);
-        if (!dry_run) {
-            cbm_remove_editor_mcp(mcp_path2);
-        }
-
-        char settings_path[1024];
-        snprintf(settings_path, sizeof(settings_path), "%s/.claude/settings.json", home);
-        if (!dry_run) {
-            cbm_remove_claude_hooks(settings_path);
-            cbm_remove_session_hooks(settings_path);
-        }
-        printf("  removed PreToolUse + SessionStart hooks\n");
+        uninstall_claude_code(home, dry_run);
     }
-
-    if (agents.codex) {
-        char config_path[1024];
-        snprintf(config_path, sizeof(config_path), "%s/.codex/config.toml", home);
-        if (!dry_run) {
-            cbm_remove_codex_mcp(config_path);
-        }
-        printf("Codex CLI: removed MCP config entry\n");
-
-        char instr_path[1024];
-        snprintf(instr_path, sizeof(instr_path), "%s/.codex/AGENTS.md", home);
-        if (!dry_run) {
-            cbm_remove_instructions(instr_path);
-        }
-        printf("  removed instructions\n");
-    }
-
-    if (agents.gemini) {
-        char config_path[1024];
-        snprintf(config_path, sizeof(config_path), "%s/.gemini/settings.json", home);
-        if (!dry_run) {
-            cbm_remove_editor_mcp(config_path);
-        }
-        printf("Gemini CLI: removed MCP config entry\n");
-
-        if (!dry_run) {
-            cbm_remove_gemini_hooks(config_path);
-        }
-        printf("  removed BeforeTool hook\n");
-
-        char instr_path[1024];
-        snprintf(instr_path, sizeof(instr_path), "%s/.gemini/GEMINI.md", home);
-        if (!dry_run) {
-            cbm_remove_instructions(instr_path);
-        }
-        printf("  removed instructions\n");
-    }
-
-    if (agents.zed) {
-        char config_path[1024];
-#ifdef __APPLE__
-        snprintf(config_path, sizeof(config_path),
-                 "%s/Library/Application Support/Zed/settings.json", home);
-#else
-        snprintf(config_path, sizeof(config_path), "%s/.config/zed/settings.json", home);
-#endif
-        if (!dry_run) {
-            cbm_remove_zed_mcp(config_path);
-        }
-        printf("Zed: removed MCP config entry\n");
-    }
-
-    if (agents.opencode) {
-        char config_path[1024];
-        snprintf(config_path, sizeof(config_path), "%s/.config/opencode/opencode.json", home);
-        if (!dry_run) {
-            cbm_remove_opencode_mcp(config_path);
-        }
-        printf("OpenCode: removed MCP config entry\n");
-
-        char instr_path[1024];
-        snprintf(instr_path, sizeof(instr_path), "%s/.config/opencode/AGENTS.md", home);
-        if (!dry_run) {
-            cbm_remove_instructions(instr_path);
-        }
-        printf("  removed instructions\n");
-    }
-
-    if (agents.antigravity) {
-        char config_path[1024];
-        snprintf(config_path, sizeof(config_path), "%s/.gemini/antigravity/mcp_config.json", home);
-        if (!dry_run) {
-            cbm_remove_antigravity_mcp(config_path);
-        }
-        printf("Antigravity: removed MCP config entry\n");
-
-        char instr_path[1024];
-        snprintf(instr_path, sizeof(instr_path), "%s/.gemini/antigravity/AGENTS.md", home);
-        if (!dry_run) {
-            cbm_remove_instructions(instr_path);
-        }
-        printf("  removed instructions\n");
-    }
-
-    if (agents.aider) {
-        char instr_path[1024];
-        snprintf(instr_path, sizeof(instr_path), "%s/CONVENTIONS.md", home);
-        if (!dry_run) {
-            cbm_remove_instructions(instr_path);
-        }
-        printf("Aider: removed instructions\n");
-    }
-
-    if (agents.kilocode) {
-        char config_path[1024];
-        snprintf(config_path, sizeof(config_path),
-                 "%s/.config/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json",
-                 home);
-        if (!dry_run) {
-            cbm_remove_editor_mcp(config_path);
-        }
-        printf("KiloCode: removed MCP config entry\n");
-
-        char instr_path[1024];
-        snprintf(instr_path, sizeof(instr_path), "%s/.kilocode/rules/codebase-memory-mcp.md", home);
-        if (!dry_run) {
-            cbm_remove_instructions(instr_path);
-        }
-        printf("  removed instructions\n");
-    }
-
-    if (agents.vscode) {
-        char config_path[1024];
-#ifdef __APPLE__
-        snprintf(config_path, sizeof(config_path),
-                 "%s/Library/Application Support/Code/User/mcp.json", home);
-#else
-        snprintf(config_path, sizeof(config_path), "%s/.config/Code/User/mcp.json", home);
-#endif
-        if (!dry_run) {
-            cbm_remove_vscode_mcp(config_path);
-        }
-        printf("VS Code: removed MCP config entry\n");
-    }
-
-    if (agents.openclaw) {
-        char config_path[1024];
-        snprintf(config_path, sizeof(config_path), "%s/.openclaw/openclaw.json", home);
-        if (!dry_run) {
-            cbm_remove_editor_mcp(config_path);
-        }
-        printf("OpenClaw: removed MCP config entry\n");
-    }
+    uninstall_cli_agents(&agents, home, dry_run);
+    uninstall_editor_agents(&agents, home, dry_run);
 
     /* Step 2: Remove indexes */
-    int index_count = 0;
-    const char *cache_dir = get_cache_dir(home);
-    if (cache_dir) {
-        cbm_dir_t *d = cbm_opendir(cache_dir);
-        if (d) {
-            cbm_dirent_t *ent;
-            while ((ent = cbm_readdir(d)) != NULL) {
-                size_t len = strlen(ent->name);
-                if (len > 3 && strcmp(ent->name + len - 3, ".db") == 0) {
-                    index_count++;
-                }
-            }
-            cbm_closedir(d);
-        }
-    }
-
+    int index_count = count_db_indexes(home);
     if (index_count > 0) {
         printf("\nFound %d index(es):\n", index_count);
         cbm_list_indexes(home);
@@ -3025,7 +2938,147 @@ int cbm_cmd_uninstall(int argc, char **argv) {
 
 /* ── Subcommand: update ───────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
+/* Read archive from disk, extract binary (tar.gz or zip), write to bin_dest.
+ * Returns 0 on success, 1 on failure. Cleans up tmp_archive. */
+static int extract_and_install_binary(const char *tmp_archive, const char *ext,
+                                      const char *bin_dest) {
+    FILE *f = fopen(tmp_archive, "rb");
+    if (!f) {
+        fprintf(stderr, "error: cannot open %s\n", tmp_archive);
+        return 1;
+    }
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+
+    unsigned char *data = malloc((size_t)fsize);
+    if (!data) {
+        fclose(f);
+        cbm_unlink(tmp_archive);
+        return 1;
+    }
+    fread(data, 1, (size_t)fsize, f);
+    fclose(f);
+
+    int bin_len = 0;
+    unsigned char *bin_data = NULL;
+    if (strcmp(ext, "tar.gz") == 0) {
+        bin_data = cbm_extract_binary_from_targz(data, (int)fsize, &bin_len);
+    } else {
+        bin_data = cbm_extract_binary_from_zip(data, (int)fsize, &bin_len);
+    }
+    free(data);
+    cbm_unlink(tmp_archive);
+
+    if (!bin_data || bin_len <= 0) {
+        fprintf(stderr, "error: binary not found in archive\n");
+        free(bin_data);
+        return 1;
+    }
+
+    if (cbm_replace_binary(bin_dest, bin_data, bin_len, 0755) != 0) {
+        fprintf(stderr, "error: cannot write to %s\n", bin_dest);
+        free(bin_data);
+        return 1;
+    }
+    free(bin_data);
+    return 0;
+}
+
+/* Build the download URL for the update command. */
+static void build_update_url(char *url, int url_sz, const char *os, const char *arch,
+                             const char *ext, bool want_ui) {
+    const char *base_url = getenv("CBM_DOWNLOAD_URL");
+    if (!base_url || !base_url[0]) {
+        base_url = "https://github.com/DeusData/codebase-memory-mcp/releases/latest/download";
+    }
+    snprintf(url, url_sz, "%s/codebase-memory-mcp-%s%s-%s.%s", base_url, want_ui ? "ui-" : "", os,
+             arch, ext);
+}
+
+/* Prompt to delete existing indexes. Returns 0 to continue, 1 to abort. */
+static int update_clear_indexes(const char *home, bool dry_run) {
+    int index_count = count_db_indexes(home);
+    if (index_count == 0) {
+        return 0;
+    }
+    printf("Found %d existing index(es) that must be rebuilt after update:\n", index_count);
+    cbm_list_indexes(home);
+    printf("\n");
+    if (dry_run) {
+        printf("(dry-run — indexes would be deleted)\n\n");
+        return 0;
+    }
+    if (!prompt_yn("Delete these indexes and continue with update?")) {
+        printf("Update cancelled.\n");
+        return 1;
+    }
+    int removed = cbm_remove_indexes(home);
+    printf("Removed %d index(es).\n\n", removed);
+    return 0;
+}
+
+/* Download, verify checksum, kill old instances, and install binary. Returns 0 on success. */
+static int download_verify_install(const char *url, const char *ext, const char *os,
+                                   const char *arch, bool want_ui, const char *bin_dest) {
+    char tmp_archive[256];
+    snprintf(tmp_archive, sizeof(tmp_archive), "%s/cbm-update.%s", cbm_tmpdir(), ext);
+
+    int rc = cbm_download_to_file(url, tmp_archive);
+    if (rc != 0) {
+        fprintf(stderr, "error: download failed (exit %d)\n", rc);
+        cbm_unlink(tmp_archive);
+        return 1;
+    }
+
+    char archive_name[256];
+    snprintf(archive_name, sizeof(archive_name), "codebase-memory-mcp-%s%s-%s.%s",
+             want_ui ? "ui-" : "", os, arch, ext);
+    int crc = verify_download_checksum(tmp_archive, archive_name);
+    if (crc == 1) {
+        cbm_unlink(tmp_archive);
+        return 1;
+    }
+
+    int killed = cbm_kill_other_instances();
+    if (killed > 0) {
+        printf("Stopped %d running MCP server instance(s).\n", killed);
+    }
+
+    if (extract_and_install_binary(tmp_archive, ext, bin_dest) != 0) {
+        return 1;
+    }
+    return 0;
+}
+
+/* Select update variant. Returns 0=standard, 1=ui, -1=error. */
+static int select_update_variant(int variant_flag) {
+    if (variant_flag == 1) {
+        return 0;
+    }
+    if (variant_flag == 2) {
+        return 1;
+    }
+#ifndef _WIN32
+    if (!isatty(fileno(stdin))) {
+        fprintf(stderr, "error: variant selection requires a terminal. "
+                        "Use --standard or --ui flag.\n");
+        return -1;
+    }
+#endif
+    printf("Which binary variant do you want?\n");
+    printf("  1) standard  — MCP server only\n");
+    printf("  2) ui        — MCP server + embedded graph visualization\n");
+    printf("Choose (1/2): ");
+    (void)fflush(stdout);
+    char choice[16];
+    if (!fgets(choice, sizeof(choice), stdin)) {
+        fprintf(stderr, "error: failed to read input\n");
+        return -1;
+    }
+    return (choice[0] == '2') ? 1 : 0;
+}
+
 int cbm_cmd_update(int argc, char **argv) {
     parse_auto_answer(argc, argv);
 
@@ -3050,84 +3103,25 @@ int cbm_cmd_update(int argc, char **argv) {
     printf("codebase-memory-mcp update (current: %s)\n\n", CBM_VERSION);
 
     /* Step 1: Check for existing indexes */
-    int index_count = 0;
-    const char *cache_dir = get_cache_dir(home);
-    if (cache_dir) {
-        cbm_dir_t *d = cbm_opendir(cache_dir);
-        if (d) {
-            cbm_dirent_t *ent;
-            while ((ent = cbm_readdir(d)) != NULL) {
-                size_t len = strlen(ent->name);
-                if (len > 3 && strcmp(ent->name + len - 3, ".db") == 0) {
-                    index_count++;
-                }
-            }
-            cbm_closedir(d);
-        }
+    if (update_clear_indexes(home, dry_run) != 0) {
+        return 1;
     }
 
-    if (index_count > 0) {
-        printf("Found %d existing index(es) that must be rebuilt after update:\n", index_count);
-        cbm_list_indexes(home);
-        printf("\n");
-        if (!dry_run) {
-            if (!prompt_yn("Delete these indexes and continue with update?")) {
-                printf("Update cancelled.\n");
-                return 1;
-            }
-            int removed = cbm_remove_indexes(home);
-            printf("Removed %d index(es).\n\n", removed);
-        } else {
-            printf("(dry-run — indexes would be deleted)\n\n");
-        }
+    /* Step 2: Determine variant */
+    int want_ui_rc = select_update_variant(variant_flag);
+    if (want_ui_rc < 0) {
+        return 1;
     }
-
-    /* Step 2: Determine variant (--standard / --ui flags skip interactive prompt) */
-    bool want_ui = false;
-    if (variant_flag == 1) {
-        want_ui = false;
-    } else if (variant_flag == 2) {
-        want_ui = true;
-    } else {
-#ifndef _WIN32
-        if (!isatty(fileno(stdin))) {
-            fprintf(stderr, "error: variant selection requires a terminal. "
-                            "Use --standard or --ui flag.\n");
-            return 1;
-        }
-#endif
-        printf("Which binary variant do you want?\n");
-        printf("  1) standard  — MCP server only\n");
-        printf("  2) ui        — MCP server + embedded graph visualization\n");
-        printf("Choose (1/2): ");
-        (void)fflush(stdout);
-
-        char choice[16];
-        if (!fgets(choice, sizeof(choice), stdin)) {
-            fprintf(stderr, "error: failed to read input\n");
-            return 1;
-        }
-        want_ui = (choice[0] == '2');
-    }
+    bool want_ui = (want_ui_rc == 1);
     const char *variant = want_ui ? "ui-" : "";
     const char *variant_label = want_ui ? "ui" : "standard";
 
-    /* Step 3: Build download URL (CBM_DOWNLOAD_URL overrides for testing) */
     const char *os = detect_os();
     const char *arch = detect_arch();
     const char *ext = strcmp(os, "windows") == 0 ? "zip" : "tar.gz";
 
-    const char *base_url = getenv("CBM_DOWNLOAD_URL");
-    if (!base_url || !base_url[0]) {
-        base_url = "https://github.com/DeusData/codebase-memory-mcp/releases/latest/download";
-    }
-
     char url[512];
-    if (want_ui) {
-        snprintf(url, sizeof(url), "%s/codebase-memory-mcp-ui-%s-%s.%s", base_url, os, arch, ext);
-    } else {
-        snprintf(url, sizeof(url), "%s/codebase-memory-mcp-%s-%s.%s", base_url, os, arch, ext);
-    }
+    build_update_url(url, sizeof(url), os, arch, ext, want_ui);
 
     if (dry_run) {
         printf("\nWould download %s binary for %s/%s ...\n", variant_label, os, arch);
@@ -3146,134 +3140,20 @@ int cbm_cmd_update(int argc, char **argv) {
         return 0;
     }
 
-    /* Step 4: Download using curl */
-    char tmp_archive[256];
-    snprintf(tmp_archive, sizeof(tmp_archive), "%s/cbm-update.%s", cbm_tmpdir(), ext);
-
-    int rc = cbm_download_to_file(url, tmp_archive);
-    if (rc != 0) {
-        fprintf(stderr, "error: download failed (exit %d)\n", rc);
-        cbm_unlink(tmp_archive);
-        return 1;
-    }
-
-    /* Step 4b: Verify checksum */
-    {
-        /* Build the expected archive filename (matches checksums.txt format) */
-        char archive_name[256];
-        if (want_ui) {
-            snprintf(archive_name, sizeof(archive_name), "codebase-memory-mcp-ui-%s-%s.%s", os,
-                     arch, ext);
-        } else {
-            snprintf(archive_name, sizeof(archive_name), "codebase-memory-mcp-%s-%s.%s", os, arch,
-                     ext);
-        }
-        int crc = verify_download_checksum(tmp_archive, archive_name);
-        if (crc == 1) {
-            /* Hard fail: checksum mismatch */
-            cbm_unlink(tmp_archive);
-            return 1;
-        }
-        /* crc == -1: could not verify (warning only), crc == 0: verified OK */
-    }
-
-    /* Step 4c: Kill running MCP server instances before replacement */
-    {
-        int killed = cbm_kill_other_instances();
-        if (killed > 0) {
-            printf("Stopped %d running MCP server instance(s).\n", killed);
-        }
-    }
-
-    /* Step 5: Extract binary */
+    /* Step 4-5: Download, verify, and install binary */
     char bin_dest[1024];
 #ifdef _WIN32
     snprintf(bin_dest, sizeof(bin_dest), "%s/.local/bin/codebase-memory-mcp.exe", home);
 #else
     snprintf(bin_dest, sizeof(bin_dest), "%s/.local/bin/codebase-memory-mcp", home);
 #endif
-
-    /* Ensure install directory exists */
     char bin_dir[1024];
     snprintf(bin_dir, sizeof(bin_dir), "%s/.local/bin", home);
     cbm_mkdir_p(bin_dir, 0755);
 
-    if (strcmp(ext, "tar.gz") == 0) {
-        /* Read archive into memory and extract */
-        FILE *f = fopen(tmp_archive, "rb");
-        if (!f) {
-            fprintf(stderr, "error: cannot open %s\n", tmp_archive);
-            return 1;
-        }
-        fseek(f, 0, SEEK_END);
-        long fsize = ftell(f);
-        fseek(f, 0, SEEK_SET);
-
-        unsigned char *data = malloc((size_t)fsize);
-        if (!data) {
-            fclose(f);
-            cbm_unlink(tmp_archive);
-            return 1;
-        }
-        fread(data, 1, (size_t)fsize, f);
-        fclose(f);
-
-        int bin_len = 0;
-        unsigned char *bin_data = cbm_extract_binary_from_targz(data, (int)fsize, &bin_len);
-        free(data);
-        cbm_unlink(tmp_archive);
-
-        if (!bin_data || bin_len <= 0) {
-            fprintf(stderr, "error: binary not found in archive\n");
-            free(bin_data);
-            return 1;
-        }
-
-        /* Replace binary: unlink first (handles read-only existing file),
-         * then create with 0755 permissions. Fixes #114. */
-        if (cbm_replace_binary(bin_dest, bin_data, bin_len, 0755) != 0) {
-            fprintf(stderr, "error: cannot write to %s\n", bin_dest);
-            free(bin_data);
-            return 1;
-        }
-        free(bin_data);
-    } else {
-        /* Zip extraction: in-memory (no external unzip dependency) */
-        FILE *f = fopen(tmp_archive, "rb");
-        if (!f) {
-            fprintf(stderr, "error: cannot open %s\n", tmp_archive);
-            return 1;
-        }
-        fseek(f, 0, SEEK_END);
-        long fsize = ftell(f);
-        fseek(f, 0, SEEK_SET);
-
-        unsigned char *data = malloc((size_t)fsize);
-        if (!data) {
-            fclose(f);
-            cbm_unlink(tmp_archive);
-            return 1;
-        }
-        fread(data, 1, (size_t)fsize, f);
-        fclose(f);
-
-        int bin_len = 0;
-        unsigned char *bin_data = cbm_extract_binary_from_zip(data, (int)fsize, &bin_len);
-        free(data);
-        cbm_unlink(tmp_archive);
-
-        if (!bin_data || bin_len <= 0) {
-            fprintf(stderr, "error: binary not found in zip archive\n");
-            free(bin_data);
-            return 1;
-        }
-
-        if (cbm_replace_binary(bin_dest, bin_data, bin_len, 0755) != 0) {
-            fprintf(stderr, "error: cannot write to %s\n", bin_dest);
-            free(bin_data);
-            return 1;
-        }
-        free(bin_data);
+    int rc = download_verify_install(url, ext, os, arch, want_ui, bin_dest);
+    if (rc != 0) {
+        return 1;
     }
 
     /* Step 5b: macOS ad-hoc signing (required for arm64, harmless for x86_64) */

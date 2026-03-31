@@ -154,9 +154,9 @@ static void print_help(void) {
 
 /* ── Main ───────────────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-int main(int argc, char **argv) {
-    /* Parse arguments */
+/* Try to handle a subcommand (cli/install/uninstall/update/config/--version/--help).
+ * Returns -1 if no subcommand matched, otherwise the exit code. */
+static int handle_subcommand(int argc, char **argv) {
     for (int i = 1; i < argc; i++) {
         if (strcmp(argv[i], "--version") == 0) {
             printf("codebase-memory-mcp %s\n", CBM_VERSION);
@@ -183,6 +183,48 @@ int main(int argc, char **argv) {
             return cbm_cmd_config(argc - i - 1, argv + i + 1);
         }
     }
+    return -1;
+}
+
+/* Parse --ui= and --port= flags. Returns true if config was modified. */
+static bool parse_ui_flags(int argc, char **argv, cbm_ui_config_t *cfg) {
+    bool changed = false;
+    for (int i = 1; i < argc; i++) {
+        if (strncmp(argv[i], "--ui=", 5) == 0) {
+            cfg->ui_enabled = (strcmp(argv[i] + 5, "true") == 0);
+            changed = true;
+        }
+        if (strncmp(argv[i], "--port=", 7) == 0) {
+            int p = (int)strtol(argv[i] + 7, NULL, 10);
+            if (p > 0 && p < 65536) {
+                cfg->ui_port = p;
+                changed = true;
+            }
+        }
+    }
+    return changed;
+}
+
+/* Install platform-specific signal handlers. */
+static void setup_signal_handlers(void) {
+#ifdef _WIN32
+    signal(SIGTERM, signal_handler);
+    signal(SIGINT, signal_handler);
+#else
+    struct sigaction sa = {0};
+    sa.sa_handler = signal_handler;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGTERM, &sa, NULL);
+    sigaction(SIGINT, &sa, NULL);
+#endif
+}
+
+int main(int argc, char **argv) {
+    int subcmd = handle_subcommand(argc, argv);
+    if (subcmd >= 0) {
+        return subcmd;
+    }
 
     /* Default: MCP server on stdio */
     cbm_mem_init(0.5); /* 50% of RAM — safe now because mimalloc tracks ALL
@@ -197,37 +239,11 @@ int main(int argc, char **argv) {
     /* Parse --ui and --port flags (persisted config) */
     cbm_ui_config_t ui_cfg;
     cbm_ui_config_load(&ui_cfg);
-
-    bool config_changed = false;
-    for (int i = 1; i < argc; i++) {
-        if (strncmp(argv[i], "--ui=", 5) == 0) {
-            ui_cfg.ui_enabled = (strcmp(argv[i] + 5, "true") == 0);
-            config_changed = true;
-        }
-        if (strncmp(argv[i], "--port=", 7) == 0) {
-            int p = (int)strtol(argv[i] + 7, NULL, 10);
-            if (p > 0 && p < 65536) {
-                ui_cfg.ui_port = p;
-                config_changed = true;
-            }
-        }
-    }
-    if (config_changed) {
+    if (parse_ui_flags(argc, argv, &ui_cfg)) {
         cbm_ui_config_save(&ui_cfg);
     }
 
-    /* Install signal handlers */
-#ifdef _WIN32
-    signal(SIGTERM, signal_handler);
-    signal(SIGINT, signal_handler);
-#else
-    struct sigaction sa = {0};
-    sa.sa_handler = signal_handler;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-    sigaction(SIGTERM, &sa, NULL);
-    sigaction(SIGINT, &sa, NULL);
-#endif
+    setup_signal_handlers();
 
     /* Open config store for runtime settings */
     char config_dir[1024];

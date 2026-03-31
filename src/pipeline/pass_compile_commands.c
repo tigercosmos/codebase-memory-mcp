@@ -12,7 +12,16 @@
 #include <stdio.h>
 #include "yyjson/yyjson.h"
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Emit the current token if non-empty. Returns updated count. */
+static int emit_token(char *current, int *clen, char **out, int count, int max_out) {
+    if (*clen > 0 && count < max_out) {
+        current[*clen] = '\0';
+        out[count++] = strdup(current);
+        *clen = 0;
+    }
+    return count;
+}
+
 int cbm_split_command(const char *cmd, char **out, int max_out) {
     if (!cmd || !out || max_out <= 0) {
         return 0;
@@ -28,30 +37,18 @@ int cbm_split_command(const char *cmd, char **out, int max_out) {
         if (in_quote) {
             if (c == in_quote) {
                 in_quote = 0;
-            } else {
-                if (clen < (int)sizeof(current) - 1) {
-                    current[clen++] = c;
-                }
+            } else if (clen < (int)sizeof(current) - 1) {
+                current[clen++] = c;
             }
         } else if (c == '"' || c == '\'') {
             in_quote = c;
         } else if (c == ' ' || c == '\t') {
-            if (clen > 0 && count < max_out) {
-                current[clen] = '\0';
-                out[count++] = strdup(current);
-                clen = 0;
-            }
-        } else {
-            if (clen < (int)sizeof(current) - 1) {
-                current[clen++] = c;
-            }
+            count = emit_token(current, &clen, out, count, max_out);
+        } else if (clen < (int)sizeof(current) - 1) {
+            current[clen++] = c;
         }
     }
-    if (clen > 0 && count < max_out) {
-        current[clen] = '\0';
-        out[count++] = strdup(current);
-    }
-    return count;
+    return emit_token(current, &clen, out, count, max_out);
 }
 
 /* Resolve a path: if relative, join with directory. */
@@ -75,60 +72,65 @@ static char *resolve_path(const char *path, const char *directory) {
     return strdup(path);
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Try to consume a -I or -isystem include path flag. Returns true if consumed. */
+static bool try_include_flag(cbm_compile_flags_t *f, const char **args, int argc, int *i,
+                             const char *directory) {
+    const char *arg = args[*i];
+    if (arg[0] == '-' && arg[1] == 'I') {
+        const char *path = arg + 2;
+        if (*path == '\0' && *i + 1 < argc) {
+            (*i)++;
+            path = args[*i];
+        }
+        if (path && *path) {
+            f->include_paths[f->include_count++] = resolve_path(path, directory);
+        }
+        return true;
+    }
+    if (strcmp(arg, "-isystem") == 0 && *i + 1 < argc) {
+        (*i)++;
+        f->include_paths[f->include_count++] = resolve_path(args[*i], directory);
+        return true;
+    }
+    return false;
+}
+
+/* Try to consume a -D define flag. Returns true if consumed. */
+static bool try_define_flag(cbm_compile_flags_t *f, const char **args, int argc, int *i) {
+    const char *arg = args[*i];
+    if (arg[0] != '-' || arg[1] != 'D') {
+        return false;
+    }
+    const char *define = arg + 2;
+    if (*define == '\0' && *i + 1 < argc) {
+        (*i)++;
+        define = args[*i];
+    }
+    if (define && *define) {
+        f->defines[f->define_count++] = strdup(define);
+    }
+    return true;
+}
+
 cbm_compile_flags_t *cbm_extract_flags(const char **args, int argc, const char *directory) {
     cbm_compile_flags_t *f = calloc(1, sizeof(*f));
     if (!f) {
         return NULL;
     }
-
-    /* Pre-allocate arrays */
     f->include_paths = calloc(argc, sizeof(char *));
     f->defines = calloc(argc, sizeof(char *));
 
     for (int i = 0; i < argc; i++) {
-        const char *arg = args[i];
-
-        /* -I<path> or -I <path> */
-        if (arg[0] == '-' && arg[1] == 'I') {
-            const char *path = arg + 2;
-            if (*path == '\0' && i + 1 < argc) {
-                i++;
-                path = args[i];
-            }
-            if (path && *path) {
-                f->include_paths[f->include_count++] = resolve_path(path, directory);
-            }
+        if (try_include_flag(f, args, argc, &i, directory)) {
             continue;
         }
-
-        /* -isystem <path> */
-        if (strcmp(arg, "-isystem") == 0 && i + 1 < argc) {
-            i++;
-            f->include_paths[f->include_count++] = resolve_path(args[i], directory);
+        if (try_define_flag(f, args, argc, &i)) {
             continue;
         }
-
-        /* -D<name> or -D<name>=<value> */
-        if (arg[0] == '-' && arg[1] == 'D') {
-            const char *define = arg + 2;
-            if (*define == '\0' && i + 1 < argc) {
-                i++;
-                define = args[i];
-            }
-            if (define && *define) {
-                f->defines[f->define_count++] = strdup(define);
-            }
-            continue;
-        }
-
-        /* -std=<value> */
-        if (strncmp(arg, "-std=", 5) == 0) {
-            snprintf(f->standard, sizeof(f->standard), "%s", arg + 5);
-            continue;
+        if (strncmp(args[i], "-std=", 5) == 0) {
+            snprintf(f->standard, sizeof(f->standard), "%s", args[i] + 5);
         }
     }
-
     return f;
 }
 
@@ -147,7 +149,87 @@ void cbm_compile_flags_free(cbm_compile_flags_t *f) {
     free(f);
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Extract compiler flag args from either "arguments" array or "command" string. */
+static int extract_flag_args(yyjson_val *args_val, yyjson_val *cmd_val, const char **flag_args,
+                             char **split_args, int max_args) {
+    if (args_val && yyjson_is_arr(args_val)) {
+        int n = 0;
+        yyjson_val *a;
+        yyjson_arr_iter aiter;
+        yyjson_arr_iter_init(args_val, &aiter);
+        while ((a = yyjson_arr_iter_next(&aiter)) && n < max_args) {
+            const char *s = yyjson_get_str(a);
+            if (s) {
+                flag_args[n++] = s;
+            }
+        }
+        return n;
+    }
+    if (cmd_val && yyjson_is_str(cmd_val)) {
+        int n = cbm_split_command(yyjson_get_str(cmd_val), split_args, max_args);
+        for (int j = 0; j < n; j++) {
+            flag_args[j] = split_args[j];
+        }
+        return n;
+    }
+    return 0;
+}
+
+/* Process a single compile_commands.json entry. Returns 1 if added, 0 otherwise. */
+static int process_compile_entry(yyjson_val *entry, const char *repo_path, char **out_path,
+                                 cbm_compile_flags_t **out_flag) {
+    yyjson_val *dir_val = yyjson_obj_get(entry, "directory");
+    yyjson_val *file_val = yyjson_obj_get(entry, "file");
+    yyjson_val *cmd_val = yyjson_obj_get(entry, "command");
+    yyjson_val *args_val = yyjson_obj_get(entry, "arguments");
+
+    if (!file_val) {
+        return 0;
+    }
+    const char *directory = dir_val ? yyjson_get_str(dir_val) : "";
+    const char *file_path = yyjson_get_str(file_val);
+    if (!file_path) {
+        return 0;
+    }
+
+    char *split_args[256];
+    const char *flag_args[256];
+    int flag_argc = extract_flag_args(args_val, cmd_val, flag_args, split_args, 256);
+
+    if (flag_argc == 0) {
+        return 0;
+    }
+
+    cbm_compile_flags_t *f = cbm_extract_flags(flag_args, flag_argc, directory);
+
+    if (cmd_val && yyjson_is_str(cmd_val)) {
+        for (int j = 0; j < flag_argc; j++) {
+            free(split_args[j]);
+        }
+    }
+
+    if (!f) {
+        return 0;
+    }
+
+    char abs_path[4096];
+    if (file_path[0] != '/' && directory && directory[0]) {
+        snprintf(abs_path, sizeof(abs_path), "%s/%s", directory, file_path);
+    } else {
+        snprintf(abs_path, sizeof(abs_path), "%s", file_path);
+    }
+
+    size_t repo_len = strlen(repo_path);
+    if (strncmp(abs_path, repo_path, repo_len) != 0 || abs_path[repo_len] != '/') {
+        cbm_compile_flags_free(f);
+        return 0;
+    }
+
+    *out_path = strdup(abs_path + repo_len + 1);
+    *out_flag = f;
+    return 1;
+}
+
 int cbm_parse_compile_commands(const char *json_data, const char *repo_path, char ***out_paths,
                                cbm_compile_flags_t ***out_flags) {
     if (!json_data || !repo_path || !out_paths || !out_flags) {
@@ -182,78 +264,13 @@ int cbm_parse_compile_commands(const char *json_data, const char *repo_path, cha
     yyjson_arr_iter_init(root, &iter);
 
     while ((entry = yyjson_arr_iter_next(&iter))) {
-        yyjson_val *dir_val = yyjson_obj_get(entry, "directory");
-        yyjson_val *file_val = yyjson_obj_get(entry, "file");
-        yyjson_val *cmd_val = yyjson_obj_get(entry, "command");
-        yyjson_val *args_val = yyjson_obj_get(entry, "arguments");
-
-        if (!file_val) {
-            continue;
+        char *p = NULL;
+        cbm_compile_flags_t *f = NULL;
+        if (process_compile_entry(entry, repo_path, &p, &f)) {
+            paths[count] = p;
+            flags[count] = f;
+            count++;
         }
-        const char *directory = dir_val ? yyjson_get_str(dir_val) : "";
-        const char *file_path = yyjson_get_str(file_val);
-        if (!file_path) {
-            continue;
-        }
-
-        /* Build arguments array */
-        char *split_args[256];
-        const char *flag_args[256];
-        int flag_argc = 0;
-
-        if (args_val && yyjson_is_arr(args_val)) {
-            yyjson_val *a;
-            yyjson_arr_iter aiter;
-            yyjson_arr_iter_init(args_val, &aiter);
-            while ((a = yyjson_arr_iter_next(&aiter)) && flag_argc < 256) {
-                const char *s = yyjson_get_str(a);
-                if (s) {
-                    flag_args[flag_argc++] = s;
-                }
-            }
-        } else if (cmd_val && yyjson_is_str(cmd_val)) {
-            int n = cbm_split_command(yyjson_get_str(cmd_val), split_args, 256);
-            for (int j = 0; j < n; j++) {
-                flag_args[j] = split_args[j];
-            }
-            flag_argc = n;
-        }
-
-        if (flag_argc == 0) {
-            continue;
-        }
-
-        cbm_compile_flags_t *f = cbm_extract_flags(flag_args, flag_argc, directory);
-
-        /* Free split_args if we used splitCommand */
-        if (cmd_val && yyjson_is_str(cmd_val)) {
-            for (int j = 0; j < flag_argc; j++) {
-                free(split_args[j]);
-            }
-        }
-
-        if (!f) {
-            continue;
-        }
-
-        /* Compute relative path */
-        char abs_path[4096];
-        if (file_path[0] != '/' && directory && directory[0]) {
-            snprintf(abs_path, sizeof(abs_path), "%s/%s", directory, file_path);
-        } else {
-            snprintf(abs_path, sizeof(abs_path), "%s", file_path);
-        }
-
-        /* Check if inside repo */
-        size_t repo_len = strlen(repo_path);
-        if (strncmp(abs_path, repo_path, repo_len) != 0 || abs_path[repo_len] != '/') {
-            cbm_compile_flags_free(f);
-            continue;
-        }
-
-        paths[count] = strdup(abs_path + repo_len + 1);
-        flags[count] = f;
-        count++;
     }
 
     yyjson_doc_free(doc);

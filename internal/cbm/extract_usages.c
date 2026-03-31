@@ -70,9 +70,40 @@ static bool is_reference_node(TSNode node, CBMLanguage lang) {
     }
 }
 
+// Check if a reference node is a definition name (the "name" field of its parent).
+static bool is_definition_name(TSNode node) {
+    TSNode parent = ts_node_parent(node);
+    if (ts_node_is_null(parent)) {
+        return false;
+    }
+    TSNode name_field = ts_node_child_by_field_name(parent, "name", 4);
+    return !ts_node_is_null(name_field) &&
+           ts_node_start_byte(name_field) == ts_node_start_byte(node) &&
+           ts_node_end_byte(name_field) == ts_node_end_byte(node);
+}
+
+// Try to emit a usage for a reference node. Returns early if the node should be skipped.
+static void try_emit_usage(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spec) {
+    if (!is_reference_node(node, ctx->language)) {
+        return;
+    }
+    if (is_inside_call(node, spec) || is_inside_import(node, spec)) {
+        return;
+    }
+    if (is_definition_name(node)) {
+        return;
+    }
+    char *name = cbm_node_text(ctx->arena, node, ctx->source);
+    if (name && name[0] && !cbm_is_keyword(name, ctx->language)) {
+        CBMUsage usage;
+        usage.ref_name = name;
+        usage.enclosing_func_qn = cbm_enclosing_func_qn_cached(ctx, node);
+        cbm_usages_push(&ctx->result->usages, ctx->arena, usage);
+    }
+}
+
 // Iterative usage walker — explicit stack
 #define USAGES_STACK_CAP 4096
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static void walk_usages(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec) {
     TSNode stack[USAGES_STACK_CAP];
     int top = 0;
@@ -80,34 +111,7 @@ static void walk_usages(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec
 
     while (top > 0) {
         TSNode node = stack[--top];
-
-        if (is_reference_node(node, ctx->language)) {
-            bool skip = false;
-            if (is_inside_call(node, spec) || is_inside_import(node, spec)) {
-                skip = true;
-            }
-            if (!skip) {
-                TSNode parent = ts_node_parent(node);
-                if (!ts_node_is_null(parent)) {
-                    TSNode name_field = ts_node_child_by_field_name(parent, "name", 4);
-                    if (!ts_node_is_null(name_field) &&
-                        ts_node_start_byte(name_field) == ts_node_start_byte(node) &&
-                        ts_node_end_byte(name_field) == ts_node_end_byte(node)) {
-                        skip = true;
-                    }
-                }
-            }
-            if (!skip) {
-                char *name = cbm_node_text(ctx->arena, node, ctx->source);
-                if (name && name[0] && !cbm_is_keyword(name, ctx->language)) {
-                    CBMUsage usage;
-                    usage.ref_name = name;
-                    usage.enclosing_func_qn = cbm_enclosing_func_qn_cached(ctx, node);
-                    cbm_usages_push(&ctx->result->usages, ctx->arena, usage);
-                }
-            }
-        }
-
+        try_emit_usage(ctx, node, spec);
         uint32_t count = ts_node_child_count(node);
         for (int i = (int)count - 1; i >= 0 && top < USAGES_STACK_CAP; i--) {
             stack[top++] = ts_node_child(node, (uint32_t)i);

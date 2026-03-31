@@ -190,160 +190,202 @@ static file_type_t detect_file_type(const char *name) {
 
 /* ── Line scanner ──────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Extract key/value from a regex match with two capture groups.
+ * Returns 1 on success, 0 if groups are empty or too large. */
+static int extract_kv_groups(const char *trimmed, const cbm_regmatch_t *m, int key_grp, int val_grp,
+                             char *key_out, size_t key_sz, char *val_out, size_t val_sz) {
+    int klen = (m[key_grp].rm_eo - m[key_grp].rm_so);
+    int vlen = (m[val_grp].rm_eo - m[val_grp].rm_so);
+    if (klen <= 0 || klen >= (int)key_sz || vlen <= 0 || vlen >= (int)val_sz) {
+        return 0;
+    }
+    memcpy(key_out, trimmed + m[key_grp].rm_so, klen);
+    key_out[klen] = '\0';
+    memcpy(val_out, trimmed + m[val_grp].rm_so, vlen);
+    val_out[vlen] = '\0';
+    return 1;
+}
+
+/* Try to scan a Dockerfile line. */
+static int scan_dockerfile_line(const char *line, char *key, size_t ksz, char *val, size_t vsz) {
+    cbm_regmatch_t m[5];
+    if (cbm_regexec(&dockerfile_re, line, 4, m, 0) != 0) {
+        return 0;
+    }
+    if (!extract_kv_groups(line, m, 2, 3, key, ksz, val, vsz)) {
+        return 0;
+    }
+    size_t vl = strlen(val);
+    while (vl > 0 && (val[vl - 1] == '"' || val[vl - 1] == '\'')) {
+        val[--vl] = '\0';
+    }
+    return 1;
+}
+
+/* Try to scan a YAML line. */
+static int scan_yaml_line(const char *line, char *key, size_t ksz, char *val, size_t vsz) {
+    cbm_regmatch_t m[5];
+    if (cbm_regexec(&yaml_kv_re, line, 3, m, 0) == 0 &&
+        extract_kv_groups(line, m, 1, 2, key, ksz, val, vsz)) {
+        return 1;
+    }
+    if (cbm_regexec(&yaml_setenv_re, line, 3, m, 0) == 0 &&
+        extract_kv_groups(line, m, 1, 2, key, ksz, val, vsz)) {
+        return 1;
+    }
+    return 0;
+}
+
+/* Try to scan a Terraform line. */
+static int scan_terraform_line(const char *line, char *key, size_t ksz, char *val, size_t vsz) {
+    cbm_regmatch_t m[5];
+    if (cbm_regexec(&terraform_re, line, 3, m, 0) != 0) {
+        return 0;
+    }
+    int vlen = (m[2].rm_eo - m[2].rm_so);
+    if (vlen <= 0 || vlen >= (int)vsz) {
+        return 0;
+    }
+    strncpy(key, "_tf_default", ksz - 1);
+    key[ksz - 1] = '\0';
+    memcpy(val, line + m[2].rm_so, vlen);
+    val[vlen] = '\0';
+    return 1;
+}
+
+/* Try single-regex scan (shell, envfile, toml, properties). */
+static int scan_regex_line(cbm_regex_t *re, const char *line, int kg, int vg, char *key, size_t ksz,
+                           char *val, size_t vsz) {
+    cbm_regmatch_t m[5];
+    if (cbm_regexec(re, line, 5, m, 0) == 0 &&
+        extract_kv_groups(line, m, kg, vg, key, ksz, val, vsz)) {
+        return 1;
+    }
+    return 0;
+}
+
 static int scan_line(const char *line, file_type_t ft, char *key_out, size_t key_sz, char *val_out,
                      size_t val_sz) {
-    cbm_regmatch_t m[5];
     const char *trimmed = line;
     while (*trimmed == ' ' || *trimmed == '\t') {
         trimmed++;
     }
-
-    /* Skip comments */
     if (*trimmed == '#' || (trimmed[0] == '/' && trimmed[1] == '/')) {
         return 0;
     }
 
     switch (ft) {
     case FT_DOCKERFILE:
-        if (cbm_regexec(&dockerfile_re, trimmed, 4, m, 0) == 0) {
-            /* group 2 = key, group 3 = value */
-            int klen = (m[2].rm_eo - m[2].rm_so);
-            int vlen = (m[3].rm_eo - m[3].rm_so);
-            if (klen > 0 && klen < (int)key_sz && vlen > 0 && vlen < (int)val_sz) {
-                memcpy(key_out, trimmed + m[2].rm_so, klen);
-                key_out[klen] = '\0';
-                memcpy(val_out, trimmed + m[3].rm_so, vlen);
-                val_out[vlen] = '\0';
-                /* Trim quotes from value */
-                size_t vl = strlen(val_out);
-                while (vl > 0 && (val_out[vl - 1] == '"' || val_out[vl - 1] == '\'')) {
-                    val_out[--vl] = '\0';
-                }
-                return 1;
-            }
-        }
-        break;
-
+        return scan_dockerfile_line(trimmed, key_out, key_sz, val_out, val_sz);
     case FT_YAML:
-        if (cbm_regexec(&yaml_kv_re, trimmed, 3, m, 0) == 0) {
-            int klen = (m[1].rm_eo - m[1].rm_so);
-            int vlen = (m[2].rm_eo - m[2].rm_so);
-            if (klen > 0 && klen < (int)key_sz && vlen > 0 && vlen < (int)val_sz) {
-                memcpy(key_out, trimmed + m[1].rm_so, klen);
-                key_out[klen] = '\0';
-                memcpy(val_out, trimmed + m[2].rm_so, vlen);
-                val_out[vlen] = '\0';
-                return 1;
-            }
-        }
-        if (cbm_regexec(&yaml_setenv_re, trimmed, 3, m, 0) == 0) {
-            int klen = (m[1].rm_eo - m[1].rm_so);
-            int vlen = (m[2].rm_eo - m[2].rm_so);
-            if (klen > 0 && klen < (int)key_sz && vlen > 0 && vlen < (int)val_sz) {
-                memcpy(key_out, trimmed + m[1].rm_so, klen);
-                key_out[klen] = '\0';
-                memcpy(val_out, trimmed + m[2].rm_so, vlen);
-                val_out[vlen] = '\0';
-                return 1;
-            }
-        }
-        break;
-
+        return scan_yaml_line(trimmed, key_out, key_sz, val_out, val_sz);
     case FT_TERRAFORM:
-        if (cbm_regexec(&terraform_re, trimmed, 3, m, 0) == 0) {
-            int vlen = (m[2].rm_eo - m[2].rm_so);
-            if (vlen > 0 && vlen < (int)val_sz) {
-                strncpy(key_out, "_tf_default", key_sz - 1);
-                key_out[key_sz - 1] = '\0';
-                memcpy(val_out, trimmed + m[2].rm_so, vlen);
-                val_out[vlen] = '\0';
-                return 1;
-            }
-        }
-        break;
-
+        return scan_terraform_line(trimmed, key_out, key_sz, val_out, val_sz);
     case FT_SHELL:
-        if (cbm_regexec(&shell_re, trimmed, 4, m, 0) == 0) {
-            /* group 2 = key, group 3 = value */
-            int klen = (m[2].rm_eo - m[2].rm_so);
-            int vlen = (m[3].rm_eo - m[3].rm_so);
-            if (klen > 0 && klen < (int)key_sz && vlen > 0 && vlen < (int)val_sz) {
-                memcpy(key_out, trimmed + m[2].rm_so, klen);
-                key_out[klen] = '\0';
-                memcpy(val_out, trimmed + m[3].rm_so, vlen);
-                val_out[vlen] = '\0';
-                return 1;
-            }
-        }
-        break;
-
+        return scan_regex_line(&shell_re, trimmed, 2, 3, key_out, key_sz, val_out, val_sz);
     case FT_ENVFILE:
-        if (cbm_regexec(&envfile_re, trimmed, 3, m, 0) == 0) {
-            int klen = (m[1].rm_eo - m[1].rm_so);
-            int vlen = (m[2].rm_eo - m[2].rm_so);
-            if (klen > 0 && klen < (int)key_sz && vlen > 0 && vlen < (int)val_sz) {
-                memcpy(key_out, trimmed + m[1].rm_so, klen);
-                key_out[klen] = '\0';
-                memcpy(val_out, trimmed + m[2].rm_so, vlen);
-                val_out[vlen] = '\0';
-                return 1;
-            }
-        }
-        break;
-
+        return scan_regex_line(&envfile_re, trimmed, 1, 2, key_out, key_sz, val_out, val_sz);
     case FT_TOML:
-        if (cbm_regexec(&toml_re, trimmed, 3, m, 0) == 0) {
-            int klen = (m[1].rm_eo - m[1].rm_so);
-            int vlen = (m[2].rm_eo - m[2].rm_so);
-            if (klen > 0 && klen < (int)key_sz && vlen > 0 && vlen < (int)val_sz) {
-                memcpy(key_out, trimmed + m[1].rm_so, klen);
-                key_out[klen] = '\0';
-                memcpy(val_out, trimmed + m[2].rm_so, vlen);
-                val_out[vlen] = '\0';
-                return 1;
-            }
-        }
-        break;
-
+        return scan_regex_line(&toml_re, trimmed, 1, 2, key_out, key_sz, val_out, val_sz);
     case FT_PROPERTIES:
-        if (cbm_regexec(&properties_re, trimmed, 3, m, 0) == 0) {
-            int klen = (m[1].rm_eo - m[1].rm_so);
-            int vlen = (m[2].rm_eo - m[2].rm_so);
-            if (klen > 0 && klen < (int)key_sz && vlen > 0 && vlen < (int)val_sz) {
-                memcpy(key_out, trimmed + m[1].rm_so, klen);
-                key_out[klen] = '\0';
-                memcpy(val_out, trimmed + m[2].rm_so, vlen);
-                val_out[vlen] = '\0';
-                return 1;
-            }
-        }
-        break;
-
+        return scan_regex_line(&properties_re, trimmed, 1, 2, key_out, key_sz, val_out, val_sz);
     default:
-        break;
+        return 0;
     }
-    return 0;
 }
 
 /* ── Public API ────────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Scan a single file for env URL bindings. Returns number of bindings added. */
+static int scan_env_file(const char *full_path, const char *rel, file_type_t ft,
+                         cbm_env_binding_t *out, int max_out) {
+    FILE *f = fopen(full_path, "r");
+    if (!f) {
+        return 0;
+    }
+
+    struct stat fst;
+    if (fstat(fileno(f), &fst) != 0 || fst.st_size > (long)1024 * 1024) {
+        fclose(f);
+        return 0;
+    }
+
+    int count = 0;
+    char line[2048];
+    while (fgets(line, sizeof(line), f) && count < max_out) {
+        size_t ll = strlen(line);
+        while (ll > 0 && (line[ll - 1] == '\n' || line[ll - 1] == '\r')) {
+            line[--ll] = '\0';
+        }
+
+        char key[128];
+        char value[512];
+        if (!scan_line(line, ft, key, sizeof(key), value, sizeof(value))) {
+            continue;
+        }
+        if (strncmp(value, "http://", 7) != 0 && strncmp(value, "https://", 8) != 0) {
+            continue;
+        }
+        if (cbm_is_secret_binding(key, value) || cbm_is_secret_value(value)) {
+            continue;
+        }
+
+        strncpy(out[count].key, key, sizeof(out[count].key) - 1);
+        out[count].key[sizeof(out[count].key) - 1] = '\0';
+        strncpy(out[count].value, value, sizeof(out[count].value) - 1);
+        out[count].value[sizeof(out[count].value) - 1] = '\0';
+        strncpy(out[count].file_path, rel, sizeof(out[count].file_path) - 1);
+        out[count].file_path[sizeof(out[count].file_path) - 1] = '\0';
+        count++;
+    }
+    (void)fclose(f);
+    return count;
+}
+
+/* Process a single directory entry for env scanning. Returns bindings added. */
+static int process_env_entry(cbm_dirent_t *ent, const char *dir_path, const char *root_path,
+                             cbm_env_binding_t *out, int max_out, char path_stack[][512],
+                             int *stack_top) {
+    char full_path[512];
+    snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, ent->name);
+
+    struct stat st;
+    if (stat(full_path, &st) != 0) {
+        return 0;
+    }
+    if (S_ISDIR(st.st_mode)) {
+        if (!is_ignored_dir(ent->name) && *stack_top < 256) {
+            strncpy(path_stack[*stack_top], full_path, sizeof(path_stack[0]) - 1);
+            path_stack[*stack_top][sizeof(path_stack[0]) - 1] = '\0';
+            (*stack_top)++;
+        }
+        return 0;
+    }
+    if (is_secret_file(ent->name)) {
+        return 0;
+    }
+    file_type_t ft = detect_file_type(ent->name);
+    if (ft == FT_UNKNOWN) {
+        return 0;
+    }
+    const char *rel = full_path + strlen(root_path);
+    while (*rel == '/') {
+        rel++;
+    }
+    return scan_env_file(full_path, rel, ft, out, max_out);
+}
+
 int cbm_scan_project_env_urls(const char *root_path, cbm_env_binding_t *out, int max_out) {
     if (!root_path || !out || max_out <= 0) {
         return 0;
     }
-
     compile_patterns();
 
     int count = 0;
-
-    /* Recursive directory walk using a stack */
     char path_stack[256][512];
-    int stack_top = 0;
+    int stack_top = 1;
     strncpy(path_stack[0], root_path, sizeof(path_stack[0]) - 1);
     path_stack[0][sizeof(path_stack[0]) - 1] = '\0';
-    stack_top = 1;
 
     while (stack_top > 0 && count < max_out) {
         stack_top--;
@@ -355,96 +397,12 @@ int cbm_scan_project_env_urls(const char *root_path, cbm_env_binding_t *out, int
         if (!d) {
             continue;
         }
-
         cbm_dirent_t *ent;
         while ((ent = cbm_readdir(d)) && count < max_out) {
-            char full_path[512];
-            snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, ent->name);
-
-            struct stat st;
-            if (stat(full_path, &st) != 0) {
-                continue;
-            }
-
-            if (S_ISDIR(st.st_mode)) {
-                if (is_ignored_dir(ent->name)) {
-                    continue;
-                }
-                if (stack_top < 256) {
-                    strncpy(path_stack[stack_top], full_path, sizeof(path_stack[0]) - 1);
-                    path_stack[stack_top][sizeof(path_stack[0]) - 1] = '\0';
-                    stack_top++;
-                }
-                continue;
-            }
-
-            /* Skip secret files */
-            if (is_secret_file(ent->name)) {
-                continue;
-            }
-
-            /* Determine file type */
-            file_type_t ft = detect_file_type(ent->name);
-            if (ft == FT_UNKNOWN) {
-                continue;
-            }
-
-            /* Compute relative path */
-            const char *rel = full_path + strlen(root_path);
-            while (*rel == '/') {
-                rel++;
-            }
-
-            /* Open first, then fstat on fd to avoid TOCTOU race */
-            FILE *f = fopen(full_path, "r");
-            if (!f) {
-                continue;
-            }
-
-            /* Recheck size on the open fd (not the path) */
-            struct stat fst;
-            if (fstat(fileno(f), &fst) != 0 || fst.st_size > (long)1024 * 1024) {
-                fclose(f);
-                continue;
-            }
-
-            char line[2048];
-            while (fgets(line, sizeof(line), f) && count < max_out) {
-                /* Strip trailing newline */
-                size_t ll = strlen(line);
-                while (ll > 0 && (line[ll - 1] == '\n' || line[ll - 1] == '\r')) {
-                    line[--ll] = '\0';
-                }
-
-                char key[128];
-                char value[512];
-                if (scan_line(line, ft, key, sizeof(key), value, sizeof(value))) {
-                    /* Must be a URL */
-                    if (strncmp(value, "http://", 7) != 0 && strncmp(value, "https://", 8) != 0) {
-                        continue;
-                    }
-                    /* Secret exclusion */
-                    if (cbm_is_secret_binding(key, value)) {
-                        continue;
-                    }
-                    if (cbm_is_secret_value(value)) {
-                        continue;
-                    }
-
-                    /* Add binding */
-                    strncpy(out[count].key, key, sizeof(out[count].key) - 1);
-                    out[count].key[sizeof(out[count].key) - 1] = '\0';
-                    strncpy(out[count].value, value, sizeof(out[count].value) - 1);
-                    out[count].value[sizeof(out[count].value) - 1] = '\0';
-                    strncpy(out[count].file_path, rel, sizeof(out[count].file_path) - 1);
-                    out[count].file_path[sizeof(out[count].file_path) - 1] = '\0';
-                    count++;
-                }
-            }
-            (void)fclose(f);
+            count += process_env_entry(ent, dir_path, root_path, out + count, max_out - count,
+                                       path_stack, &stack_top);
         }
         cbm_closedir(d);
     }
-
     return count;
 }

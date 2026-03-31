@@ -91,11 +91,51 @@ static void emit_kustomize_sequence(CBMExtractCtx *ctx, TSNode seq_node, const c
     }
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-static void extract_kustomize(CBMExtractCtx *ctx) {
-    CBMArena *a = ctx->arena;
+// Unwrap a YAML node through optional block_node wrapper to get block_mapping.
+// Returns null node if not a block_mapping.
+static TSNode unwrap_block_mapping(TSNode doc_child) {
+    TSNode mapping = ts_node_named_child(doc_child, 0);
+    if (ts_node_is_null(mapping)) {
+        return mapping;
+    }
+    if (strcmp(ts_node_type(mapping), "block_node") == 0) {
+        mapping = ts_node_named_child(mapping, 0);
+    }
+    if (ts_node_is_null(mapping) || strcmp(ts_node_type(mapping), "block_mapping") != 0) {
+        TSNode null_node = {0};
+        return null_node;
+    }
+    return mapping;
+}
 
-    // Traverse: stream -> document -> block_node -> block_mapping -> block_mapping_pair
+// Process a single block_mapping_pair for kustomize list keys.
+static void process_kustomize_pair(CBMExtractCtx *ctx, TSNode pair) {
+    if (strcmp(ts_node_type(pair), "block_mapping_pair") != 0) {
+        return;
+    }
+    TSNode key_node = ts_node_named_child(pair, 0);
+    if (ts_node_is_null(key_node)) {
+        return;
+    }
+    const char *key_text = get_scalar_text(ctx->arena, key_node, ctx->source);
+    if (!key_text || !is_kustomize_list_key(key_text)) {
+        return;
+    }
+
+    TSNode val_node = ts_node_named_child(pair, 1);
+    if (ts_node_is_null(val_node)) {
+        return;
+    }
+    if (strcmp(ts_node_type(val_node), "block_node") == 0) {
+        val_node = ts_node_named_child(val_node, 0);
+    }
+    if (ts_node_is_null(val_node) || strcmp(ts_node_type(val_node), "block_sequence") != 0) {
+        return;
+    }
+    emit_kustomize_sequence(ctx, val_node, key_text);
+}
+
+static void extract_kustomize(CBMExtractCtx *ctx) {
     TSNode root = ctx->root;
     uint32_t root_n = ts_node_child_count(root);
     for (uint32_t si = 0; si < root_n; si++) {
@@ -103,50 +143,14 @@ static void extract_kustomize(CBMExtractCtx *ctx) {
         if (strcmp(ts_node_type(stream_child), "document") != 0) {
             continue;
         }
-        // Find block_mapping inside the document (may be wrapped in block_node)
-        TSNode mapping = ts_node_named_child(stream_child, 0);
+        TSNode mapping = unwrap_block_mapping(stream_child);
         if (ts_node_is_null(mapping)) {
-            continue;
-        }
-        // Some grammars wrap in block_node
-        if (strcmp(ts_node_type(mapping), "block_node") == 0) {
-            mapping = ts_node_named_child(mapping, 0);
-        }
-        if (ts_node_is_null(mapping) || strcmp(ts_node_type(mapping), "block_mapping") != 0) {
             continue;
         }
 
         uint32_t pair_n = ts_node_child_count(mapping);
         for (uint32_t pi = 0; pi < pair_n; pi++) {
-            TSNode pair = ts_node_child(mapping, pi);
-            if (strcmp(ts_node_type(pair), "block_mapping_pair") != 0) {
-                continue;
-            }
-
-            // First named child = key
-            TSNode key_node = ts_node_named_child(pair, 0);
-            if (ts_node_is_null(key_node)) {
-                continue;
-            }
-            const char *key_text = get_scalar_text(a, key_node, ctx->source);
-            if (!key_text || !is_kustomize_list_key(key_text)) {
-                continue;
-            }
-
-            // Second named child = value (should be a block_sequence or block_node wrapping one)
-            TSNode val_node = ts_node_named_child(pair, 1);
-            if (ts_node_is_null(val_node)) {
-                continue;
-            }
-            if (strcmp(ts_node_type(val_node), "block_node") == 0) {
-                val_node = ts_node_named_child(val_node, 0);
-            }
-            if (ts_node_is_null(val_node) ||
-                strcmp(ts_node_type(val_node), "block_sequence") != 0) {
-                continue;
-            }
-
-            emit_kustomize_sequence(ctx, val_node, key_text);
+            process_kustomize_pair(ctx, ts_node_child(mapping, pi));
         }
     }
 }
@@ -155,9 +159,51 @@ static void extract_kustomize(CBMExtractCtx *ctx) {
 // K8s manifest extraction
 // ---------------------------------------------------------------------------
 
-// Descend into the first block_mapping of a document and extract apiVersion,
-// kind, and metadata.name. Returns void; fills kind_buf and meta_name_buf.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// Extract the "name" scalar from a metadata block_mapping.
+static void extract_metadata_name(CBMArena *a, TSNode meta_mapping, const char *source,
+                                  char *meta_name_buf, size_t meta_sz) {
+    if (ts_node_is_null(meta_mapping) || strcmp(ts_node_type(meta_mapping), "block_mapping") != 0) {
+        return;
+    }
+    uint32_t mn = ts_node_child_count(meta_mapping);
+    for (uint32_t mi = 0; mi < mn; mi++) {
+        TSNode mpair = ts_node_child(meta_mapping, mi);
+        if (strcmp(ts_node_type(mpair), "block_mapping_pair") != 0) {
+            continue;
+        }
+        TSNode mkey = ts_node_named_child(mpair, 0);
+        if (ts_node_is_null(mkey)) {
+            continue;
+        }
+        const char *mkey_text = get_scalar_text(a, mkey, source);
+        if (!mkey_text || strcmp(mkey_text, "name") != 0) {
+            continue;
+        }
+        TSNode mval = ts_node_named_child(mpair, 1);
+        if (ts_node_is_null(mval)) {
+            continue;
+        }
+        const char *meta_name = get_scalar_text(a, mval, source);
+        if (meta_name) {
+            snprintf(meta_name_buf, meta_sz, "%s", meta_name);
+        }
+    }
+}
+
+// Unwrap a block_mapping_pair value through optional block_node.
+static TSNode unwrap_pair_value(TSNode pair) {
+    TSNode val_node = ts_node_named_child(pair, 1);
+    if (ts_node_is_null(val_node)) {
+        return val_node;
+    }
+    if (strcmp(ts_node_type(val_node), "block_node") == 0) {
+        val_node = ts_node_named_child(val_node, 0);
+    }
+    return val_node;
+}
+
+// Descend into the first block_mapping of a document and extract
+// kind and metadata.name. Returns void; fills kind_buf and meta_name_buf.
 static void extract_k8s_scalars(CBMExtractCtx *ctx, TSNode mapping, char *kind_buf, size_t kind_sz,
                                 char *meta_name_buf, size_t meta_sz) {
     CBMArena *a = ctx->arena;
@@ -179,14 +225,7 @@ static void extract_k8s_scalars(CBMExtractCtx *ctx, TSNode mapping, char *kind_b
             continue;
         }
 
-        TSNode val_node = ts_node_named_child(pair, 1);
-        if (ts_node_is_null(val_node)) {
-            continue;
-        }
-        // Unwrap block_node if present
-        if (strcmp(ts_node_type(val_node), "block_node") == 0) {
-            val_node = ts_node_named_child(val_node, 0);
-        }
+        TSNode val_node = unwrap_pair_value(pair);
         if (ts_node_is_null(val_node)) {
             continue;
         }
@@ -197,36 +236,7 @@ static void extract_k8s_scalars(CBMExtractCtx *ctx, TSNode mapping, char *kind_b
                 snprintf(kind_buf, kind_sz, "%s", v);
             }
         } else if (strcmp(key, "metadata") == 0) {
-            // Descend into metadata block_mapping to find "name"
-            // val_node is already unwrapped from block_node above.
-            TSNode meta_mapping = val_node;
-            if (ts_node_is_null(meta_mapping) ||
-                strcmp(ts_node_type(meta_mapping), "block_mapping") != 0) {
-                continue;
-            }
-            uint32_t mn = ts_node_child_count(meta_mapping);
-            for (uint32_t mi = 0; mi < mn; mi++) {
-                TSNode mpair = ts_node_child(meta_mapping, mi);
-                if (strcmp(ts_node_type(mpair), "block_mapping_pair") != 0) {
-                    continue;
-                }
-                TSNode mkey = ts_node_named_child(mpair, 0);
-                if (ts_node_is_null(mkey)) {
-                    continue;
-                }
-                const char *mkey_text = get_scalar_text(a, mkey, ctx->source);
-                if (!mkey_text || strcmp(mkey_text, "name") != 0) {
-                    continue;
-                }
-                TSNode mval = ts_node_named_child(mpair, 1);
-                if (ts_node_is_null(mval)) {
-                    continue;
-                }
-                const char *meta_name = get_scalar_text(a, mval, ctx->source);
-                if (meta_name) {
-                    snprintf(meta_name_buf, meta_sz, "%s", meta_name);
-                }
-            }
+            extract_metadata_name(a, val_node, ctx->source, meta_name_buf, meta_sz);
         }
     }
 }

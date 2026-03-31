@@ -62,6 +62,42 @@ static void lex_push_n(cbm_lex_result_t *r, cbm_token_type_t type, const char *s
         (cbm_token_t){.type = type, .text = heap_strndup(start, len), .pos = pos};
 }
 
+/* Parse a string literal (with escape handling) into the token list.
+ * *pos points at the character after the opening quote; updated past closing quote. */
+static void lex_string_literal(const char *input, int len, int *pos, char quote,
+                               cbm_lex_result_t *out) {
+    int start = *pos;
+    char buf[4096];
+    int blen = 0;
+    while (*pos < len && input[*pos] != quote) {
+        if (input[*pos] == '\\' && *pos + 1 < len) {
+            (*pos)++;
+            switch (input[*pos]) {
+            case 'n':
+                buf[blen++] = '\n';
+                break;
+            case 't':
+                buf[blen++] = '\t';
+                break;
+            case '\\':
+                buf[blen++] = '\\';
+                break;
+            default:
+                buf[blen++] = input[*pos];
+                break;
+            }
+        } else {
+            buf[blen++] = input[*pos];
+        }
+        (*pos)++;
+    }
+    buf[blen] = '\0';
+    if (*pos < len) {
+        (*pos)++; /* skip closing quote */
+    }
+    lex_push(out, TOK_STRING, buf, start - 1);
+}
+
 /* Keyword table (case-insensitive lookup) */
 typedef struct {
     const char *name;
@@ -154,7 +190,132 @@ static cbm_token_type_t keyword_lookup(const char *word) {
     return TOK_IDENT;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Try to match a two-character token at position i. Returns true and advances i if matched. */
+static bool lex_try_two_char(const char *input, int len, int *i, cbm_lex_result_t *out) {
+    static const struct {
+        char c1, c2;
+        cbm_token_type_t type;
+        const char *text;
+    } pairs[] = {
+        {'!', '=', TOK_NEQ, "!="}, {'<', '>', TOK_NEQ, "<>"}, {'=', '~', TOK_EQTILDE, "=~"},
+        {'>', '=', TOK_GTE, ">="}, {'<', '=', TOK_LTE, "<="}, {'.', '.', TOK_DOTDOT, ".."},
+    };
+    char c = input[*i];
+    if (*i + 1 >= len) {
+        return false;
+    }
+    char c2 = input[*i + 1];
+    for (int p = 0; p < (int)(sizeof(pairs) / sizeof(pairs[0])); p++) {
+        if (c == pairs[p].c1 && c2 == pairs[p].c2) {
+            lex_push(out, pairs[p].type, pairs[p].text, *i);
+            *i += 2;
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Try to match a single-character token. Returns TOK_EOF if not matched. */
+static cbm_token_type_t lex_single_char(char c) {
+    switch (c) {
+    case '(':
+        return TOK_LPAREN;
+    case ')':
+        return TOK_RPAREN;
+    case '[':
+        return TOK_LBRACKET;
+    case ']':
+        return TOK_RBRACKET;
+    case '-':
+        return TOK_DASH;
+    case '>':
+        return TOK_GT;
+    case '<':
+        return TOK_LT;
+    case ':':
+        return TOK_COLON;
+    case '.':
+        return TOK_DOT;
+    case '{':
+        return TOK_LBRACE;
+    case '}':
+        return TOK_RBRACE;
+    case '*':
+        return TOK_STAR;
+    case ',':
+        return TOK_COMMA;
+    case '=':
+        return TOK_EQ;
+    case '|':
+        return TOK_PIPE;
+    default:
+        return TOK_EOF;
+    }
+}
+
+/* Try to lex an identifier or keyword starting at position i. Returns true if matched. */
+static bool lex_try_ident(const char *input, int len, int *i, cbm_lex_result_t *out) {
+    char c = input[*i];
+    if (!isalpha((unsigned char)c) && c != '_') {
+        return false;
+    }
+    int start = *i;
+    while (*i < len && (isalnum((unsigned char)input[*i]) || input[*i] == '_')) {
+        (*i)++;
+    }
+    char word[256];
+    int wlen = *i - start;
+    if (wlen >= (int)sizeof(word)) {
+        wlen = (int)sizeof(word) - 1;
+    }
+    memcpy(word, input + start, wlen);
+    word[wlen] = '\0';
+    cbm_token_type_t type = keyword_lookup(word);
+    lex_push_n(out, type, input + start, *i - start, start);
+    return true;
+}
+
+/* Try to lex a number starting at position i. Returns true if matched. */
+static bool lex_try_number(const char *input, int len, int *i, cbm_lex_result_t *out) {
+    char c = input[*i];
+    if (!isdigit((unsigned char)c) &&
+        !(c == '.' && *i + 1 < len && isdigit((unsigned char)input[*i + 1]))) {
+        return false;
+    }
+    int start = *i;
+    while (*i < len && (isdigit((unsigned char)input[*i]) ||
+                        (input[*i] == '.' && *i + 1 < len && input[*i + 1] != '.'))) {
+        (*i)++;
+    }
+    lex_push_n(out, TOK_NUMBER, input + start, *i - start, start);
+    return true;
+}
+
+/* Skip whitespace and comments. Returns true if something was skipped. */
+static bool lex_skip_whitespace_comments(const char *input, int len, int *i) {
+    if (isspace((unsigned char)input[*i])) {
+        (*i)++;
+        return true;
+    }
+    if (*i + 1 < len && input[*i] == '/' && input[*i + 1] == '/') {
+        while (*i < len && input[*i] != '\n') {
+            (*i)++;
+        }
+        return true;
+    }
+    if (*i + 1 < len && input[*i] == '/' && input[*i + 1] == '*') {
+        *i += 2;
+        while (*i + 1 < len && !(input[*i] == '*' && input[*i + 1] == '/')) {
+            (*i)++;
+        }
+        if (*i + 1 < len) {
+            *i += 2;
+        }
+        return true;
+    }
+    return false;
+}
+
 int cbm_lex(const char *input, cbm_lex_result_t *out) {
     memset(out, 0, sizeof(*out));
     if (!input) {
@@ -165,28 +326,7 @@ int cbm_lex(const char *input, cbm_lex_result_t *out) {
     int i = 0;
 
     while (i < len) {
-        /* Skip whitespace */
-        if (isspace((unsigned char)input[i])) {
-            i++;
-            continue;
-        }
-
-        /* Skip // line comments */
-        if (i + 1 < len && input[i] == '/' && input[i + 1] == '/') {
-            while (i < len && input[i] != '\n') {
-                i++;
-            }
-            continue;
-        }
-        /* Skip block comments */
-        if (i + 1 < len && input[i] == '/' && input[i + 1] == '*') {
-            i += 2;
-            while (i + 1 < len && !(input[i] == '*' && input[i + 1] == '/')) {
-                i++;
-            }
-            if (i + 1 < len) {
-                i += 2;
-            }
+        if (lex_skip_whitespace_comments(input, len, &i)) {
             continue;
         }
 
@@ -196,153 +336,30 @@ int cbm_lex(const char *input, cbm_lex_result_t *out) {
         if (c == '"' || c == '\'') {
             char quote = c;
             i++;
-            int start = i;
-            /* Build string handling escapes */
-            char buf[4096];
-            int blen = 0;
-            while (i < len && input[i] != quote) {
-                if (input[i] == '\\' && i + 1 < len) {
-                    i++;
-                    switch (input[i]) {
-                    case 'n':
-                        buf[blen++] = '\n';
-                        break;
-                    case 't':
-                        buf[blen++] = '\t';
-                        break;
-                    case '\\':
-                        buf[blen++] = '\\';
-                        break;
-                    default:
-                        buf[blen++] = input[i];
-                        break;
-                    }
-                } else {
-                    buf[blen++] = input[i];
-                }
-                i++;
-            }
-            buf[blen] = '\0';
-            if (i < len) {
-                i++; /* skip closing quote */
-            }
-            lex_push(out, TOK_STRING, buf, start - 1);
+            lex_string_literal(input, len, &i, quote, out);
             continue;
         }
 
         /* Numbers — stop before ".." (DOTDOT operator) */
-        if (isdigit((unsigned char)c) ||
-            (c == '.' && i + 1 < len && isdigit((unsigned char)input[i + 1]))) {
-            int start = i;
-            while (i < len && (isdigit((unsigned char)input[i]) ||
-                               (input[i] == '.' && i + 1 < len && input[i + 1] != '.'))) {
-                i++;
-            }
-            lex_push_n(out, TOK_NUMBER, input + start, i - start, start);
+        if (lex_try_number(input, len, &i, out)) {
             continue;
         }
 
         /* Identifiers / keywords */
-        if (isalpha((unsigned char)c) || c == '_') {
-            int start = i;
-            while (i < len && (isalnum((unsigned char)input[i]) || input[i] == '_')) {
-                i++;
-            }
-            char word[256];
-            int wlen = i - start;
-            if (wlen >= (int)sizeof(word)) {
-                wlen = (int)sizeof(word) - 1;
-            }
-            memcpy(word, input + start, wlen);
-            word[wlen] = '\0';
-            cbm_token_type_t type = keyword_lookup(word);
-            lex_push_n(out, type, input + start, i - start, start);
+        if (lex_try_ident(input, len, &i, out)) {
             continue;
         }
 
         /* Two-character tokens */
-        if (c == '!' && i + 1 < len && input[i + 1] == '=') {
-            lex_push(out, TOK_NEQ, "!=", i);
-            i += 2;
-            continue;
-        }
-        if (c == '<' && i + 1 < len && input[i + 1] == '>') {
-            lex_push(out, TOK_NEQ, "<>", i);
-            i += 2;
-            continue;
-        }
-        if (c == '=' && i + 1 < len && input[i + 1] == '~') {
-            lex_push(out, TOK_EQTILDE, "=~", i);
-            i += 2;
-            continue;
-        }
-        if (c == '>' && i + 1 < len && input[i + 1] == '=') {
-            lex_push(out, TOK_GTE, ">=", i);
-            i += 2;
-            continue;
-        }
-        if (c == '<' && i + 1 < len && input[i + 1] == '=') {
-            lex_push(out, TOK_LTE, "<=", i);
-            i += 2;
-            continue;
-        }
-        if (c == '.' && i + 1 < len && input[i + 1] == '.') {
-            lex_push(out, TOK_DOTDOT, "..", i);
-            i += 2;
-            continue;
+        {
+            bool found_two = lex_try_two_char(input, len, &i, out);
+            if (found_two) {
+                continue;
+            }
         }
 
         /* Single-character tokens */
-        cbm_token_type_t stype = TOK_EOF;
-        switch (c) {
-        case '(':
-            stype = TOK_LPAREN;
-            break;
-        case ')':
-            stype = TOK_RPAREN;
-            break;
-        case '[':
-            stype = TOK_LBRACKET;
-            break;
-        case ']':
-            stype = TOK_RBRACKET;
-            break;
-        case '-':
-            stype = TOK_DASH;
-            break;
-        case '>':
-            stype = TOK_GT;
-            break;
-        case '<':
-            stype = TOK_LT;
-            break;
-        case ':':
-            stype = TOK_COLON;
-            break;
-        case '.':
-            stype = TOK_DOT;
-            break;
-        case '{':
-            stype = TOK_LBRACE;
-            break;
-        case '}':
-            stype = TOK_RBRACE;
-            break;
-        case '*':
-            stype = TOK_STAR;
-            break;
-        case ',':
-            stype = TOK_COMMA;
-            break;
-        case '=':
-            stype = TOK_EQ;
-            break;
-        case '|':
-            stype = TOK_PIPE;
-            break;
-        default:
-            break;
-        }
+        cbm_token_type_t stype = lex_single_char(c);
 
         if (stype != TOK_EOF) {
             char buf[2] = {c, '\0'};
@@ -499,8 +516,86 @@ static int parse_node(parser_t *p, cbm_node_pattern_t *out) {
     return 0;
 }
 
+/* Parse *min..max hop range after the star token has been consumed */
+static void parse_hop_range(parser_t *p, int *min_hops, int *max_hops) {
+    if (check(p, TOK_NUMBER)) {
+        int val = (int)strtol(peek(p)->text, NULL, 10);
+        advance(p);
+        if (match(p, TOK_DOTDOT)) {
+            *min_hops = val;
+            *max_hops = check(p, TOK_NUMBER) ? (int)strtol(advance(p)->text, NULL, 10) : 0;
+        } else {
+            /* *N means 1..N */
+            *min_hops = 1;
+            *max_hops = val;
+        }
+    } else if (match(p, TOK_DOTDOT)) {
+        *min_hops = 1;
+        *max_hops = check(p, TOK_NUMBER) ? (int)strtol(advance(p)->text, NULL, 10) : 0;
+    } else {
+        /* * alone = unbounded */
+        *min_hops = 1;
+        *max_hops = 0;
+    }
+}
+
+/* Parse relationship type list after ':' inside brackets. Returns -1 on error. */
+static int parse_rel_types(parser_t *p, cbm_rel_pattern_t *out) {
+    int cap = 4;
+    int n = 0;
+    const char **types = malloc(cap * sizeof(const char *));
+
+    const cbm_token_t *t = expect(p, TOK_IDENT);
+    if (!t) {
+        free(types);
+        return -1;
+    }
+    types[n++] = heap_strdup(t->text);
+
+    while (match(p, TOK_PIPE)) {
+        t = expect(p, TOK_IDENT);
+        if (!t) {
+            for (int i = 0; i < n; i++) {
+                free((void *)types[i]);
+            }
+            free(types);
+            return -1;
+        }
+        if (n >= cap) {
+            cap *= 2;
+            types = safe_realloc(types, cap * sizeof(const char *));
+        }
+        types[n++] = heap_strdup(t->text);
+    }
+
+    out->types = types;
+    out->type_count = n;
+    return 0;
+}
+
+/* Parse bracket content of a relationship: [var:TYPE*hops] */
+static int parse_rel_bracket(parser_t *p, cbm_rel_pattern_t *out) {
+    /* Optional variable */
+    if (check(p, TOK_IDENT) && !check(p, TOK_COLON)) {
+        out->variable = heap_strdup(advance(p)->text);
+    }
+    /* Optional :Types */
+    if (match(p, TOK_COLON)) {
+        if (parse_rel_types(p, out) < 0) {
+            return -1;
+        }
+    }
+    /* Optional *hop_range */
+    if (match(p, TOK_STAR)) {
+        parse_hop_range(p, &out->min_hops, &out->max_hops);
+    }
+    if (!expect(p, TOK_RBRACKET)) {
+        return -1;
+    }
+    return 0;
+}
+
 /* Parse relationship: -[:TYPE|TYPE2*min..max]-> or <-[...]-  */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int parse_rel(parser_t *p, cbm_rel_pattern_t *out) {
     memset(out, 0, sizeof(*out));
     out->min_hops = 1;
@@ -514,79 +609,7 @@ static int parse_rel(parser_t *p, cbm_rel_pattern_t *out) {
 
     /* Optional bracket content */
     if (match(p, TOK_LBRACKET)) {
-        /* Optional variable */
-        if (check(p, TOK_IDENT) && !check(p, TOK_COLON)) {
-            /* Peek ahead: variable if followed by : or ] or * */
-            /* Actually, check if next-next is colon */
-            out->variable = heap_strdup(advance(p)->text);
-        }
-
-        /* Optional :Types */
-        if (match(p, TOK_COLON)) {
-            int cap = 4;
-            int n = 0;
-            const char **types = malloc(cap * sizeof(const char *));
-
-            const cbm_token_t *t = expect(p, TOK_IDENT);
-            if (!t) {
-                free(types);
-                return -1;
-            }
-            types[n++] = heap_strdup(t->text);
-
-            while (match(p, TOK_PIPE)) {
-                t = expect(p, TOK_IDENT);
-                if (!t) {
-                    for (int i = 0; i < n; i++) {
-                        free((void *)types[i]);
-                    }
-                    free(types);
-                    return -1;
-                }
-                if (n >= cap) {
-                    cap *= 2;
-                    types = safe_realloc(types, cap * sizeof(const char *));
-                }
-                types[n++] = heap_strdup(t->text);
-            }
-
-            out->types = types;
-            out->type_count = n;
-        }
-
-        /* Optional *hop_range */
-        if (match(p, TOK_STAR)) {
-            /* Parse hop range */
-            if (check(p, TOK_NUMBER)) {
-                int val = (int)strtol(peek(p)->text, NULL, 10);
-                advance(p);
-                if (match(p, TOK_DOTDOT)) {
-                    out->min_hops = val;
-                    if (check(p, TOK_NUMBER)) {
-                        out->max_hops = (int)strtol(advance(p)->text, NULL, 10);
-                    } else {
-                        out->max_hops = 0; /* unbounded */
-                    }
-                } else {
-                    /* *N means 1..N */
-                    out->min_hops = 1;
-                    out->max_hops = val;
-                }
-            } else if (match(p, TOK_DOTDOT)) {
-                out->min_hops = 1;
-                if (check(p, TOK_NUMBER)) {
-                    out->max_hops = (int)strtol(advance(p)->text, NULL, 10);
-                } else {
-                    out->max_hops = 0;
-                }
-            } else {
-                /* * alone = unbounded */
-                out->min_hops = 1;
-                out->max_hops = 0;
-            }
-        }
-
-        if (!expect(p, TOK_RBRACKET)) {
+        if (parse_rel_bracket(p, out) < 0) {
             return -1;
         }
     }
@@ -691,8 +714,80 @@ static const char *unsupported_clause_error(cbm_token_type_t type) {
 /* Forward declarations for recursive descent */
 static cbm_expr_t *parse_or_expr(parser_t *p);
 
+/* Parse IN [val, val, ...] list. Returns expr_leaf or NULL on error. */
+static cbm_expr_t *parse_in_list(parser_t *p, cbm_condition_t *c) {
+    advance(p);
+    c->op = heap_strdup("IN");
+    if (!expect(p, TOK_LBRACKET)) {
+        free((void *)c->variable);
+        free((void *)c->property);
+        free((void *)c->op);
+        return NULL;
+    }
+    int vcap = 8;
+    int vn = 0;
+    const char **vals = malloc(vcap * sizeof(const char *));
+    while (!check(p, TOK_RBRACKET) && !check(p, TOK_EOF)) {
+        if (vn > 0) {
+            match(p, TOK_COMMA);
+        }
+        if (check(p, TOK_STRING) || check(p, TOK_NUMBER)) {
+            if (vn >= vcap) {
+                vcap *= 2;
+                vals = safe_realloc(vals, vcap * sizeof(const char *));
+            }
+            vals[vn++] = heap_strdup(advance(p)->text);
+        } else {
+            break;
+        }
+    }
+    expect(p, TOK_RBRACKET);
+    c->in_values = vals;
+    c->in_value_count = vn;
+    return expr_leaf(*c);
+}
+
+/* Try to parse a comparison operator. Returns heap-allocated op string or NULL. */
+static char *parse_comparison_op(parser_t *p) {
+    if (match(p, TOK_EQ)) {
+        return heap_strdup("=");
+    }
+    if (match(p, TOK_NEQ)) {
+        return heap_strdup("<>");
+    }
+    if (match(p, TOK_EQTILDE)) {
+        return heap_strdup("=~");
+    }
+    if (match(p, TOK_GTE)) {
+        return heap_strdup(">=");
+    }
+    if (match(p, TOK_LTE)) {
+        return heap_strdup("<=");
+    }
+    if (match(p, TOK_GT)) {
+        return heap_strdup(">");
+    }
+    if (match(p, TOK_LT)) {
+        return heap_strdup("<");
+    }
+    if (check(p, TOK_CONTAINS)) {
+        advance(p);
+        return heap_strdup("CONTAINS");
+    }
+    if (check(p, TOK_STARTS)) {
+        advance(p);
+        expect(p, TOK_WITH);
+        return heap_strdup("STARTS WITH");
+    }
+    if (check(p, TOK_ENDS)) {
+        advance(p);
+        expect(p, TOK_WITH);
+        return heap_strdup("ENDS WITH");
+    }
+    return NULL;
+}
+
 /* Parse a single condition: var.prop OP value | var.prop IS [NOT] NULL | var.prop IN [...] */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static cbm_expr_t *parse_condition_expr(parser_t *p) {
     /* Check for NOT prefix at condition level (e.g. NOT n.name CONTAINS "x") */
     bool negated = match(p, TOK_NOT);
@@ -733,64 +828,12 @@ static cbm_expr_t *parse_condition_expr(parser_t *p) {
 
     /* IN [...] */
     if (check(p, TOK_IN)) {
-        advance(p);
-        c.op = heap_strdup("IN");
-        if (!expect(p, TOK_LBRACKET)) {
-            free((void *)c.variable);
-            free((void *)c.property);
-            free((void *)c.op);
-            return NULL;
-        }
-        int vcap = 8;
-        int vn = 0;
-        const char **vals = malloc(vcap * sizeof(const char *));
-        while (!check(p, TOK_RBRACKET) && !check(p, TOK_EOF)) {
-            if (vn > 0) {
-                match(p, TOK_COMMA);
-            }
-            if (check(p, TOK_STRING) || check(p, TOK_NUMBER)) {
-                if (vn >= vcap) {
-                    vcap *= 2;
-                    vals = safe_realloc(vals, vcap * sizeof(const char *));
-                }
-                vals[vn++] = heap_strdup(advance(p)->text);
-            } else {
-                break;
-            }
-        }
-        expect(p, TOK_RBRACKET);
-        c.in_values = vals;
-        c.in_value_count = vn;
-        return expr_leaf(c);
+        return parse_in_list(p, &c);
     }
 
     /* Standard operators */
-    if (match(p, TOK_EQ)) {
-        c.op = heap_strdup("=");
-    } else if (match(p, TOK_NEQ)) {
-        c.op = heap_strdup("<>");
-    } else if (match(p, TOK_EQTILDE)) {
-        c.op = heap_strdup("=~");
-    } else if (match(p, TOK_GTE)) {
-        c.op = heap_strdup(">=");
-    } else if (match(p, TOK_LTE)) {
-        c.op = heap_strdup("<=");
-    } else if (match(p, TOK_GT)) {
-        c.op = heap_strdup(">");
-    } else if (match(p, TOK_LT)) {
-        c.op = heap_strdup("<");
-    } else if (check(p, TOK_CONTAINS)) {
-        advance(p);
-        c.op = heap_strdup("CONTAINS");
-    } else if (check(p, TOK_STARTS)) {
-        advance(p);
-        expect(p, TOK_WITH);
-        c.op = heap_strdup("STARTS WITH");
-    } else if (check(p, TOK_ENDS)) {
-        advance(p);
-        expect(p, TOK_WITH);
-        c.op = heap_strdup("ENDS WITH");
-    } else {
+    c.op = parse_comparison_op(p);
+    if (!c.op) {
         snprintf(p->error, sizeof(p->error), "unexpected operator at pos %d", peek(p)->pos);
         free((void *)c.variable);
         free((void *)c.property);
@@ -952,8 +995,34 @@ static const char *str_func_name(cbm_token_type_t t) {
     }
 }
 
+/* Parse a value literal: string, number, ident[.prop], true, false. Returns heap-allocated. */
+static const char *parse_value_literal(parser_t *p) {
+    if (check(p, TOK_STRING) || check(p, TOK_NUMBER)) {
+        return heap_strdup(advance(p)->text);
+    }
+    if (check(p, TOK_IDENT)) {
+        char buf[256];
+        const cbm_token_t *v = advance(p);
+        if (match(p, TOK_DOT)) {
+            const cbm_token_t *pr = expect(p, TOK_IDENT);
+            snprintf(buf, sizeof(buf), "%s.%s", v->text, pr ? pr->text : "");
+        } else {
+            snprintf(buf, sizeof(buf), "%s", v->text);
+        }
+        return heap_strdup(buf);
+    }
+    if (check(p, TOK_TRUE)) {
+        advance(p);
+        return heap_strdup("true");
+    }
+    if (check(p, TOK_FALSE)) {
+        advance(p);
+        return heap_strdup("false");
+    }
+    return NULL;
+}
+
 /* Parse CASE WHEN ... THEN ... [ELSE ...] END */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static cbm_case_expr_t *parse_case_expr(parser_t *p) {
     /* CASE already consumed */
     cbm_case_expr_t *kase = calloc(1, sizeof(cbm_case_expr_t));
@@ -967,27 +1036,7 @@ static cbm_case_expr_t *parse_case_expr(parser_t *p) {
             expr_free(when);
             break;
         }
-        const char *then_val = NULL;
-        if (check(p, TOK_STRING) || check(p, TOK_NUMBER)) {
-            then_val = heap_strdup(advance(p)->text);
-        } else if (check(p, TOK_IDENT)) {
-            /* Could be var.prop */
-            char buf[256];
-            const cbm_token_t *v = advance(p);
-            if (match(p, TOK_DOT)) {
-                const cbm_token_t *pr = expect(p, TOK_IDENT);
-                snprintf(buf, sizeof(buf), "%s.%s", v->text, pr ? pr->text : "");
-            } else {
-                snprintf(buf, sizeof(buf), "%s", v->text);
-            }
-            then_val = heap_strdup(buf);
-        } else if (check(p, TOK_TRUE)) {
-            advance(p);
-            then_val = heap_strdup("true");
-        } else if (check(p, TOK_FALSE)) {
-            advance(p);
-            then_val = heap_strdup("false");
-        }
+        const char *then_val = parse_value_literal(p);
         if (kase->branch_count >= bcap) {
             bcap *= 2;
             kase->branches = safe_realloc(kase->branches, bcap * sizeof(cbm_case_branch_t));
@@ -997,18 +1046,141 @@ static cbm_case_expr_t *parse_case_expr(parser_t *p) {
     }
 
     if (match(p, TOK_ELSE)) {
-        if (check(p, TOK_STRING) || check(p, TOK_NUMBER)) {
-            kase->else_val = heap_strdup(advance(p)->text);
-        } else if (check(p, TOK_IDENT)) {
-            kase->else_val = heap_strdup(advance(p)->text);
-        }
+        kase->else_val = parse_value_literal(p);
     }
     expect(p, TOK_END);
     return kase;
 }
 
+/* Parse a single RETURN/WITH item (aggregate, string func, CASE, or plain var.prop).
+ * Returns 0 on success, -1 on error. */
+/* Parse var[.prop] into item->variable and item->property. Returns -1 on error. */
+static int parse_var_dot_prop(parser_t *p, cbm_return_item_t *item) {
+    const cbm_token_t *var = expect(p, TOK_IDENT);
+    if (!var) {
+        return -1;
+    }
+    item->variable = heap_strdup(var->text);
+    if (match(p, TOK_DOT)) {
+        const cbm_token_t *prop = expect(p, TOK_IDENT);
+        if (prop) {
+            item->property = heap_strdup(prop->text);
+        }
+    }
+    return 0;
+}
+
+/* Parse aggregate function call: COUNT(var.prop) */
+static int parse_aggregate_item(parser_t *p, cbm_return_item_t *item) {
+    cbm_token_type_t ft = peek(p)->type;
+    advance(p);
+    expect(p, TOK_LPAREN);
+    if (match(p, TOK_STAR)) {
+        item->variable = heap_strdup("*");
+    } else {
+        if (parse_var_dot_prop(p, item) < 0) {
+            return -1;
+        }
+    }
+    expect(p, TOK_RPAREN);
+    item->func = heap_strdup(agg_func_name(ft));
+    return 0;
+}
+
+/* Parse string function call: toLower(var.prop) */
+static int parse_string_func_item(parser_t *p, cbm_return_item_t *item) {
+    cbm_token_type_t ft = peek(p)->type;
+    advance(p);
+    expect(p, TOK_LPAREN);
+    if (parse_var_dot_prop(p, item) < 0) {
+        return -1;
+    }
+    expect(p, TOK_RPAREN);
+    item->func = heap_strdup(str_func_name(ft));
+    return 0;
+}
+
+static int parse_return_item(parser_t *p, cbm_return_item_t *item) {
+    memset(item, 0, sizeof(*item));
+    int rc = 0;
+    if (check(p, TOK_CASE)) {
+        advance(p);
+        item->kase = parse_case_expr(p);
+        item->variable = heap_strdup("CASE");
+    } else if (is_aggregate_tok(peek(p)->type)) {
+        rc = parse_aggregate_item(p, item);
+    } else if (is_string_func_tok(peek(p)->type)) {
+        rc = parse_string_func_item(p, item);
+    } else {
+        rc = parse_var_dot_prop(p, item);
+    }
+    if (rc < 0) {
+        return -1;
+    }
+    /* Optional AS alias */
+    if (match(p, TOK_AS)) {
+        const cbm_token_t *alias = expect(p, TOK_IDENT);
+        if (alias) {
+            item->alias = heap_strdup(alias->text);
+        }
+    }
+    return 0;
+}
+
+/* Parse ORDER BY field into r->order_by and r->order_dir */
+/* Parse aggregate function call for ORDER BY */
+static void parse_order_by_agg(parser_t *p, char *buf, size_t buf_sz) {
+    const char *fn = agg_func_name(peek(p)->type);
+    advance(p);
+    expect(p, TOK_LPAREN);
+    if (match(p, TOK_STAR)) {
+        snprintf(buf, buf_sz, "%s(*)", fn);
+    } else {
+        const cbm_token_t *var = expect(p, TOK_IDENT);
+        snprintf(buf, buf_sz, "%s(%s)", fn, var ? var->text : "");
+    }
+    expect(p, TOK_RPAREN);
+}
+
+/* Parse var[.prop] for ORDER BY */
+static void parse_order_by_var(parser_t *p, char *buf, size_t buf_sz) {
+    const cbm_token_t *var = expect(p, TOK_IDENT);
+    if (!var) {
+        return;
+    }
+    snprintf(buf, buf_sz, "%s", var->text);
+    if (match(p, TOK_DOT)) {
+        const cbm_token_t *prop = expect(p, TOK_IDENT);
+        if (prop) {
+            snprintf(buf, buf_sz, "%s.%s", var->text, prop->text);
+        }
+    }
+}
+
+/* Parse ORDER BY expression into buf. Returns buf. */
+static char *parse_order_by_expr(parser_t *p, char *buf, size_t buf_sz) {
+    buf[0] = '\0';
+    if (is_aggregate_tok(peek(p)->type)) {
+        parse_order_by_agg(p, buf, buf_sz);
+    } else {
+        parse_order_by_var(p, buf, buf_sz);
+    }
+    return buf;
+}
+
+static void parse_order_by_clause(parser_t *p, cbm_return_clause_t *r) {
+    expect(p, TOK_BY);
+    char order_buf[256];
+    parse_order_by_expr(p, order_buf, sizeof(order_buf));
+    r->order_by = heap_strdup(order_buf);
+    if (match(p, TOK_ASC)) {
+        r->order_dir = heap_strdup("ASC");
+    } else if (match(p, TOK_DESC)) {
+        r->order_dir = heap_strdup("DESC");
+    }
+}
+
 /* Parse RETURN/WITH clause (shared logic) */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int parse_return_or_with(parser_t *p, cbm_return_clause_t **out, bool is_with) {
     cbm_token_type_t tok = (int)is_with ? TOK_WITH : TOK_RETURN;
     /* For WITH, we need to check it's standalone (not preceded by STARTS) */
@@ -1036,82 +1208,10 @@ static int parse_return_or_with(parser_t *p, cbm_return_clause_t **out, bool is_
         }
 
         cbm_return_item_t item = {0};
-
-        /* CASE expression */
-        if (check(p, TOK_CASE)) {
-            advance(p);
-            item.kase = parse_case_expr(p);
-            item.variable = heap_strdup("CASE");
-        }
-        /* Aggregate: COUNT/SUM/AVG/MIN/MAX/COLLECT */
-        else if (is_aggregate_tok(peek(p)->type)) {
-            cbm_token_type_t ft = peek(p)->type;
-            advance(p);
-            expect(p, TOK_LPAREN);
-            if (match(p, TOK_STAR)) {
-                item.variable = heap_strdup("*");
-            } else {
-                const cbm_token_t *var = expect(p, TOK_IDENT);
-                if (!var) {
-                    free(r->items);
-                    free(r);
-                    return -1;
-                }
-                item.variable = heap_strdup(var->text);
-                if (match(p, TOK_DOT)) {
-                    const cbm_token_t *prop = expect(p, TOK_IDENT);
-                    if (prop) {
-                        item.property = heap_strdup(prop->text);
-                    }
-                }
-            }
-            expect(p, TOK_RPAREN);
-            item.func = heap_strdup(agg_func_name(ft));
-        }
-        /* String function: toLower/toUpper/toString */
-        else if (is_string_func_tok(peek(p)->type)) {
-            cbm_token_type_t ft = peek(p)->type;
-            advance(p);
-            expect(p, TOK_LPAREN);
-            const cbm_token_t *var = expect(p, TOK_IDENT);
-            if (!var) {
-                free(r->items);
-                free(r);
-                return -1;
-            }
-            item.variable = heap_strdup(var->text);
-            if (match(p, TOK_DOT)) {
-                const cbm_token_t *prop = expect(p, TOK_IDENT);
-                if (prop) {
-                    item.property = heap_strdup(prop->text);
-                }
-            }
-            expect(p, TOK_RPAREN);
-            item.func = heap_strdup(str_func_name(ft));
-        }
-        /* Plain var.prop */
-        else {
-            const cbm_token_t *var = expect(p, TOK_IDENT);
-            if (!var) {
-                free(r->items);
-                free(r);
-                return -1;
-            }
-            item.variable = heap_strdup(var->text);
-            if (match(p, TOK_DOT)) {
-                const cbm_token_t *prop = expect(p, TOK_IDENT);
-                if (prop) {
-                    item.property = heap_strdup(prop->text);
-                }
-            }
-        }
-
-        /* Optional AS alias */
-        if (match(p, TOK_AS)) {
-            const cbm_token_t *alias = expect(p, TOK_IDENT);
-            if (alias) {
-                item.alias = heap_strdup(alias->text);
-            }
+        if (parse_return_item(p, &item) < 0) {
+            free(r->items);
+            free(r);
+            return -1;
         }
 
         if (r->count >= cap) {
@@ -1125,39 +1225,7 @@ static int parse_return_or_with(parser_t *p, cbm_return_clause_t **out, bool is_
 tail:
     /* Optional ORDER BY */
     if (match(p, TOK_ORDER)) {
-        expect(p, TOK_BY);
-        char order_buf[256] = "";
-        if (is_aggregate_tok(peek(p)->type)) {
-            const char *fn = agg_func_name(peek(p)->type);
-            advance(p);
-            expect(p, TOK_LPAREN);
-            if (match(p, TOK_STAR)) {
-                snprintf(order_buf, sizeof(order_buf), "%s(*)", fn);
-            } else {
-                const cbm_token_t *var = expect(p, TOK_IDENT);
-                snprintf(order_buf, sizeof(order_buf), "%s(%s)", fn, var ? var->text : "");
-            }
-            expect(p, TOK_RPAREN);
-        } else {
-            const cbm_token_t *var = expect(p, TOK_IDENT);
-            if (var) {
-                snprintf(order_buf, sizeof(order_buf), "%s", var->text);
-                if (match(p, TOK_DOT)) {
-                    const cbm_token_t *prop = expect(p, TOK_IDENT);
-                    if (prop) {
-                        char tmp[256];
-                        snprintf(tmp, sizeof(tmp), "%s.%s", var->text, prop->text);
-                        snprintf(order_buf, sizeof(order_buf), "%s", tmp);
-                    }
-                }
-            }
-        }
-        r->order_by = heap_strdup(order_buf);
-        if (match(p, TOK_ASC)) {
-            r->order_dir = heap_strdup("ASC");
-        } else if (match(p, TOK_DESC)) {
-            r->order_dir = heap_strdup("DESC");
-        }
+        parse_order_by_clause(p, r);
     }
 
     /* Optional SKIP */
@@ -1191,7 +1259,7 @@ static int parse_match_pattern(parser_t *p, cbm_pattern_t *pat) {
     int node_cap = 4;
     int rel_cap = 4;
     pat->nodes = malloc(node_cap * sizeof(cbm_node_pattern_t));
-    pat->rels = malloc(rel_cap * sizeof(cbm_rel_pattern_t));
+    pat->rels = calloc(rel_cap, sizeof(cbm_rel_pattern_t));
 
     if (parse_node(p, &pat->nodes[0]) < 0) {
         return -1;
@@ -1220,7 +1288,113 @@ static int parse_match_pattern(parser_t *p, cbm_pattern_t *pat) {
     return 0;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Parse UNWIND [...] AS var clause into query */
+static void parse_unwind_clause(parser_t *p, cbm_query_t *q) {
+    advance(p);
+    if (check(p, TOK_LBRACKET)) {
+        /* Literal list: [1, 2, 3] — collect as JSON array string */
+        advance(p);
+        char buf[2048] = "[";
+        int blen = 1;
+        while (!check(p, TOK_RBRACKET) && !check(p, TOK_EOF)) {
+            if (blen > 1) {
+                buf[blen++] = ',';
+            }
+            if (check(p, TOK_STRING)) {
+                blen += snprintf(buf + blen, sizeof(buf) - blen, "\"%s\"", peek(p)->text);
+                advance(p);
+            } else if (check(p, TOK_NUMBER)) {
+                blen += snprintf(buf + blen, sizeof(buf) - blen, "%s", peek(p)->text);
+                advance(p);
+            } else {
+                advance(p);
+            }
+            match(p, TOK_COMMA);
+        }
+        expect(p, TOK_RBRACKET);
+        buf[blen++] = ']';
+        buf[blen] = '\0';
+        q->unwind_expr = heap_strdup(buf);
+    } else if (check(p, TOK_IDENT)) {
+        q->unwind_expr = heap_strdup(advance(p)->text);
+    }
+    expect(p, TOK_AS);
+    const cbm_token_t *alias = expect(p, TOK_IDENT);
+    if (alias) {
+        q->unwind_alias = heap_strdup(alias->text);
+    }
+}
+
+/* Parse a chain of MATCH / OPTIONAL MATCH patterns into query.
+ * Returns -1 on error (fills p->error). */
+static int parse_match_chain(parser_t *p, cbm_query_t *q, int *pat_cap) {
+    while (check(p, TOK_MATCH) || check(p, TOK_OPTIONAL)) {
+        bool opt = false;
+        if (check(p, TOK_OPTIONAL)) {
+            advance(p);
+            opt = true;
+        }
+        if (!expect(p, TOK_MATCH)) {
+            break;
+        }
+        if (q->pattern_count >= *pat_cap) {
+            *pat_cap *= 2;
+            q->patterns = safe_realloc(q->patterns, *pat_cap * sizeof(cbm_pattern_t));
+            q->pattern_optional = safe_realloc(q->pattern_optional, *pat_cap * sizeof(bool));
+        }
+        if (parse_match_pattern(p, &q->patterns[q->pattern_count]) < 0) {
+            return -1;
+        }
+        q->pattern_optional[q->pattern_count] = opt;
+        q->pattern_count++;
+    }
+    return 0;
+}
+
+/* Parse post-WHERE clauses: additional MATCH, WITH, RETURN, UNION */
+static int parse_post_where(parser_t *p, cbm_query_t *q, int *pat_cap) {
+    /* More MATCH / OPTIONAL MATCH after WHERE */
+    if (parse_match_chain(p, q, pat_cap) < 0) {
+        return -1;
+    }
+    /* Check for unsupported keywords */
+    const char *unsup = unsupported_clause_error(peek(p)->type);
+    if (unsup) {
+        snprintf(p->error, sizeof(p->error), "%s", unsup);
+        return -1;
+    }
+    /* Optional WITH clause (standalone, not STARTS WITH) */
+    if (check(p, TOK_WITH) && (p->pos < 2 || p->tokens[p->pos - 1].type != TOK_STARTS)) {
+        if (parse_return_or_with(p, &q->with_clause, true) < 0) {
+            return -1;
+        }
+        if (parse_where(p, &q->post_with_where) < 0) {
+            return -1;
+        }
+    }
+    /* Optional RETURN */
+    if (parse_return(p, &q->ret) < 0) {
+        return -1;
+    }
+    /* UNION [ALL] */
+    if (check(p, TOK_UNION)) {
+        advance(p);
+        q->union_all = match(p, TOK_ALL);
+        cbm_parse_result_t sub = {0};
+        if (cbm_parse(&p->tokens[p->pos], p->count - p->pos, &sub) < 0) {
+            if (sub.error) {
+                snprintf(p->error, sizeof(p->error), "%s", sub.error);
+            }
+            cbm_parse_free(&sub);
+            return -1;
+        }
+        q->union_next = sub.query;
+        sub.query = NULL;
+        cbm_parse_free(&sub);
+    }
+    return 0;
+}
+
 int cbm_parse(const cbm_token_t *tokens, int token_count, cbm_parse_result_t *out) {
     memset(out, 0, sizeof(*out));
     parser_t p = {.tokens = tokens, .count = token_count, .pos = 0};
@@ -1232,47 +1406,12 @@ int cbm_parse(const cbm_token_t *tokens, int token_count, cbm_parse_result_t *ou
         return -1;
     }
 
-    /* UNWIND ... AS var (before MATCH) */
     cbm_query_t *q = calloc(1, sizeof(cbm_query_t));
 
     if (check(&p, TOK_UNWIND)) {
-        advance(&p);
-        /* Parse expression — could be a literal list or a variable */
-        if (check(&p, TOK_LBRACKET)) {
-            /* Literal list: [1, 2, 3] — collect as JSON array string */
-            advance(&p);
-            char buf[2048] = "[";
-            int blen = 1;
-            while (!check(&p, TOK_RBRACKET) && !check(&p, TOK_EOF)) {
-                if (blen > 1) {
-                    buf[blen++] = ',';
-                }
-                if (check(&p, TOK_STRING)) {
-                    blen += snprintf(buf + blen, sizeof(buf) - blen, "\"%s\"", peek(&p)->text);
-                    advance(&p);
-                } else if (check(&p, TOK_NUMBER)) {
-                    blen += snprintf(buf + blen, sizeof(buf) - blen, "%s", peek(&p)->text);
-                    advance(&p);
-                } else {
-                    advance(&p);
-                }
-                match(&p, TOK_COMMA);
-            }
-            expect(&p, TOK_RBRACKET);
-            buf[blen++] = ']';
-            buf[blen] = '\0';
-            q->unwind_expr = heap_strdup(buf);
-        } else if (check(&p, TOK_IDENT)) {
-            q->unwind_expr = heap_strdup(advance(&p)->text);
-        }
-        expect(&p, TOK_AS);
-        const cbm_token_t *alias = expect(&p, TOK_IDENT);
-        if (alias) {
-            q->unwind_alias = heap_strdup(alias->text);
-        }
+        parse_unwind_clause(&p, q);
     }
 
-    /* Expect MATCH or OPTIONAL MATCH */
     bool first_optional = false;
     if (check(&p, TOK_OPTIONAL)) {
         advance(&p);
@@ -1284,7 +1423,6 @@ int cbm_parse(const cbm_token_t *tokens, int token_count, cbm_parse_result_t *ou
         return -1;
     }
 
-    /* Parse first pattern */
     int pat_cap = 4;
     q->patterns = malloc(pat_cap * sizeof(cbm_pattern_t));
     q->pattern_optional = malloc(pat_cap * sizeof(bool));
@@ -1297,107 +1435,22 @@ int cbm_parse(const cbm_token_t *tokens, int token_count, cbm_parse_result_t *ou
     q->pattern_optional[0] = first_optional;
     q->pattern_count = 1;
 
-    /* Additional MATCH / OPTIONAL MATCH patterns */
-    while (check(&p, TOK_MATCH) || check(&p, TOK_OPTIONAL)) {
-        bool opt = false;
-        if (check(&p, TOK_OPTIONAL)) {
-            advance(&p);
-            opt = true;
-        }
-        if (!expect(&p, TOK_MATCH)) {
-            break;
-        }
-        if (q->pattern_count >= pat_cap) {
-            pat_cap *= 2;
-            q->patterns = safe_realloc(q->patterns, pat_cap * sizeof(cbm_pattern_t));
-            q->pattern_optional = safe_realloc(q->pattern_optional, pat_cap * sizeof(bool));
-        }
-        if (parse_match_pattern(&p, &q->patterns[q->pattern_count]) < 0) {
-            out->error = heap_strdup(p.error[0] ? p.error : "failed to parse additional pattern");
-            cbm_query_free(q);
-            return -1;
-        }
-        q->pattern_optional[q->pattern_count] = opt;
-        q->pattern_count++;
+    if (parse_match_chain(&p, q, &pat_cap) < 0) {
+        out->error = heap_strdup(p.error[0] ? p.error : "failed to parse additional pattern");
+        cbm_query_free(q);
+        return -1;
     }
 
-    /* Optional WHERE */
     if (parse_where(&p, &q->where) < 0) {
         out->error = heap_strdup(p.error[0] ? p.error : "failed to parse WHERE");
         cbm_query_free(q);
         return -1;
     }
 
-    /* More MATCH / OPTIONAL MATCH after WHERE (e.g. MATCH ... WHERE ... OPTIONAL MATCH ...) */
-    while (check(&p, TOK_MATCH) || check(&p, TOK_OPTIONAL)) {
-        bool opt2 = false;
-        if (check(&p, TOK_OPTIONAL)) {
-            advance(&p);
-            opt2 = true;
-        }
-        if (!expect(&p, TOK_MATCH)) {
-            break;
-        }
-        if (q->pattern_count >= pat_cap) {
-            pat_cap *= 2;
-            q->patterns = safe_realloc(q->patterns, pat_cap * sizeof(cbm_pattern_t));
-            q->pattern_optional = safe_realloc(q->pattern_optional, pat_cap * sizeof(bool));
-        }
-        if (parse_match_pattern(&p, &q->patterns[q->pattern_count]) < 0) {
-            out->error = heap_strdup(p.error[0] ? p.error : "failed to parse post-WHERE pattern");
-            cbm_query_free(q);
-            return -1;
-        }
-        q->pattern_optional[q->pattern_count] = opt2;
-        q->pattern_count++;
-    }
-
-    /* Check for unsupported keywords after WHERE */
-    unsup = unsupported_clause_error(peek(&p)->type);
-    if (unsup) {
-        out->error = heap_strdup(unsup);
+    if (parse_post_where(&p, q, &pat_cap) < 0) {
+        out->error = heap_strdup(p.error[0] ? p.error : "failed to parse query");
         cbm_query_free(q);
         return -1;
-    }
-
-    /* Optional WITH clause (standalone, not STARTS WITH) */
-    if (check(&p, TOK_WITH) && (p.pos < 2 || p.tokens[p.pos - 1].type != TOK_STARTS)) {
-        /* Make sure this isn't inside a WHERE STARTS WITH */
-        if (parse_return_or_with(&p, &q->with_clause, true) < 0) {
-            out->error = heap_strdup(p.error[0] ? p.error : "failed to parse WITH");
-            cbm_query_free(q);
-            return -1;
-        }
-        /* Optional post-WITH WHERE */
-        if (parse_where(&p, &q->post_with_where) < 0) {
-            out->error = heap_strdup(p.error[0] ? p.error : "failed to parse post-WITH WHERE");
-            cbm_query_free(q);
-            return -1;
-        }
-    }
-
-    /* Optional RETURN */
-    if (parse_return(&p, &q->ret) < 0) {
-        out->error = heap_strdup(p.error[0] ? p.error : "failed to parse RETURN");
-        cbm_query_free(q);
-        return -1;
-    }
-
-    /* UNION [ALL] → recursive parse of rest */
-    if (check(&p, TOK_UNION)) {
-        advance(&p);
-        q->union_all = match(&p, TOK_ALL);
-        /* Parse remaining tokens as a new query */
-        cbm_parse_result_t sub = {0};
-        if (cbm_parse(&p.tokens[p.pos], p.count - p.pos, &sub) < 0) {
-            out->error = heap_strdup(sub.error ? sub.error : "failed to parse UNION query");
-            cbm_parse_free(&sub);
-            cbm_query_free(q);
-            return -1;
-        }
-        q->union_next = sub.query;
-        sub.query = NULL;
-        cbm_parse_free(&sub);
     }
 
     out->query = q;
@@ -1676,6 +1729,9 @@ static void node_deep_copy(cbm_node_t *dst, const cbm_node_t *src) {
 }
 
 static void node_fields_free(cbm_node_t *n) {
+    if (!n) {
+        return;
+    }
     free((void *)n->project);
     free((void *)n->label);
     free((void *)n->name);
@@ -1758,39 +1814,86 @@ static void binding_set(binding_t *b, const char *var, const cbm_node_t *node) {
     b->var_count++;
 }
 
-/* Evaluate a WHERE condition against a binding */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
-static bool eval_condition(const cbm_condition_t *c, binding_t *b) {
-    const char *actual;
-
-    /* Check if variable is an edge binding */
+/* Resolve the actual property value for a condition from a binding */
+static const char *resolve_condition_value(const cbm_condition_t *c, binding_t *b) {
     cbm_edge_t *e = binding_get_edge(b, c->variable);
     if (e) {
-        actual = edge_prop(e, c->property);
-    } else {
-        cbm_node_t *n = binding_get(b, c->variable);
-        if (!n) {
-            /* Unbound variable — optimistic pass-through for early WHERE */
-            return true;
+        return edge_prop(e, c->property);
+    }
+    cbm_node_t *n = binding_get(b, c->variable);
+    if (!n) {
+        return NULL; /* unbound variable */
+    }
+    if (c->property) {
+        return node_prop(n, c->property);
+    }
+    /* Bare alias (e.g. post-WITH virtual var) — use node name directly */
+    return n->name ? n->name : "";
+}
+
+/* Evaluate a comparison operator between actual and expected strings. */
+static bool eval_comparison_op(const char *op, const char *actual, const char *expected) {
+    if (strcmp(op, "=") == 0) {
+        return strcmp(actual, expected) == 0;
+    }
+    if (strcmp(op, "<>") == 0) {
+        return strcmp(actual, expected) != 0;
+    }
+    if (strcmp(op, "=~") == 0) {
+        cbm_regex_t re;
+        if (cbm_regcomp(&re, expected, CBM_REG_EXTENDED | CBM_REG_NOSUB) != 0) {
+            return false;
         }
-        if (c->property) {
-            actual = node_prop(n, c->property);
-        } else {
-            /* Bare alias (e.g. post-WITH virtual var) — use node name directly */
-            actual = n->name ? n->name : "";
+        int rc = cbm_regexec(&re, actual, 0, NULL, 0);
+        cbm_regfree(&re);
+        return rc == 0;
+    }
+    if (strcmp(op, "CONTAINS") == 0) {
+        return strstr(actual, expected) != NULL;
+    }
+    if (strcmp(op, "STARTS WITH") == 0) {
+        return strncmp(actual, expected, strlen(expected)) == 0;
+    }
+    if (strcmp(op, "ENDS WITH") == 0) {
+        size_t alen = strlen(actual);
+        size_t elen = strlen(expected);
+        return alen >= elen && strcmp(actual + alen - elen, expected) == 0;
+    }
+    if (strcmp(op, ">") == 0 || strcmp(op, "<") == 0 || strcmp(op, ">=") == 0 ||
+        strcmp(op, "<=") == 0) {
+        double a = strtod(actual, NULL);
+        double exp_val = strtod(expected, NULL);
+        if (op[0] == '>' && op[1] == '=') {
+            return a >= exp_val;
         }
+        if (op[0] == '<' && op[1] == '=') {
+            return a <= exp_val;
+        }
+        if (op[0] == '>') {
+            return a > exp_val;
+        }
+        return a < exp_val;
+    }
+    return false;
+}
+
+/* Evaluate a WHERE condition against a binding */
+static bool eval_condition(const cbm_condition_t *c, binding_t *b) {
+    const char *actual = resolve_condition_value(c, b);
+    if (!actual) {
+        return true;
     }
 
     bool result;
 
     /* IS NULL / IS NOT NULL */
     if (strcmp(c->op, "IS NULL") == 0) {
-        result = ((!actual || actual[0] == '\0') != 0);
-        return (int)(c->negated ? !result : result);
+        result = (!actual || actual[0] == '\0');
+        return c->negated ? !result : result;
     }
     if (strcmp(c->op, "IS NOT NULL") == 0) {
-        result = ((actual && actual[0] != '\0') != 0);
-        return (int)(c->negated ? !result : result);
+        result = (actual && actual[0] != '\0');
+        return c->negated ? !result : result;
     }
 
     /* IN [...] */
@@ -1802,49 +1905,11 @@ static bool eval_condition(const cbm_condition_t *c, binding_t *b) {
                 break;
             }
         }
-        return (int)(c->negated ? !result : result);
+        return c->negated ? !result : result;
     }
 
-    const char *expected = c->value;
-
-    if (strcmp(c->op, "=") == 0) {
-        result = strcmp(actual, expected) == 0;
-    } else if (strcmp(c->op, "<>") == 0) {
-        result = strcmp(actual, expected) != 0;
-    } else if (strcmp(c->op, "=~") == 0) {
-        cbm_regex_t re;
-        if (cbm_regcomp(&re, expected, CBM_REG_EXTENDED | CBM_REG_NOSUB) != 0) {
-            return false;
-        }
-        int rc = cbm_regexec(&re, actual, 0, NULL, 0);
-        cbm_regfree(&re);
-        result = (rc == 0);
-    } else if (strcmp(c->op, "CONTAINS") == 0) {
-        result = strstr(actual, expected) != NULL;
-    } else if (strcmp(c->op, "STARTS WITH") == 0) {
-        result = strncmp(actual, expected, strlen(expected)) == 0;
-    } else if (strcmp(c->op, "ENDS WITH") == 0) {
-        size_t alen = strlen(actual);
-        size_t elen = strlen(expected);
-        result = ((alen >= elen && strcmp(actual + alen - elen, expected) == 0) != 0);
-    } else if (strcmp(c->op, ">") == 0 || strcmp(c->op, "<") == 0 || strcmp(c->op, ">=") == 0 ||
-               strcmp(c->op, "<=") == 0) {
-        double a = strtod(actual, NULL);
-        double exp_val = strtod(expected, NULL);
-        if (strcmp(c->op, ">") == 0) {
-            result = a > exp_val;
-        } else if (strcmp(c->op, "<") == 0) {
-            result = a < exp_val;
-        } else if (strcmp(c->op, ">=") == 0) {
-            result = a >= exp_val;
-        } else {
-            result = a <= exp_val;
-        }
-    } else {
-        result = false;
-    }
-
-    return (int)(c->negated ? !result : result);
+    result = eval_comparison_op(c->op, actual, c->value);
+    return c->negated ? !result : result;
 }
 
 /* Recursive expression tree evaluator */
@@ -2058,7 +2123,124 @@ static void scan_pattern_nodes(cbm_store_t *store, const char *project, int max_
 
 /* ── Expand one pattern's relationships on a set of bindings ──── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
+/* Process edges: look up target node, filter by label/props, add binding.
+ * `inbound` controls which end of the edge is the target id. */
+static void process_edges(cbm_store_t *store, cbm_edge_t *edges, int edge_count, bool inbound,
+                          const cbm_node_pattern_t *target_node, binding_t *b, const char *to_var,
+                          const char *rel_var, binding_t *new_bindings, int *new_count, int max_new,
+                          int *match_count) {
+    for (int ei = 0; ei < edge_count && *new_count < max_new; ei++) {
+        int64_t tid = inbound ? edges[ei].source_id : edges[ei].target_id;
+        cbm_node_t found = {0};
+        if (cbm_store_find_node_by_id(store, tid, &found) != CBM_STORE_OK) {
+            continue;
+        }
+        if (target_node->label && strcmp(found.label, target_node->label) != 0) {
+            node_fields_free(&found);
+            continue;
+        }
+        if (!check_inline_props(&found, target_node->props, target_node->prop_count)) {
+            node_fields_free(&found);
+            continue;
+        }
+        binding_t nb = {0};
+        binding_copy(&nb, b);
+        binding_set(&nb, to_var, &found);
+        if (rel_var) {
+            binding_set_edge(&nb, rel_var, &edges[ei]);
+        }
+        node_fields_free(&found);
+        new_bindings[(*new_count)++] = nb;
+        (*match_count)++;
+    }
+}
+
+/* Expand variable-length relationship via BFS */
+static void expand_var_length(cbm_store_t *store, cbm_rel_pattern_t *rel,
+                              cbm_node_pattern_t *target_node, binding_t *b, cbm_node_t *src,
+                              const char *to_var, binding_t *new_bindings, int *new_count,
+                              int max_new, int *match_count) {
+    int max_depth = rel->max_hops > 0 ? rel->max_hops : 10;
+    cbm_traverse_result_t tr = {0};
+    const char *dir = rel->direction ? rel->direction : "outbound";
+    cbm_store_bfs(store, src->id, dir, rel->types, rel->type_count, max_depth, 100, &tr);
+    for (int v = 0; v < tr.visited_count && *new_count < max_new; v++) {
+        cbm_node_hop_t *hop = &tr.visited[v];
+        if (hop->hop < rel->min_hops) {
+            continue;
+        }
+        if (target_node->label && strcmp(hop->node.label, target_node->label) != 0) {
+            continue;
+        }
+        if (!check_inline_props(&hop->node, target_node->props, target_node->prop_count)) {
+            continue;
+        }
+        binding_t nb = {0};
+        binding_copy(&nb, b);
+        binding_set(&nb, to_var, &hop->node);
+        new_bindings[(*new_count)++] = nb;
+        (*match_count)++;
+    }
+    cbm_store_traverse_free(&tr);
+}
+
+/* Expand fixed-length (1-hop) relationship edges */
+static void expand_fixed_length(cbm_store_t *store, cbm_rel_pattern_t *rel,
+                                cbm_node_pattern_t *target_node, binding_t *b, cbm_node_t *src,
+                                const char *to_var, binding_t *new_bindings, int *new_count,
+                                int max_new, int *match_count) {
+    bool is_inbound = rel->direction && strcmp(rel->direction, "inbound") == 0;
+    bool is_any = rel->direction && strcmp(rel->direction, "any") == 0;
+    const char *rel_var = rel->variable;
+
+    if (rel->type_count > 0) {
+        for (int ti = 0; ti < rel->type_count; ti++) {
+            cbm_edge_t *edges = NULL;
+            int edge_count = 0;
+            if (is_inbound) {
+                cbm_store_find_edges_by_target_type(store, src->id, rel->types[ti], &edges,
+                                                    &edge_count);
+            } else {
+                cbm_store_find_edges_by_source_type(store, src->id, rel->types[ti], &edges,
+                                                    &edge_count);
+            }
+            process_edges(store, edges, edge_count, is_inbound, target_node, b, to_var, rel_var,
+                          new_bindings, new_count, max_new, match_count);
+            cbm_store_free_edges(edges, edge_count);
+        }
+        if (is_any) {
+            for (int ti = 0; ti < rel->type_count; ti++) {
+                cbm_edge_t *edges = NULL;
+                int edge_count = 0;
+                cbm_store_find_edges_by_target_type(store, src->id, rel->types[ti], &edges,
+                                                    &edge_count);
+                process_edges(store, edges, edge_count, true, target_node, b, to_var, rel_var,
+                              new_bindings, new_count, max_new, match_count);
+                cbm_store_free_edges(edges, edge_count);
+            }
+        }
+    } else {
+        cbm_edge_t *edges = NULL;
+        int edge_count = 0;
+        if (is_inbound) {
+            cbm_store_find_edges_by_target(store, src->id, &edges, &edge_count);
+        } else {
+            cbm_store_find_edges_by_source(store, src->id, &edges, &edge_count);
+        }
+        process_edges(store, edges, edge_count, is_inbound, target_node, b, to_var, rel_var,
+                      new_bindings, new_count, max_new, match_count);
+        cbm_store_free_edges(edges, edge_count);
+        if (is_any) {
+            edges = NULL;
+            edge_count = 0;
+            cbm_store_find_edges_by_target(store, src->id, &edges, &edge_count);
+            process_edges(store, edges, edge_count, true, target_node, b, to_var, rel_var,
+                          new_bindings, new_count, max_new, match_count);
+            cbm_store_free_edges(edges, edge_count);
+        }
+    }
+}
+
 static void expand_pattern_rels(cbm_store_t *store, cbm_pattern_t *pat, binding_t **bindings,
                                 int *bind_count, const int *bind_cap, const char **var_name,
                                 bool is_optional) {
@@ -2081,105 +2263,13 @@ static void expand_pattern_rels(cbm_store_t *store, cbm_pattern_t *pat, binding_
 
             int match_count = 0;
 
+            int max_new = *bind_cap * 10;
             if (is_variable_length) {
-                int max_depth = rel->max_hops > 0 ? rel->max_hops : 10;
-                cbm_traverse_result_t tr = {0};
-                const char *dir = rel->direction ? rel->direction : "outbound";
-                cbm_store_bfs(store, src->id, dir, rel->types, rel->type_count, max_depth, 100,
-                              &tr);
-                for (int v = 0; v < tr.visited_count && new_count < *bind_cap * 10; v++) {
-                    cbm_node_hop_t *hop = &tr.visited[v];
-                    if (hop->hop < rel->min_hops) {
-                        continue;
-                    }
-                    if (target_node->label && strcmp(hop->node.label, target_node->label) != 0) {
-                        continue;
-                    }
-                    if (!check_inline_props(&hop->node, target_node->props,
-                                            target_node->prop_count)) {
-                        continue;
-                    }
-                    binding_t nb = {0};
-                    binding_copy(&nb, b);
-                    binding_set(&nb, to_var, &hop->node);
-                    new_bindings[new_count++] = nb;
-                    match_count++;
-                }
-                cbm_store_traverse_free(&tr);
+                expand_var_length(store, rel, target_node, b, src, to_var, new_bindings, &new_count,
+                                  max_new, &match_count);
             } else {
-                bool is_inbound = rel->direction && strcmp(rel->direction, "inbound") == 0;
-                bool is_any = rel->direction && strcmp(rel->direction, "any") == 0;
-                const char *rel_var = rel->variable;
-
-#define PROCESS_EDGES(edges_arr, edge_count_val, get_target_id)                         \
-    for (int ei = 0; ei < (edge_count_val) && new_count < *bind_cap * 10; ei++) {       \
-        int64_t tid = (get_target_id);                                                  \
-        cbm_node_t found = {0};                                                         \
-        if (cbm_store_find_node_by_id(store, tid, &found) != CBM_STORE_OK)              \
-            continue;                                                                   \
-        if (target_node->label && strcmp(found.label, target_node->label) != 0) {       \
-            node_fields_free(&found);                                                   \
-            continue;                                                                   \
-        }                                                                               \
-        if (!check_inline_props(&found, target_node->props, target_node->prop_count)) { \
-            node_fields_free(&found);                                                   \
-            continue;                                                                   \
-        }                                                                               \
-        binding_t nb = {0};                                                             \
-        binding_copy(&nb, b);                                                           \
-        binding_set(&nb, to_var, &found);                                               \
-        if (rel_var)                                                                    \
-            binding_set_edge(&nb, rel_var, &(edges_arr)[ei]);                           \
-        node_fields_free(&found);                                                       \
-        new_bindings[new_count++] = nb;                                                 \
-        match_count++;                                                                  \
-    }
-
-                if (rel->type_count > 0) {
-                    for (int ti = 0; ti < rel->type_count; ti++) {
-                        cbm_edge_t *edges = NULL;
-                        int edge_count = 0;
-                        if (is_inbound) {
-                            cbm_store_find_edges_by_target_type(store, src->id, rel->types[ti],
-                                                                &edges, &edge_count);
-                        } else {
-                            cbm_store_find_edges_by_source_type(store, src->id, rel->types[ti],
-                                                                &edges, &edge_count);
-                        }
-                        PROCESS_EDGES(edges, edge_count,
-                                      is_inbound ? edges[ei].source_id : edges[ei].target_id);
-                        cbm_store_free_edges(edges, edge_count);
-                    }
-                    if (is_any) {
-                        for (int ti = 0; ti < rel->type_count; ti++) {
-                            cbm_edge_t *edges = NULL;
-                            int edge_count = 0;
-                            cbm_store_find_edges_by_target_type(store, src->id, rel->types[ti],
-                                                                &edges, &edge_count);
-                            PROCESS_EDGES(edges, edge_count, edges[ei].source_id);
-                            cbm_store_free_edges(edges, edge_count);
-                        }
-                    }
-                } else {
-                    cbm_edge_t *edges = NULL;
-                    int edge_count = 0;
-                    if (is_inbound) {
-                        cbm_store_find_edges_by_target(store, src->id, &edges, &edge_count);
-                    } else {
-                        cbm_store_find_edges_by_source(store, src->id, &edges, &edge_count);
-                    }
-                    PROCESS_EDGES(edges, edge_count,
-                                  is_inbound ? edges[ei].source_id : edges[ei].target_id);
-                    cbm_store_free_edges(edges, edge_count);
-                    if (is_any) {
-                        edges = NULL;
-                        edge_count = 0;
-                        cbm_store_find_edges_by_target(store, src->id, &edges, &edge_count);
-                        PROCESS_EDGES(edges, edge_count, edges[ei].source_id);
-                        cbm_store_free_edges(edges, edge_count);
-                    }
-                }
-#undef PROCESS_EDGES
+                expand_fixed_length(store, rel, target_node, b, src, to_var, new_bindings,
+                                    &new_count, max_new, &match_count);
             }
 
             /* OPTIONAL MATCH: keep binding with empty target if no matches */
@@ -2203,46 +2293,53 @@ static void expand_pattern_rels(cbm_store_t *store, cbm_pattern_t *pat, binding_
 
 /* ── Result postprocessing helpers ─────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Find the column index for ORDER BY, checking both column names and aliases.
+ * Returns -1 if not found. */
+static int rb_find_order_column(const result_builder_t *rb, const cbm_return_clause_t *ret) {
+    for (int ci = 0; ci < rb->col_count; ci++) {
+        if (strcmp(rb->columns[ci], ret->order_by) == 0) {
+            return ci;
+        }
+    }
+    for (int ci = 0; ci < ret->count; ci++) {
+        if (ret->items[ci].alias && strcmp(ret->items[ci].alias, ret->order_by) == 0) {
+            return ci;
+        }
+    }
+    return -1;
+}
+
+/* Check whether a column contains numeric data by examining the first non-empty value */
+static bool rb_is_numeric_column(const result_builder_t *rb, int col) {
+    for (int i = 0; i < rb->row_count; i++) {
+        const char *v = rb->rows[i][col];
+        if (v && *v) {
+            const char *p2 = (*v == '-') ? v + 1 : v;
+            if (*p2 == '\0') {
+                return false;
+            }
+            for (; *p2; p2++) {
+                if (*p2 < '0' || *p2 > '9') {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+    return false;
+}
+
 static void rb_apply_order_by(result_builder_t *rb, const cbm_return_clause_t *ret) {
     if (!ret->order_by) {
         return;
     }
-    int order_col = -1;
-    for (int ci = 0; ci < rb->col_count; ci++) {
-        if (strcmp(rb->columns[ci], ret->order_by) == 0) {
-            order_col = ci;
-            break;
-        }
-    }
-    if (order_col < 0) {
-        for (int ci = 0; ci < ret->count; ci++) {
-            if (ret->items[ci].alias && strcmp(ret->items[ci].alias, ret->order_by) == 0) {
-                order_col = ci;
-                break;
-            }
-        }
-    }
+    int order_col = rb_find_order_column(rb, ret);
     if (order_col < 0) {
         return;
     }
 
     bool desc = ret->order_dir && strcmp(ret->order_dir, "DESC") == 0;
-    bool numeric = false;
-    for (int i = 0; i < rb->row_count; i++) {
-        const char *v = rb->rows[i][order_col];
-        if (v && *v) {
-            const char *p2 = (*v == '-') ? v + 1 : v;
-            numeric = (*p2 != '\0');
-            for (; *p2; p2++) {
-                if (*p2 < '0' || *p2 > '9') {
-                    numeric = false;
-                    break;
-                }
-            }
-            break;
-        }
-    }
+    bool numeric = rb_is_numeric_column(rb, order_col);
     for (int i = 0; i < rb->row_count - 1; i++) {
         for (int j = 0; j < rb->row_count - i - 1; j++) {
             int cmp;
@@ -2355,9 +2452,271 @@ static const char *project_item(binding_t *b, cbm_return_item_t *item, char *fun
     return raw;
 }
 
+/* Check if a function name is an aggregate */
+static bool is_aggregate_func(const char *func) {
+    return func &&
+           (strcmp(func, "COUNT") == 0 || strcmp(func, "SUM") == 0 || strcmp(func, "AVG") == 0 ||
+            strcmp(func, "MIN") == 0 || strcmp(func, "MAX") == 0 || strcmp(func, "COLLECT") == 0);
+}
+
+/* Sort bindings by a virtual variable using bubble sort */
+static void sort_bindings(binding_t *vbindings, int count, const char *key, bool desc) {
+    for (int i = 0; i < count - 1; i++) {
+        for (int j = 0; j < count - i - 1; j++) {
+            const char *va = binding_get_virtual(&vbindings[j], key, NULL);
+            const char *vb2 = binding_get_virtual(&vbindings[j + 1], key, NULL);
+            char *ea = NULL;
+            char *eb = NULL;
+            double da = strtod(va, &ea);
+            double db = strtod(vb2, &eb);
+            int cmp = (ea != va && eb != vb2) ? ((da > db) - (da < db)) : strcmp(va, vb2);
+            if (desc ? cmp < 0 : cmp > 0) {
+                binding_t tmp = vbindings[j];
+                vbindings[j] = vbindings[j + 1];
+                vbindings[j + 1] = tmp;
+            }
+        }
+    }
+}
+
+/* Apply skip and limit to a binding array, freeing discarded entries */
+static void bindings_skip_limit(binding_t *vbindings, int *count, int skip, int limit) {
+    if (skip > 0 && skip < *count) {
+        for (int i = 0; i < skip; i++) {
+            binding_free(&vbindings[i]);
+        }
+        memmove(vbindings, vbindings + skip, (*count - skip) * sizeof(binding_t));
+        *count -= skip;
+    } else if (skip >= *count) {
+        for (int i = 0; i < *count; i++) {
+            binding_free(&vbindings[i]);
+        }
+        *count = 0;
+    }
+    if (limit > 0 && *count > limit) {
+        for (int i = limit; i < *count; i++) {
+            binding_free(&vbindings[i]);
+        }
+        *count = limit;
+    }
+}
+
+/* Sort, skip, and limit binding array in-place */
+static void with_sort_skip_limit(const cbm_return_clause_t *wc, binding_t *vbindings, int *vcount) {
+    if (wc->order_by) {
+        bool wdesc = wc->order_dir && strcmp(wc->order_dir, "DESC") == 0;
+        sort_bindings(vbindings, *vcount, wc->order_by, wdesc);
+    }
+    bindings_skip_limit(vbindings, vcount, wc->skip, wc->limit);
+}
+
+/* Resolve the alias or compute a default name for a WITH/RETURN item */
+static const char *resolve_item_alias(const cbm_return_item_t *item, char *name_buf,
+                                      size_t buf_sz) {
+    if (item->alias) {
+        return item->alias;
+    }
+    if (item->property) {
+        snprintf(name_buf, buf_sz, "%s.%s", item->variable, item->property);
+    } else {
+        snprintf(name_buf, buf_sz, "%s", item->variable);
+    }
+    return name_buf;
+}
+
 /* ── WITH clause: project bindings through aggregation or rename ── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
+/* WITH aggregation group entry */
+typedef struct {
+    char group_key[1024];
+    const char **group_vals;
+    double *sums;
+    int *counts;
+    double *mins, *maxs;
+} with_agg_t;
+
+/* Build a group key from non-aggregate WITH items */
+static int with_agg_build_key(cbm_return_clause_t *wc, binding_t *b, char *key, size_t key_sz) {
+    int kl = 0;
+    for (int ci = 0; ci < wc->count; ci++) {
+        if (wc->items[ci].func) {
+            continue;
+        }
+        const char *v = binding_get_virtual(b, wc->items[ci].variable, wc->items[ci].property);
+        kl += snprintf(key + kl, key_sz - (size_t)kl, "%s|", v);
+        if (kl >= (int)key_sz) {
+            kl = (int)key_sz - 1;
+        }
+    }
+    return kl;
+}
+
+/* Find or create an aggregation group. Returns index. */
+static int with_agg_find_or_create(with_agg_t **aggs, int *agg_cnt, int *agg_cap,
+                                   cbm_return_clause_t *wc, binding_t *b, const char *key) {
+    for (int a = 0; a < *agg_cnt; a++) {
+        if (strcmp((*aggs)[a].group_key, key) == 0) {
+            return a;
+        }
+    }
+    if (*agg_cnt >= *agg_cap) {
+        *agg_cap *= 2;
+        *aggs = safe_realloc(*aggs, *agg_cap * sizeof(with_agg_t));
+    }
+    int found = (*agg_cnt)++;
+    snprintf((*aggs)[found].group_key, sizeof((*aggs)[found].group_key), "%s", key);
+    (*aggs)[found].group_vals = malloc(wc->count * sizeof(const char *));
+    (*aggs)[found].sums = calloc(wc->count, sizeof(double));
+    (*aggs)[found].counts = calloc(wc->count, sizeof(int));
+    (*aggs)[found].mins = calloc(wc->count, sizeof(double));
+    (*aggs)[found].maxs = calloc(wc->count, sizeof(double));
+    for (int ci = 0; ci < wc->count; ci++) {
+        (*aggs)[found].mins[ci] = 1e308;
+        (*aggs)[found].maxs[ci] = -1e308;
+    }
+    for (int ci = 0; ci < wc->count; ci++) {
+        if (wc->items[ci].func) {
+            (*aggs)[found].group_vals[ci] = heap_strdup("0");
+            continue;
+        }
+        const char *v = binding_get_virtual(b, wc->items[ci].variable, wc->items[ci].property);
+        (*aggs)[found].group_vals[ci] = heap_strdup(v);
+    }
+    return found;
+}
+
+/* Accumulate aggregation values for a binding */
+static void with_agg_accumulate(with_agg_t *agg, cbm_return_clause_t *wc, binding_t *b) {
+    for (int ci = 0; ci < wc->count; ci++) {
+        if (!wc->items[ci].func) {
+            continue;
+        }
+        agg->counts[ci]++;
+        const char *raw = binding_get_virtual(b, wc->items[ci].variable, wc->items[ci].property);
+        double dv = strtod(raw, NULL);
+        agg->sums[ci] += dv;
+        if (dv < agg->mins[ci]) {
+            agg->mins[ci] = dv;
+        }
+        if (dv > agg->maxs[ci]) {
+            agg->maxs[ci] = dv;
+        }
+    }
+}
+
+/* Format a WITH aggregation value into buf */
+static void with_agg_format(const char *func, with_agg_t *agg, int ci, char *buf, size_t buf_sz) {
+    if (strcmp(func, "COUNT") == 0) {
+        snprintf(buf, buf_sz, "%d", agg->counts[ci]);
+    } else if (strcmp(func, "SUM") == 0) {
+        snprintf(buf, buf_sz, "%.10g", agg->sums[ci]);
+    } else if (strcmp(func, "AVG") == 0) {
+        snprintf(buf, buf_sz, "%.10g", agg->counts[ci] > 0 ? agg->sums[ci] / agg->counts[ci] : 0.0);
+    } else if (strcmp(func, "MIN") == 0) {
+        snprintf(buf, buf_sz, "%.10g", agg->mins[ci]);
+    } else if (strcmp(func, "MAX") == 0) {
+        snprintf(buf, buf_sz, "%.10g", agg->maxs[ci]);
+    } else {
+        snprintf(buf, buf_sz, "%d", agg->counts[ci]);
+    }
+}
+
+/* Add a virtual variable binding for one WITH item */
+static void with_add_vbinding_var(binding_t *vb, const char *alias, const char *val) {
+    cbm_node_t vn = {.name = heap_strdup(val), .qualified_name = heap_strdup(alias)};
+    if (vb->var_count < 16) {
+        vb->var_names[vb->var_count] = vn.qualified_name;
+        vb->var_nodes[vb->var_count] = vn;
+        vb->var_count++;
+    }
+}
+
+/* Free with_agg_t array */
+static void with_agg_free(with_agg_t *aggs, int agg_cnt, int item_count) {
+    for (int a = 0; a < agg_cnt; a++) {
+        for (int ci = 0; ci < item_count; ci++) {
+            free((void *)aggs[a].group_vals[ci]);
+        }
+        free(aggs[a].group_vals);
+        free(aggs[a].sums);
+        free(aggs[a].counts);
+        free(aggs[a].mins);
+        free(aggs[a].maxs);
+    }
+    free(aggs);
+}
+
+/* Execute WITH aggregation path */
+static void execute_with_aggregate(cbm_return_clause_t *wc, binding_t *bindings, int bind_count,
+                                   binding_t **vbindings, int *vcount) {
+    int agg_cap = 256;
+    with_agg_t *aggs = calloc(agg_cap, sizeof(with_agg_t));
+    int agg_cnt = 0;
+
+    for (int bi = 0; bi < bind_count; bi++) {
+        char key[1024] = "";
+        with_agg_build_key(wc, &bindings[bi], key, sizeof(key));
+        int found = with_agg_find_or_create(&aggs, &agg_cnt, &agg_cap, wc, &bindings[bi], key);
+        with_agg_accumulate(&aggs[found], wc, &bindings[bi]);
+    }
+
+    *vbindings = safe_realloc(*vbindings, (agg_cnt + 1) * sizeof(binding_t));
+    if (!*vbindings) {
+        with_agg_free(aggs, agg_cnt, wc->count);
+        return;
+    }
+    for (int a = 0; a < agg_cnt; a++) {
+        binding_t vb = {0};
+        for (int ci = 0; ci < wc->count; ci++) {
+            char name_buf[256];
+            const char *alias = resolve_item_alias(&wc->items[ci], name_buf, sizeof(name_buf));
+            if (wc->items[ci].func) {
+                char vbuf[64];
+                with_agg_format(wc->items[ci].func, &aggs[a], ci, vbuf, sizeof(vbuf));
+                with_add_vbinding_var(&vb, alias, vbuf);
+            } else {
+                with_add_vbinding_var(&vb, alias, aggs[a].group_vals[ci]);
+            }
+        }
+        (*vbindings)[(*vcount)++] = vb;
+    }
+    with_agg_free(aggs, agg_cnt, wc->count);
+}
+
+/* Execute WITH simple (non-aggregate) projection */
+static void execute_with_simple(cbm_return_clause_t *wc, binding_t *bindings, int bind_count,
+                                binding_t *vbindings, int *vcount) {
+    for (int bi = 0; bi < bind_count; bi++) {
+        binding_t vb = {0};
+        for (int ci = 0; ci < wc->count; ci++) {
+            char name_buf[256];
+            const char *alias = resolve_item_alias(&wc->items[ci], name_buf, sizeof(name_buf));
+            char func_buf[512];
+            const char *val =
+                project_item(&bindings[bi], &wc->items[ci], func_buf, sizeof(func_buf));
+            with_add_vbinding_var(&vb, alias, val);
+        }
+        vbindings[(*vcount)++] = vb;
+    }
+}
+
+/* Apply post-WITH WHERE filter */
+static void filter_bindings_where(const cbm_where_clause_t *where, binding_t *vbindings,
+                                  int *vcount) {
+    int kept = 0;
+    for (int i = 0; i < *vcount; i++) {
+        if (eval_where(where, &vbindings[i])) {
+            if (kept != i) {
+                vbindings[kept] = vbindings[i];
+            }
+            kept++;
+        } else {
+            binding_free(&vbindings[i]);
+        }
+    }
+    *vcount = kept;
+}
+
 static void execute_with_clause(cbm_query_t *q, binding_t **bindings_ptr, int *bind_count_ptr) {
     cbm_return_clause_t *wc = q->with_clause;
     if (!wc) {
@@ -2369,252 +2728,29 @@ static void execute_with_clause(cbm_query_t *q, binding_t **bindings_ptr, int *b
     binding_t *vbindings = malloc((bind_count + 1) * sizeof(binding_t));
     int vcount = 0;
 
-    /* Check if WITH has aggregation */
     bool has_agg = false;
     for (int i = 0; i < wc->count; i++) {
-        if (wc->items[i].func &&
-            (strcmp(wc->items[i].func, "COUNT") == 0 || strcmp(wc->items[i].func, "SUM") == 0 ||
-             strcmp(wc->items[i].func, "AVG") == 0 || strcmp(wc->items[i].func, "MIN") == 0 ||
-             strcmp(wc->items[i].func, "MAX") == 0 || strcmp(wc->items[i].func, "COLLECT") == 0)) {
+        if (is_aggregate_func(wc->items[i].func)) {
             has_agg = true;
             break;
         }
     }
 
     if (has_agg) {
-        typedef struct {
-            char group_key[1024];
-            const char **group_vals;
-            double *sums;
-            int *counts;
-            double *mins, *maxs;
-        } with_agg_t;
-        int agg_cap = 256;
-        with_agg_t *aggs = calloc(agg_cap, sizeof(with_agg_t));
-        int agg_cnt = 0;
-
-        for (int bi = 0; bi < bind_count; bi++) {
-            char key[1024] = "";
-            int kl = 0;
-            for (int ci = 0; ci < wc->count; ci++) {
-                if (wc->items[ci].func) {
-                    continue;
-                }
-                const char *v = binding_get_virtual(&bindings[bi], wc->items[ci].variable,
-                                                    wc->items[ci].property);
-                kl += snprintf(key + kl, sizeof(key) - (size_t)kl, "%s|", v);
-                if (kl >= (int)sizeof(key)) {
-                    kl = (int)sizeof(key) - 1;
-                }
-            }
-            int found = -1;
-            for (int a = 0; a < agg_cnt; a++) {
-                if (strcmp(aggs[a].group_key, key) == 0) {
-                    found = a;
-                    break;
-                }
-            }
-            if (found < 0) {
-                if (agg_cnt >= agg_cap) {
-                    agg_cap *= 2;
-                    aggs = safe_realloc(aggs, agg_cap * sizeof(with_agg_t));
-                }
-                found = agg_cnt++;
-                snprintf(aggs[found].group_key, sizeof(aggs[found].group_key), "%s", key);
-                aggs[found].group_vals = malloc(wc->count * sizeof(const char *));
-                aggs[found].sums = calloc(wc->count, sizeof(double));
-                aggs[found].counts = calloc(wc->count, sizeof(int));
-                aggs[found].mins = malloc(wc->count * sizeof(double));
-                aggs[found].maxs = malloc(wc->count * sizeof(double));
-                for (int ci = 0; ci < wc->count; ci++) {
-                    aggs[found].mins[ci] = 1e308;
-                    aggs[found].maxs[ci] = -1e308;
-                }
-                for (int ci = 0; ci < wc->count; ci++) {
-                    if (wc->items[ci].func) {
-                        aggs[found].group_vals[ci] = heap_strdup("0");
-                        continue;
-                    }
-                    const char *v = binding_get_virtual(&bindings[bi], wc->items[ci].variable,
-                                                        wc->items[ci].property);
-                    aggs[found].group_vals[ci] = heap_strdup(v);
-                }
-            }
-            for (int ci = 0; ci < wc->count; ci++) {
-                if (!wc->items[ci].func) {
-                    continue;
-                }
-                aggs[found].counts[ci]++;
-                const char *raw = binding_get_virtual(&bindings[bi], wc->items[ci].variable,
-                                                      wc->items[ci].property);
-                double dv = strtod(raw, NULL);
-                aggs[found].sums[ci] += dv;
-                if (dv < aggs[found].mins[ci]) {
-                    aggs[found].mins[ci] = dv;
-                }
-                if (dv > aggs[found].maxs[ci]) {
-                    aggs[found].maxs[ci] = dv;
-                }
-            }
-        }
-
-        vbindings = safe_realloc(vbindings, (agg_cnt + 1) * sizeof(binding_t));
-        for (int a = 0; a < agg_cnt; a++) {
-            binding_t vb = {0};
-            for (int ci = 0; ci < wc->count; ci++) {
-                const char *alias = wc->items[ci].alias;
-                char name_buf[256];
-                if (!alias) {
-                    if (wc->items[ci].property) {
-                        snprintf(name_buf, sizeof(name_buf), "%s.%s", wc->items[ci].variable,
-                                 wc->items[ci].property);
-                    } else {
-                        snprintf(name_buf, sizeof(name_buf), "%s", wc->items[ci].variable);
-                    }
-                    alias = name_buf;
-                }
-                char vbuf[64];
-                if (wc->items[ci].func) {
-                    const char *f = wc->items[ci].func;
-                    if (strcmp(f, "COUNT") == 0) {
-                        snprintf(vbuf, sizeof(vbuf), "%d", aggs[a].counts[ci]);
-                    } else if (strcmp(f, "SUM") == 0) {
-                        snprintf(vbuf, sizeof(vbuf), "%.10g", aggs[a].sums[ci]);
-                    } else if (strcmp(f, "AVG") == 0) {
-                        snprintf(vbuf, sizeof(vbuf), "%.10g",
-                                 aggs[a].counts[ci] > 0 ? aggs[a].sums[ci] / aggs[a].counts[ci]
-                                                        : 0);
-                    } else if (strcmp(f, "MIN") == 0) {
-                        snprintf(vbuf, sizeof(vbuf), "%.10g", aggs[a].mins[ci]);
-                    } else if (strcmp(f, "MAX") == 0) {
-                        snprintf(vbuf, sizeof(vbuf), "%.10g", aggs[a].maxs[ci]);
-                    } else {
-                        snprintf(vbuf, sizeof(vbuf), "%d", aggs[a].counts[ci]);
-                    }
-                    cbm_node_t vn = {.name = heap_strdup(vbuf),
-                                     .qualified_name = heap_strdup(alias)};
-                    if (vb.var_count < 16) {
-                        vb.var_names[vb.var_count] = vn.qualified_name;
-                        vb.var_nodes[vb.var_count] = vn;
-                        vb.var_count++;
-                    }
-                } else {
-                    cbm_node_t vn = {.name = heap_strdup(aggs[a].group_vals[ci]),
-                                     .qualified_name = heap_strdup(alias)};
-                    if (vb.var_count < 16) {
-                        vb.var_names[vb.var_count] = vn.qualified_name;
-                        vb.var_nodes[vb.var_count] = vn;
-                        vb.var_count++;
-                    }
-                }
-            }
-            vbindings[vcount++] = vb;
-        }
-        for (int a = 0; a < agg_cnt; a++) {
-            for (int ci = 0; ci < wc->count; ci++) {
-                free((void *)aggs[a].group_vals[ci]);
-            }
-            free(aggs[a].group_vals);
-            free(aggs[a].sums);
-            free(aggs[a].counts);
-            free(aggs[a].mins);
-            free(aggs[a].maxs);
-        }
-        free(aggs);
+        execute_with_aggregate(wc, bindings, bind_count, &vbindings, &vcount);
     } else {
-        for (int bi = 0; bi < bind_count; bi++) {
-            binding_t vb = {0};
-            for (int ci = 0; ci < wc->count; ci++) {
-                const char *alias = wc->items[ci].alias;
-                char name_buf[256];
-                if (!alias) {
-                    if (wc->items[ci].property) {
-                        snprintf(name_buf, sizeof(name_buf), "%s.%s", wc->items[ci].variable,
-                                 wc->items[ci].property);
-                    } else {
-                        snprintf(name_buf, sizeof(name_buf), "%s", wc->items[ci].variable);
-                    }
-                    alias = name_buf;
-                }
-                char func_buf[512];
-                const char *val =
-                    project_item(&bindings[bi], &wc->items[ci], func_buf, sizeof(func_buf));
-                cbm_node_t vn = {.name = heap_strdup(val), .qualified_name = heap_strdup(alias)};
-                if (vb.var_count < 16) {
-                    vb.var_names[vb.var_count] = vn.qualified_name;
-                    vb.var_nodes[vb.var_count] = vn;
-                    vb.var_count++;
-                }
-            }
-            vbindings[vcount++] = vb;
-        }
+        execute_with_simple(wc, bindings, bind_count, vbindings, &vcount);
     }
 
-    /* ORDER BY + SKIP + LIMIT */
-    if (wc->order_by) {
-        const char *ob = wc->order_by;
-        bool wdesc = (wc->order_dir && strcmp(wc->order_dir, "DESC") == 0) != 0;
-        for (int i2 = 0; i2 < vcount - 1; i2++) {
-            for (int j2 = 0; j2 < vcount - i2 - 1; j2++) {
-                const char *va = binding_get_virtual(&vbindings[j2], ob, NULL);
-                const char *vb2 = binding_get_virtual(&vbindings[j2 + 1], ob, NULL);
-                int cmp2;
-                char *ea = NULL;
-                char *eb = NULL;
-                double da = strtod(va, &ea);
-                double db = strtod(vb2, &eb);
-                if (ea != va && eb != vb2) {
-                    cmp2 = (da > db) - (da < db);
-                } else {
-                    cmp2 = strcmp(va, vb2);
-                }
-                if ((int)wdesc ? cmp2 < 0 : cmp2 > 0) {
-                    binding_t tmp2 = vbindings[j2];
-                    vbindings[j2] = vbindings[j2 + 1];
-                    vbindings[j2 + 1] = tmp2;
-                }
-            }
-        }
-    }
-    if (wc->skip > 0 && wc->skip < vcount) {
-        for (int i2 = 0; i2 < wc->skip; i2++) {
-            binding_free(&vbindings[i2]);
-        }
-        memmove(vbindings, vbindings + wc->skip, (vcount - wc->skip) * sizeof(binding_t));
-        vcount -= wc->skip;
-    } else if (wc->skip >= vcount) {
-        for (int i2 = 0; i2 < vcount; i2++) {
-            binding_free(&vbindings[i2]);
-        }
-        vcount = 0;
-    }
-    if (wc->limit > 0 && vcount > wc->limit) {
-        for (int i2 = wc->limit; i2 < vcount; i2++) {
-            binding_free(&vbindings[i2]);
-        }
-        vcount = wc->limit;
-    }
+    with_sort_skip_limit(wc, vbindings, &vcount);
 
-    /* Replace bindings with virtual */
     for (int bi = 0; bi < bind_count; bi++) {
         binding_free(&bindings[bi]);
     }
     free(bindings);
 
-    /* Post-WITH WHERE */
     if (q->post_with_where) {
-        int kept = 0;
-        for (int i = 0; i < vcount; i++) {
-            if (eval_where(q->post_with_where, &vbindings[i])) {
-                if (kept != i) {
-                    vbindings[kept] = vbindings[i];
-                }
-                kept++;
-            } else {
-                binding_free(&vbindings[i]);
-            }
-        }
-        vcount = kept;
+        filter_bindings_where(q->post_with_where, vbindings, &vcount);
     }
 
     *bindings_ptr = vbindings;
@@ -2623,35 +2759,498 @@ static void execute_with_clause(cbm_query_t *q, binding_t **bindings_ptr, int *b
 
 /* ── Execute a single query (no UNION recursion) ──────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
+/* Project RETURN * — all bound variable properties */
+/* Collect all variable names from query patterns */
+static int collect_pattern_vars(cbm_query_t *q, const char **vars, int max_vars) {
+    int vc = 0;
+    for (int pi = 0; pi < q->pattern_count; pi++) {
+        for (int ni = 0; ni < q->patterns[pi].node_count && vc < max_vars; ni++) {
+            if (q->patterns[pi].nodes[ni].variable) {
+                vars[vc++] = q->patterns[pi].nodes[ni].variable;
+            }
+        }
+        for (int ri = 0; ri < q->patterns[pi].rel_count && vc < max_vars; ri++) {
+            if (q->patterns[pi].rels[ri].variable) {
+                vars[vc++] = q->patterns[pi].rels[ri].variable;
+            }
+        }
+    }
+    return vc;
+}
+
+/* Build star-projection columns: var.name, var.qualified_name, var.label, var.file_path */
+static void build_star_columns(result_builder_t *rb, const char **vars, int vc) {
+    int col_n = vc * 4;
+    const char *col_names[128];
+    for (int v = 0; v < vc; v++) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "%s.name", vars[v]);
+        col_names[(size_t)v * 4] = heap_strdup(buf);
+        snprintf(buf, sizeof(buf), "%s.qualified_name", vars[v]);
+        col_names[((size_t)v * 4) + 1] = heap_strdup(buf);
+        snprintf(buf, sizeof(buf), "%s.label", vars[v]);
+        col_names[((size_t)v * 4) + 2] = heap_strdup(buf);
+        snprintf(buf, sizeof(buf), "%s.file_path", vars[v]);
+        col_names[((size_t)v * 4) + 3] = heap_strdup(buf);
+    }
+    rb_set_columns(rb, col_names, col_n);
+    for (int i = 0; i < col_n; i++) {
+        free((void *)col_names[i]);
+    }
+}
+
+/* Project one variable's 4 columns for RETURN * */
+static void project_star_var(binding_t *b, const char *var, const char **vals) {
+    cbm_edge_t *edge = binding_get_edge(b, var);
+    if (edge) {
+        vals[0] = edge_prop(edge, "type");
+        vals[1] = "";
+        vals[2] = "";
+        vals[3] = "";
+        return;
+    }
+    cbm_node_t *n = binding_get(b, var);
+    vals[0] = n && n->name ? n->name : "";
+    vals[1] = n && n->qualified_name ? n->qualified_name : "";
+    vals[2] = n && n->label ? n->label : "";
+    vals[3] = n && n->file_path ? n->file_path : "";
+}
+
+/* Project one binding row for RETURN * */
+static void project_star_row(binding_t *b, const char **vars, int vc, const char **vals) {
+    for (int v = 0; v < vc; v++) {
+        project_star_var(b, vars[v], vals + ((size_t)v * 4));
+    }
+}
+
+static void execute_return_star(cbm_query_t *q, binding_t *bindings, int bind_count, int max_rows,
+                                result_builder_t *rb) {
+    const char *vars[32];
+    int vc = collect_pattern_vars(q, vars, 32);
+    build_star_columns(rb, vars, vc);
+    for (int bi = 0; bi < bind_count && rb->row_count < max_rows; bi++) {
+        const char *vals[128];
+        project_star_row(&bindings[bi], vars, vc, vals);
+        rb_add_row(rb, vals);
+    }
+}
+
+/* Format an aggregate value into buf based on function name */
+/* Format a COLLECT list as JSON array string */
+static void format_collect_list(char **items, int item_count, char *buf, size_t buf_sz) {
+    char cbuf[2048] = "[";
+    int bl = 1;
+    for (int i = 0; i < item_count; i++) {
+        if (i > 0) {
+            cbuf[bl++] = ',';
+        }
+        bl += snprintf(cbuf + bl, sizeof(cbuf) - (size_t)bl, "\"%s\"", items[i]);
+        if (bl >= (int)sizeof(cbuf)) {
+            bl = (int)sizeof(cbuf) - 1;
+        }
+    }
+    if (bl < (int)sizeof(cbuf) - 1) {
+        cbuf[bl++] = ']';
+    }
+    cbuf[bl] = '\0';
+    snprintf(buf, buf_sz, "%s", cbuf);
+}
+
+static void format_agg_value(const char *func, int count, double sum, double min_val,
+                             double max_val, char ***collect_lists, int *collect_counts, int ci,
+                             char *buf, size_t buf_sz) {
+    if (strcmp(func, "COUNT") == 0) {
+        snprintf(buf, buf_sz, "%d", count);
+    } else if (strcmp(func, "SUM") == 0) {
+        snprintf(buf, buf_sz, "%.10g", sum);
+    } else if (strcmp(func, "AVG") == 0) {
+        snprintf(buf, buf_sz, "%.10g", count > 0 ? sum / count : 0.0);
+    } else if (strcmp(func, "MIN") == 0) {
+        snprintf(buf, buf_sz, "%.10g", min_val);
+    } else if (strcmp(func, "MAX") == 0) {
+        snprintf(buf, buf_sz, "%.10g", max_val);
+    } else if (strcmp(func, "COLLECT") == 0) {
+        format_collect_list(collect_lists[ci], collect_counts[ci], buf, buf_sz);
+    } else {
+        snprintf(buf, buf_sz, "%d", count);
+    }
+}
+
+/* RETURN aggregation entry */
+typedef struct {
+    char group_key[1024];
+    const char **group_vals;
+    double *sums;
+    int *counts;
+    double *mins, *maxs;
+    char ***collect_lists;
+    int *collect_counts;
+} ret_agg_entry_t;
+
+/* Initialize a new RETURN aggregation group */
+static void ret_agg_init_group(ret_agg_entry_t *entry, const char *key, int item_count,
+                               const char **vals) {
+    snprintf(entry->group_key, sizeof(entry->group_key), "%s", key);
+    entry->group_vals = malloc(item_count * sizeof(const char *));
+    entry->sums = calloc(item_count, sizeof(double));
+    entry->counts = calloc(item_count, sizeof(int));
+    entry->mins = malloc(item_count * sizeof(double));
+    entry->maxs = malloc(item_count * sizeof(double));
+    entry->collect_lists = calloc(item_count, sizeof(char **));
+    entry->collect_counts = calloc(item_count, sizeof(int));
+    for (int ci = 0; ci < item_count; ci++) {
+        entry->mins[ci] = 1e308;
+        entry->maxs[ci] = -1e308;
+        entry->group_vals[ci] = heap_strdup(vals[ci]);
+    }
+}
+
+/* Accumulate a binding into RETURN aggregation */
+static void ret_agg_accumulate(ret_agg_entry_t *entry, cbm_return_clause_t *ret, binding_t *b) {
+    for (int ci = 0; ci < ret->count; ci++) {
+        if (!ret->items[ci].func) {
+            continue;
+        }
+        entry->counts[ci]++;
+        const char *raw = binding_get_virtual(b, ret->items[ci].variable, ret->items[ci].property);
+        double dv = strtod(raw, NULL);
+        entry->sums[ci] += dv;
+        if (dv < entry->mins[ci]) {
+            entry->mins[ci] = dv;
+        }
+        if (dv > entry->maxs[ci]) {
+            entry->maxs[ci] = dv;
+        }
+        if (strcmp(ret->items[ci].func, "COLLECT") == 0) {
+            int idx = entry->collect_counts[ci]++;
+            entry->collect_lists[ci] =
+                safe_realloc(entry->collect_lists[ci], (idx + 1) * sizeof(char *));
+            entry->collect_lists[ci][idx] = heap_strdup(raw);
+        }
+    }
+}
+
+/* Free RETURN aggregation entries */
+static void ret_agg_free(ret_agg_entry_t *aggs, int agg_count, int item_count) {
+    for (int a = 0; a < agg_count; a++) {
+        for (int ci = 0; ci < item_count; ci++) {
+            free((void *)aggs[a].group_vals[ci]);
+            for (int j = 0; j < aggs[a].collect_counts[ci]; j++) {
+                free(aggs[a].collect_lists[ci][j]);
+            }
+            free(aggs[a].collect_lists[ci]);
+        }
+        free(aggs[a].group_vals);
+        free(aggs[a].sums);
+        free(aggs[a].counts);
+        free(aggs[a].mins);
+        free(aggs[a].maxs);
+        free(aggs[a].collect_lists);
+        free(aggs[a].collect_counts);
+    }
+    free(aggs);
+}
+
+/* Execute RETURN with aggregation */
+/* Build group key and projected values for one binding */
+static void ret_agg_build_key(cbm_return_clause_t *ret, binding_t *b, char *key, size_t key_sz,
+                              const char **vals) {
+    int klen = 0;
+    for (int ci = 0; ci < ret->count; ci++) {
+        if (ret->items[ci].func) {
+            vals[ci] = "0";
+            continue;
+        }
+        char func_buf[512];
+        vals[ci] = project_item(b, &ret->items[ci], func_buf, sizeof(func_buf));
+        klen += snprintf(key + klen, key_sz - (size_t)klen, "%s|", vals[ci]);
+        if (klen >= (int)key_sz) {
+            klen = (int)key_sz - 1;
+        }
+    }
+}
+
+/* Emit one aggregated row into the result builder */
+static void ret_agg_emit_row(cbm_return_clause_t *ret, ret_agg_entry_t *agg, result_builder_t *rb) {
+    const char *row[32];
+    char bufs[32][64];
+    for (int ci = 0; ci < ret->count; ci++) {
+        if (!ret->items[ci].func) {
+            row[ci] = agg->group_vals[ci];
+            continue;
+        }
+        format_agg_value(ret->items[ci].func, agg->counts[ci], agg->sums[ci], agg->mins[ci],
+                         agg->maxs[ci], agg->collect_lists, agg->collect_counts, ci, bufs[ci],
+                         sizeof(bufs[ci]));
+        row[ci] = bufs[ci];
+    }
+    rb_add_row(rb, row);
+}
+
+static void execute_return_agg(cbm_return_clause_t *ret, binding_t *bindings, int bind_count,
+                               result_builder_t *rb) {
+    int agg_cap = 256;
+    ret_agg_entry_t *aggs = calloc(agg_cap, sizeof(ret_agg_entry_t));
+    int agg_count = 0;
+
+    for (int bi = 0; bi < bind_count; bi++) {
+        char key[1024] = "";
+        const char *vals[32];
+        ret_agg_build_key(ret, &bindings[bi], key, sizeof(key), vals);
+
+        int found = -1;
+        for (int a = 0; a < agg_count; a++) {
+            if (strcmp(aggs[a].group_key, key) == 0) {
+                found = a;
+                break;
+            }
+        }
+        if (found < 0) {
+            if (agg_count >= agg_cap) {
+                agg_cap *= 2;
+                aggs = safe_realloc(aggs, agg_cap * sizeof(ret_agg_entry_t));
+            }
+            found = agg_count++;
+            ret_agg_init_group(&aggs[found], key, ret->count, vals);
+        }
+        ret_agg_accumulate(&aggs[found], ret, &bindings[bi]);
+    }
+
+    for (int a = 0; a < agg_count; a++) {
+        ret_agg_emit_row(ret, &aggs[a], rb);
+    }
+    ret_agg_free(aggs, agg_count, ret->count);
+}
+
+/* Build RETURN column names from items */
+static void build_return_columns(result_builder_t *rb, cbm_return_clause_t *ret) {
+    const char *col_names[32];
+    for (int i = 0; i < ret->count && i < 32; i++) {
+        cbm_return_item_t *item = &ret->items[i];
+        if (item->alias) {
+            col_names[i] = item->alias;
+        } else if (item->func) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "%s(%s)", item->func, item->variable);
+            col_names[i] = heap_strdup(buf);
+        } else if (item->kase) {
+            col_names[i] = "CASE";
+        } else if (item->property) {
+            char buf[128];
+            snprintf(buf, sizeof(buf), "%s.%s", item->variable, item->property);
+            col_names[i] = heap_strdup(buf);
+        } else {
+            col_names[i] = item->variable;
+        }
+    }
+    rb_set_columns(rb, col_names, ret->count);
+    for (int i = 0; i < ret->count && i < 32; i++) {
+        cbm_return_item_t *item = &ret->items[i];
+        if (!item->alias && (item->func || (!item->kase && item->property))) {
+            free((void *)col_names[i]);
+        }
+    }
+}
+
+/* Execute simple (non-aggregate) RETURN projection */
+static void execute_return_simple(cbm_return_clause_t *ret, binding_t *bindings, int bind_count,
+                                  int max_rows, result_builder_t *rb) {
+    int proj_cap = max_rows;
+    if (ret->limit > 0 && !ret->order_by && ret->skip <= 0) {
+        proj_cap = ret->limit;
+    }
+    for (int bi = 0; bi < bind_count && rb->row_count < proj_cap; bi++) {
+        const char *vals[32];
+        char func_bufs[32][512];
+        for (int ci = 0; ci < ret->count; ci++) {
+            vals[ci] =
+                project_item(&bindings[bi], &ret->items[ci], func_bufs[ci], sizeof(func_bufs[ci]));
+        }
+        rb_add_row(rb, vals);
+    }
+}
+
+/* Build default 3-column headers (name, qualified_name, label) per variable */
+static void build_default_columns(result_builder_t *rb, const char **vars, int vc) {
+    int col_n = vc * 3;
+    const char *col_names[48];
+    for (int v = 0; v < vc; v++) {
+        char buf[128];
+        snprintf(buf, sizeof(buf), "%s.name", vars[v]);
+        col_names[(size_t)v * 3] = heap_strdup(buf);
+        snprintf(buf, sizeof(buf), "%s.qualified_name", vars[v]);
+        col_names[((size_t)v * 3) + 1] = heap_strdup(buf);
+        snprintf(buf, sizeof(buf), "%s.label", vars[v]);
+        col_names[((size_t)v * 3) + 2] = heap_strdup(buf);
+    }
+    rb_set_columns(rb, col_names, col_n);
+    for (int i = 0; i < col_n; i++) {
+        free((void *)col_names[i]);
+    }
+}
+
+/* Default projection when no RETURN clause */
+static void execute_default_projection(cbm_pattern_t *pat0, binding_t *bindings, int bind_count,
+                                       int max_rows, result_builder_t *rb) {
+    const char *vars[16];
+    int vc = 0;
+    for (int ni = 0; ni < pat0->node_count && vc < 16; ni++) {
+        if (pat0->nodes[ni].variable) {
+            vars[vc++] = pat0->nodes[ni].variable;
+        }
+    }
+    build_default_columns(rb, vars, vc);
+    for (int bi = 0; bi < bind_count && rb->row_count < max_rows; bi++) {
+        const char *vals[48];
+        for (int v = 0; v < vc; v++) {
+            cbm_node_t *n = binding_get(&bindings[bi], vars[v]);
+            vals[(size_t)v * 3] = n && n->name ? n->name : "";
+            vals[((size_t)v * 3) + 1] = n && n->qualified_name ? n->qualified_name : "";
+            vals[((size_t)v * 3) + 2] = n && n->label ? n->label : "";
+        }
+        rb_add_row(rb, vals);
+    }
+}
+
+/* Cross-join node-only pattern into existing bindings */
+static void cross_join_nodes(binding_t **bindings, int *bind_count, cbm_node_t *extra_nodes,
+                             int extra_count, const char *nvar, bool opt) {
+    binding_t *new_bindings = malloc(((*bind_count * extra_count) + 1) * sizeof(binding_t));
+    int new_count = 0;
+    for (int bi = 0; bi < *bind_count; bi++) {
+        for (int ni = 0; ni < extra_count; ni++) {
+            binding_t nb = {0};
+            binding_copy(&nb, &(*bindings)[bi]);
+            binding_set(&nb, nvar, &extra_nodes[ni]);
+            new_bindings[new_count++] = nb;
+        }
+        if (opt && extra_count == 0) {
+            binding_t nb = {0};
+            binding_copy(&nb, &(*bindings)[bi]);
+            new_bindings[new_count++] = nb;
+        }
+    }
+    for (int bi = 0; bi < *bind_count; bi++) {
+        binding_free(&(*bindings)[bi]);
+    }
+    free(*bindings);
+    *bindings = new_bindings;
+    *bind_count = new_count;
+}
+
+/* Cross-join pattern-with-rels into existing bindings */
+static void cross_join_with_rels(cbm_store_t *store, cbm_pattern_t *patn, binding_t **bindings,
+                                 int *bind_count, cbm_node_t *extra_nodes, int extra_count,
+                                 const char *nvar, bool opt) {
+    binding_t *new_bindings = malloc(((*bind_count * extra_count * 10) + 1) * sizeof(binding_t));
+    int new_count = 0;
+    for (int bi = 0; bi < *bind_count; bi++) {
+        for (int ni = 0; ni < extra_count; ni++) {
+            binding_t nb = {0};
+            binding_copy(&nb, &(*bindings)[bi]);
+            binding_set(&nb, nvar, &extra_nodes[ni]);
+            binding_t *tmp = malloc(2 * sizeof(binding_t));
+            tmp[0] = nb;
+            int tc = 1;
+            int tcap = 1;
+            const char *tv = nvar;
+            expand_pattern_rels(store, patn, &tmp, &tc, &tcap, &tv, opt);
+            for (int ti = 0; ti < tc; ti++) {
+                new_bindings[new_count++] = tmp[ti];
+            }
+            free(tmp);
+        }
+        if (opt && extra_count == 0) {
+            binding_t nb = {0};
+            binding_copy(&nb, &(*bindings)[bi]);
+            new_bindings[new_count++] = nb;
+        }
+    }
+    for (int bi = 0; bi < *bind_count; bi++) {
+        binding_free(&(*bindings)[bi]);
+    }
+    free(*bindings);
+    *bindings = new_bindings;
+    *bind_count = new_count;
+}
+
+/* Expand additional MATCH patterns (pi >= 1) */
+static void expand_additional_patterns(cbm_store_t *store, cbm_query_t *q, const char *project,
+                                       int max_rows, binding_t **bindings, int *bind_count,
+                                       int *bind_cap) {
+    for (int pi = 1; pi < q->pattern_count; pi++) {
+        cbm_pattern_t *patn = &q->patterns[pi];
+        bool opt = q->pattern_optional[pi];
+        const char *nvar = patn->nodes[0].variable ? patn->nodes[0].variable : "_n_extra";
+        bool start_bound = *bind_count > 0 && binding_get(&(*bindings)[0], nvar) != NULL;
+
+        if (start_bound && patn->rel_count > 0) {
+            const char *tv = nvar;
+            expand_pattern_rels(store, patn, bindings, bind_count, bind_cap, &tv, opt);
+        } else {
+            cbm_node_t *extra_nodes = NULL;
+            int extra_count = 0;
+            scan_pattern_nodes(store, project, max_rows, &patn->nodes[0], &extra_nodes,
+                               &extra_count);
+            if (patn->rel_count == 0) {
+                cross_join_nodes(bindings, bind_count, extra_nodes, extra_count, nvar, opt);
+            } else {
+                cross_join_with_rels(store, patn, bindings, bind_count, extra_nodes, extra_count,
+                                     nvar, opt);
+            }
+            cbm_store_free_nodes(extra_nodes, extra_count);
+        }
+    }
+}
+
+/* Project RETURN clause results */
+static void execute_return_clause(cbm_query_t *q, cbm_return_clause_t *ret, binding_t *bindings,
+                                  int bind_count, int max_rows, result_builder_t *rb) {
+    bool has_agg = false;
+    for (int i = 0; i < ret->count; i++) {
+        if (is_aggregate_func(ret->items[i].func)) {
+            has_agg = true;
+            break;
+        }
+    }
+
+    if (ret->star) {
+        execute_return_star(q, bindings, bind_count, max_rows, rb);
+    } else {
+        build_return_columns(rb, ret);
+        if (has_agg) {
+            execute_return_agg(ret, bindings, bind_count, rb);
+        } else {
+            execute_return_simple(ret, bindings, bind_count, max_rows, rb);
+        }
+    }
+
+    rb_apply_order_by(rb, ret);
+    rb_apply_skip_limit(rb, ret->skip, ret->limit > 0 ? ret->limit : max_rows);
+    if (ret->distinct) {
+        rb_apply_distinct(rb);
+    }
+}
+
 static int execute_single(cbm_store_t *store, cbm_query_t *q, const char *project, int max_rows,
                           result_builder_t *rb) {
     cbm_pattern_t *pat0 = &q->patterns[0];
 
-    /* Step 1: Scan initial nodes for first pattern */
+    /* Step 1: Scan initial nodes */
     cbm_node_t *scanned = NULL;
     int scan_count = 0;
     scan_pattern_nodes(store, project, max_rows, &pat0->nodes[0], &scanned, &scan_count);
 
-    /* Build initial bindings */
+    /* Build initial bindings with early WHERE */
     int bind_cap = scan_count > 0 ? scan_count : 1;
     binding_t *bindings = malloc((bind_cap + 1) * sizeof(binding_t));
     int bind_count = 0;
     const char *var_name = pat0->nodes[0].variable ? pat0->nodes[0].variable : "_n0";
 
-    /* Early WHERE: evaluate full expression tree (unbound vars return true) */
     for (int i = 0; i < scan_count && bind_count < bind_cap; i++) {
         binding_t b = {0};
         binding_set(&b, var_name, &scanned[i]);
-
-        bool pass = true;
-        if (q->where && pat0->rel_count > 0) {
-            /* With expression tree, evaluate full tree — unbound vars pass through */
-            pass = eval_where(q->where, &b);
-        } else if (q->where && pat0->rel_count == 0) {
-            pass = eval_where(q->where, &b);
-        }
-
+        bool pass = !q->where || eval_where(q->where, &b);
         if (pass) {
             bindings[bind_count++] = b;
         } else {
@@ -2660,106 +3259,15 @@ static int execute_single(cbm_store_t *store, cbm_query_t *q, const char *projec
     }
 
     /* Step 2: Expand first pattern's relationships */
-    bool opt0 = q->pattern_optional[0];
-    expand_pattern_rels(store, pat0, &bindings, &bind_count, &bind_cap, &var_name, opt0);
+    expand_pattern_rels(store, pat0, &bindings, &bind_count, &bind_cap, &var_name,
+                        q->pattern_optional[0]);
 
-    /* Step 2b: Additional MATCH / OPTIONAL MATCH patterns */
-    for (int pi = 1; pi < q->pattern_count; pi++) {
-        cbm_pattern_t *patn = &q->patterns[pi];
-        bool opt = q->pattern_optional[pi];
+    /* Step 2b: Additional patterns */
+    expand_additional_patterns(store, q, project, max_rows, &bindings, &bind_count, &bind_cap);
 
-        /* Check if the second pattern's start node variable is already bound */
-        const char *nvar = patn->nodes[0].variable ? patn->nodes[0].variable : "_n_extra";
-        bool start_bound = (bind_count > 0 && binding_get(&bindings[0], nvar) != NULL) != 0;
-
-        if (start_bound && patn->rel_count > 0) {
-            /* Start variable already bound: expand rels directly from existing bindings */
-            const char *tv = nvar;
-            expand_pattern_rels(store, patn, &bindings, &bind_count, &bind_cap, &tv, opt);
-        } else {
-            /* Start variable not bound: scan + cross-join */
-            cbm_node_t *extra_nodes = NULL;
-            int extra_count = 0;
-            scan_pattern_nodes(store, project, max_rows, &patn->nodes[0], &extra_nodes,
-                               &extra_count);
-
-            if (patn->rel_count == 0) {
-                /* Node-only pattern: cross join */
-                binding_t *new_bindings =
-                    malloc(((bind_count * extra_count) + 1) * sizeof(binding_t));
-                int new_count = 0;
-                for (int bi = 0; bi < bind_count; bi++) {
-                    for (int ni = 0; ni < extra_count; ni++) {
-                        binding_t nb = {0};
-                        binding_copy(&nb, &bindings[bi]);
-                        binding_set(&nb, nvar, &extra_nodes[ni]);
-                        new_bindings[new_count++] = nb;
-                    }
-                    if (opt && extra_count == 0) {
-                        binding_t nb = {0};
-                        binding_copy(&nb, &bindings[bi]);
-                        new_bindings[new_count++] = nb;
-                    }
-                }
-                for (int bi = 0; bi < bind_count; bi++) {
-                    binding_free(&bindings[bi]);
-                }
-                free(bindings);
-                bindings = new_bindings;
-                bind_count = new_count;
-            } else {
-                /* Pattern with rels: for each binding, set start node + expand */
-                binding_t *new_bindings =
-                    malloc(((bind_count * extra_count * 10) + 1) * sizeof(binding_t));
-                int new_count = 0;
-                for (int bi = 0; bi < bind_count; bi++) {
-                    for (int ni = 0; ni < extra_count; ni++) {
-                        binding_t nb = {0};
-                        binding_copy(&nb, &bindings[bi]);
-                        binding_set(&nb, nvar, &extra_nodes[ni]);
-
-                        binding_t *tmp = malloc(2 * sizeof(binding_t));
-                        tmp[0] = nb;
-                        int tc = 1;
-                        int tcap = 1;
-                        const char *tv = nvar;
-                        expand_pattern_rels(store, patn, &tmp, &tc, &tcap, &tv, opt);
-                        for (int ti = 0; ti < tc; ti++) {
-                            new_bindings[new_count++] = tmp[ti];
-                        }
-                        free(tmp);
-                    }
-                    if (opt && extra_count == 0) {
-                        binding_t nb = {0};
-                        binding_copy(&nb, &bindings[bi]);
-                        new_bindings[new_count++] = nb;
-                    }
-                }
-                for (int bi = 0; bi < bind_count; bi++) {
-                    binding_free(&bindings[bi]);
-                }
-                free(bindings);
-                bindings = new_bindings;
-                bind_count = new_count;
-            }
-            cbm_store_free_nodes(extra_nodes, extra_count);
-        }
-    }
-
-    /* Step 3: Apply late WHERE (re-evaluate after all bindings are fully expanded) */
+    /* Step 3: Late WHERE */
     if (q->where && (pat0->rel_count > 0 || q->pattern_count > 1)) {
-        int kept = 0;
-        for (int i = 0; i < bind_count; i++) {
-            if (eval_where(q->where, &bindings[i])) {
-                if (kept != i) {
-                    bindings[kept] = bindings[i];
-                }
-                kept++;
-            } else {
-                binding_free(&bindings[i]);
-            }
-        }
-        bind_count = kept;
+        filter_bindings_where(q->where, bindings, &bind_count);
     }
 
     /* Step 3b: WITH clause */
@@ -2767,326 +3275,10 @@ static int execute_single(cbm_store_t *store, cbm_query_t *q, const char *projec
 
     /* Step 4: Project results */
     rb_init(rb);
-    cbm_return_clause_t *ret = q->ret;
-
-    if (ret) {
-        /* Check for aggregation */
-        bool has_agg = false;
-        for (int i = 0; i < ret->count; i++) {
-            if (ret->items[i].func &&
-                (strcmp(ret->items[i].func, "COUNT") == 0 ||
-                 strcmp(ret->items[i].func, "SUM") == 0 || strcmp(ret->items[i].func, "AVG") == 0 ||
-                 strcmp(ret->items[i].func, "MIN") == 0 || strcmp(ret->items[i].func, "MAX") == 0 ||
-                 strcmp(ret->items[i].func, "COLLECT") == 0)) {
-                has_agg = true;
-                break;
-            }
-        }
-
-        /* RETURN * */
-        if (ret->star) {
-            /* Collect all named variables from all patterns */
-            const char *vars[32];
-            int vc = 0;
-            for (int pi = 0; pi < q->pattern_count; pi++) {
-                for (int ni = 0; ni < q->patterns[pi].node_count && vc < 32; ni++) {
-                    if (q->patterns[pi].nodes[ni].variable) {
-                        vars[vc++] = q->patterns[pi].nodes[ni].variable;
-                    }
-                }
-                for (int ri2 = 0; ri2 < q->patterns[pi].rel_count && vc < 32; ri2++) {
-                    if (q->patterns[pi].rels[ri2].variable) {
-                        vars[vc++] = q->patterns[pi].rels[ri2].variable;
-                    }
-                }
-            }
-            /* Build columns: var.name, var.qualified_name, var.label, var.file_path for nodes;
-             * var.type for edges */
-            int col_n = vc * 4;
-            const char *col_names[128];
-            for (int v = 0; v < vc; v++) {
-                char buf[128];
-                snprintf(buf, sizeof(buf), "%s.name", vars[v]);
-                col_names[(size_t)v * 4] = heap_strdup(buf);
-                snprintf(buf, sizeof(buf), "%s.qualified_name", vars[v]);
-                col_names[((size_t)v * 4) + 1] = heap_strdup(buf);
-                snprintf(buf, sizeof(buf), "%s.label", vars[v]);
-                col_names[((size_t)v * 4) + 2] = heap_strdup(buf);
-                snprintf(buf, sizeof(buf), "%s.file_path", vars[v]);
-                col_names[((size_t)v * 4) + 3] = heap_strdup(buf);
-            }
-            rb_set_columns(rb, col_names, col_n);
-            for (int i = 0; i < col_n; i++) {
-                free((void *)col_names[i]);
-            }
-
-            for (int bi = 0; bi < bind_count && rb->row_count < max_rows; bi++) {
-                const char *vals[128];
-                for (int v = 0; v < vc; v++) {
-                    cbm_edge_t *edge = binding_get_edge(&bindings[bi], vars[v]);
-                    if (edge) {
-                        vals[(size_t)v * 4] = edge_prop(edge, "type");
-                        vals[((size_t)v * 4) + 1] = "";
-                        vals[((size_t)v * 4) + 2] = "";
-                        vals[((size_t)v * 4) + 3] = "";
-                    } else {
-                        cbm_node_t *n = binding_get(&bindings[bi], vars[v]);
-                        vals[(size_t)v * 4] = n ? (n->name ? n->name : "") : "";
-                        vals[((size_t)v * 4) + 1] =
-                            n ? (n->qualified_name ? n->qualified_name : "") : "";
-                        vals[((size_t)v * 4) + 2] = n ? (n->label ? n->label : "") : "";
-                        vals[((size_t)v * 4) + 3] = n ? (n->file_path ? n->file_path : "") : "";
-                    }
-                }
-                rb_add_row(rb, vals);
-            }
-            goto postprocess;
-        }
-
-        /* Build column names */
-        const char *col_names[32];
-        for (int i = 0; i < ret->count && i < 32; i++) {
-            cbm_return_item_t *item = &ret->items[i];
-            if (item->alias) {
-                col_names[i] = item->alias;
-            } else if (item->func) {
-                char buf[128];
-                snprintf(buf, sizeof(buf), "%s(%s)", item->func, item->variable);
-                col_names[i] = heap_strdup(buf);
-            } else if (item->kase) {
-                col_names[i] = "CASE";
-            } else if (item->property) {
-                char buf[128];
-                snprintf(buf, sizeof(buf), "%s.%s", item->variable, item->property);
-                col_names[i] = heap_strdup(buf);
-            } else {
-                col_names[i] = item->variable;
-            }
-        }
-        rb_set_columns(rb, col_names, ret->count);
-        /* Free heap_strdup'd column names (rb_set_columns made its own copies).
-         * Only func/property branches heap-allocate; alias takes priority. */
-        for (int i = 0; i < ret->count && i < 32; i++) {
-            cbm_return_item_t *item = &ret->items[i];
-            if (!item->alias && (item->func || (!item->kase && item->property))) {
-                free((void *)col_names[i]);
-            }
-        }
-
-        if (has_agg) {
-            /* Generalized aggregation: COUNT, SUM, AVG, MIN, MAX, COLLECT */
-            typedef struct {
-                char group_key[1024];
-                const char **group_vals;
-                double *sums;
-                int *counts;
-                double *mins, *maxs;
-                char ***collect_lists;
-                int *collect_counts;
-            } agg_entry_t;
-
-            int agg_cap = 256;
-            agg_entry_t *aggs = calloc(agg_cap, sizeof(agg_entry_t));
-            int agg_count = 0;
-
-            for (int bi = 0; bi < bind_count; bi++) {
-                char key[1024] = "";
-                int klen = 0;
-                const char *vals[32];
-                for (int ci = 0; ci < ret->count; ci++) {
-                    cbm_return_item_t *item = &ret->items[ci];
-                    if (item->func) {
-                        vals[ci] = "0";
-                        continue;
-                    }
-                    char func_buf[512];
-                    vals[ci] = project_item(&bindings[bi], item, func_buf, sizeof(func_buf));
-                    klen += snprintf(key + klen, sizeof(key) - (size_t)klen, "%s|", vals[ci]);
-                    if (klen >= (int)sizeof(key)) {
-                        klen = (int)sizeof(key) - 1;
-                    }
-                }
-
-                int found = -1;
-                for (int a = 0; a < agg_count; a++) {
-                    if (strcmp(aggs[a].group_key, key) == 0) {
-                        found = a;
-                        break;
-                    }
-                }
-                if (found < 0) {
-                    if (agg_count >= agg_cap) {
-                        agg_cap *= 2;
-                        aggs = safe_realloc(aggs, agg_cap * sizeof(agg_entry_t));
-                    }
-                    found = agg_count++;
-                    snprintf(aggs[found].group_key, sizeof(aggs[found].group_key), "%s", key);
-                    aggs[found].group_vals = malloc(ret->count * sizeof(const char *));
-                    aggs[found].sums = calloc(ret->count, sizeof(double));
-                    aggs[found].counts = calloc(ret->count, sizeof(int));
-                    aggs[found].mins = malloc(ret->count * sizeof(double));
-                    aggs[found].maxs = malloc(ret->count * sizeof(double));
-                    aggs[found].collect_lists = calloc(ret->count, sizeof(char **));
-                    aggs[found].collect_counts = calloc(ret->count, sizeof(int));
-                    for (int ci = 0; ci < ret->count; ci++) {
-                        aggs[found].mins[ci] = 1e308;
-                        aggs[found].maxs[ci] = -1e308;
-                        aggs[found].group_vals[ci] = heap_strdup(vals[ci]);
-                    }
-                }
-                for (int ci = 0; ci < ret->count; ci++) {
-                    if (!ret->items[ci].func) {
-                        continue;
-                    }
-                    aggs[found].counts[ci]++;
-                    const char *raw = binding_get_virtual(&bindings[bi], ret->items[ci].variable,
-                                                          ret->items[ci].property);
-                    double dv = strtod(raw, NULL);
-                    aggs[found].sums[ci] += dv;
-                    if (dv < aggs[found].mins[ci]) {
-                        aggs[found].mins[ci] = dv;
-                    }
-                    if (dv > aggs[found].maxs[ci]) {
-                        aggs[found].maxs[ci] = dv;
-                    }
-                    if (strcmp(ret->items[ci].func, "COLLECT") == 0) {
-                        int idx = aggs[found].collect_counts[ci]++;
-                        aggs[found].collect_lists[ci] =
-                            safe_realloc(aggs[found].collect_lists[ci], (idx + 1) * sizeof(char *));
-                        aggs[found].collect_lists[ci][idx] = heap_strdup(raw);
-                    }
-                }
-            }
-
-            for (int a = 0; a < agg_count; a++) {
-                const char *row[32];
-                char bufs[32][64];
-                for (int ci = 0; ci < ret->count; ci++) {
-                    if (!ret->items[ci].func) {
-                        row[ci] = aggs[a].group_vals[ci];
-                        continue;
-                    }
-                    const char *f = ret->items[ci].func;
-                    if (strcmp(f, "COUNT") == 0) {
-                        {
-                            snprintf(bufs[ci], sizeof(bufs[ci]), "%d", aggs[a].counts[ci]);
-                        }
-                    } else if (strcmp(f, "SUM") == 0) {
-                        { snprintf(bufs[ci], sizeof(bufs[ci]), "%.10g", aggs[a].sums[ci]); }
-                    } else if (strcmp(f, "AVG") == 0) {
-                        {
-                            snprintf(bufs[ci], sizeof(bufs[ci]), "%.10g",
-                                     aggs[a].counts[ci] > 0 ? aggs[a].sums[ci] / aggs[a].counts[ci]
-                                                            : 0.0);
-                        }
-                    } else if (strcmp(f, "MIN") == 0) {
-                        { snprintf(bufs[ci], sizeof(bufs[ci]), "%.10g", aggs[a].mins[ci]); }
-                    } else if (strcmp(f, "MAX") == 0) {
-                        { snprintf(bufs[ci], sizeof(bufs[ci]), "%.10g", aggs[a].maxs[ci]); }
-                    } else if (strcmp(f, "COLLECT") == 0) {
-                        char cbuf[2048] = "[";
-                        int bl = 1;
-                        for (int ci2 = 0; ci2 < aggs[a].collect_counts[ci]; ci2++) {
-                            if (ci2 > 0) {
-                                cbuf[bl++] = ',';
-                            }
-                            bl += snprintf(cbuf + bl, sizeof(cbuf) - (size_t)bl, "\"%s\"",
-                                           aggs[a].collect_lists[ci][ci2]);
-                            if (bl >= (int)sizeof(cbuf)) {
-                                bl = (int)sizeof(cbuf) - 1;
-                            }
-                        }
-                        if (bl < (int)sizeof(cbuf) - 1) {
-                            cbuf[bl++] = ']';
-                        }
-                        cbuf[bl] = '\0';
-                        snprintf(bufs[ci], sizeof(bufs[ci]), "%s", cbuf);
-                    } else {
-                        snprintf(bufs[ci], sizeof(bufs[ci]), "%d", aggs[a].counts[ci]);
-                    }
-                    row[ci] = bufs[ci];
-                }
-                rb_add_row(rb, row);
-            }
-
-            for (int a = 0; a < agg_count; a++) {
-                for (int ci = 0; ci < ret->count; ci++) {
-                    free((void *)aggs[a].group_vals[ci]);
-                    for (int j = 0; j < aggs[a].collect_counts[ci]; j++) {
-                        free(aggs[a].collect_lists[ci][j]);
-                    }
-                    free(aggs[a].collect_lists[ci]);
-                }
-                free(aggs[a].group_vals);
-                free(aggs[a].sums);
-                free(aggs[a].counts);
-                free(aggs[a].mins);
-                free(aggs[a].maxs);
-                free(aggs[a].collect_lists);
-                free(aggs[a].collect_counts);
-            }
-            free(aggs);
-        } else {
-            /* Simple projection — when ORDER BY or SKIP are present, project all rows
-             * since we need the full set before sorting/skipping. Only cap early when
-             * there's a simple LIMIT with no ORDER BY and no SKIP. */
-            int proj_cap = max_rows;
-            if (ret->limit > 0 && !ret->order_by && ret->skip <= 0) {
-                proj_cap = ret->limit;
-            }
-            for (int bi = 0; bi < bind_count && rb->row_count < proj_cap; bi++) {
-                const char *vals[32];
-                char func_bufs[32][512];
-                for (int ci = 0; ci < ret->count; ci++) {
-                    vals[ci] = project_item(&bindings[bi], &ret->items[ci], func_bufs[ci],
-                                            sizeof(func_bufs[ci]));
-                }
-                rb_add_row(rb, vals);
-            }
-        }
-
-    postprocess:
-        rb_apply_order_by(rb, ret);
-        rb_apply_skip_limit(rb, ret->skip, ret->limit > 0 ? ret->limit : max_rows);
-        if (ret->distinct) {
-            rb_apply_distinct(rb);
-        }
-
+    if (q->ret) {
+        execute_return_clause(q, q->ret, bindings, bind_count, max_rows, rb);
     } else {
-        /* Default projection */
-        const char *vars[16];
-        int vc = 0;
-        for (int ni = 0; ni < pat0->node_count && vc < 16; ni++) {
-            if (pat0->nodes[ni].variable) {
-                vars[vc++] = pat0->nodes[ni].variable;
-            }
-        }
-        int col_n = vc * 3;
-        const char *col_names[48];
-        for (int v = 0; v < vc; v++) {
-            char buf[128];
-            snprintf(buf, sizeof(buf), "%s.name", vars[v]);
-            col_names[(size_t)v * 3] = heap_strdup(buf);
-            snprintf(buf, sizeof(buf), "%s.qualified_name", vars[v]);
-            col_names[((size_t)v * 3) + 1] = heap_strdup(buf);
-            snprintf(buf, sizeof(buf), "%s.label", vars[v]);
-            col_names[((size_t)v * 3) + 2] = heap_strdup(buf);
-        }
-        rb_set_columns(rb, col_names, col_n);
-        for (int i = 0; i < col_n; i++) {
-            free((void *)col_names[i]);
-        }
-
-        for (int bi = 0; bi < bind_count && rb->row_count < max_rows; bi++) {
-            const char *vals[48];
-            for (int v = 0; v < vc; v++) {
-                cbm_node_t *n = binding_get(&bindings[bi], vars[v]);
-                vals[(size_t)v * 3] = n && n->name ? n->name : "";
-                vals[((size_t)v * 3) + 1] = n && n->qualified_name ? n->qualified_name : "";
-                vals[((size_t)v * 3) + 2] = n && n->label ? n->label : "";
-            }
-            rb_add_row(rb, vals);
-        }
+        execute_default_projection(pat0, bindings, bind_count, max_rows, rb);
     }
 
     for (int bi = 0; bi < bind_count; bi++) {

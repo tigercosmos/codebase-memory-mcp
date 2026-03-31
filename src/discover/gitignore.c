@@ -35,62 +35,105 @@ struct cbm_gitignore {
 
 /* ── Pattern matching engine ─────────────────────────────────────── */
 
+/* Forward declaration for recursive calls. */
+static bool glob_match(const char *pat, const char *str);
+
+/* Match a ** (doublestar-slash) pattern: try rest at every / boundary. */
+static bool glob_match_doublestar_slash(const char *pat, const char *str) {
+    if (glob_match(pat, str)) {
+        return true;
+    }
+    for (const char *s = str; *s; s++) {
+        if (*s == '/' && glob_match(pat, s + 1)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Match a ** (doublestar) followed by non-slash: try at every position. */
+static bool glob_match_doublestar_any(const char *pat, const char *str) {
+    for (const char *s = str;; s++) {
+        if (glob_match(pat, s)) {
+            return true;
+        }
+        if (!*s) {
+            return false;
+        }
+    }
+}
+
+/* Match a * (single star): match any sequence not containing /. */
+static bool glob_match_star(const char *pat, const char *str) {
+    for (const char *s = str;; s++) {
+        if (glob_match(pat, s)) {
+            return true;
+        }
+        if (!*s || *s == '/') {
+            return false;
+        }
+    }
+}
+
+/* Match a [...] character class at current position.
+ * Returns true if matched. Advances *pat_out past the closing ']'. */
+static bool glob_match_charclass(const char *pat, char ch, const char **pat_out) {
+    bool negate_class = false;
+    if (*pat == '!' || *pat == '^') {
+        negate_class = true;
+        pat++;
+    }
+    bool matched = false;
+    char prev = 0;
+    while (*pat && *pat != ']') {
+        if (*pat == '-' && prev && pat[1] && pat[1] != ']') {
+            pat++;
+            if (ch >= prev && ch <= *pat) {
+                matched = true;
+            }
+            prev = *pat;
+            pat++;
+        } else {
+            if (ch == *pat) {
+                matched = true;
+            }
+            prev = *pat;
+            pat++;
+        }
+    }
+    if (*pat == ']') {
+        pat++;
+    }
+    *pat_out = pat;
+    return negate_class ? !matched : matched;
+}
+
 /*
  * Match a glob pattern against a string.
  * Handles: * (non-slash), ** (any path), ? (single non-slash), [class]
  */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Handle ** at current position. Returns match result. */
+static bool glob_match_doublestar(const char *pat, const char *str) {
+    if (pat[2] == '/') {
+        return glob_match_doublestar_slash(pat + 3, str);
+    }
+    if (pat[2] == '\0') {
+        return true;
+    }
+    return glob_match_doublestar_any(pat + 2, str);
+}
+
 static bool glob_match(const char *pat, const char *str) {
     while (*pat && *str) {
         if (pat[0] == '*' && pat[1] == '*') {
-            /* ** — match any number of path components */
-            if (pat[2] == '/') {
-                /* "** /" at start or middle: try matching rest at every / boundary */
-                pat += 3;
-                /* Try matching from current position */
-                if (glob_match(pat, str)) {
-                    return true;
-                }
-                /* Try matching from every / in str */
-                for (const char *s = str; *s; s++) {
-                    if (*s == '/' && glob_match(pat, s + 1)) {
-                        return true;
-                    }
-                }
-                return false;
-            }
-            if (pat[2] == '\0') {
-                /* ** at end — matches everything */
-                return true;
-            }
-            /* ** followed by non-slash — treat as two *'s, match anything */
-            pat += 2;
-            for (const char *s = str;; s++) {
-                if (glob_match(pat, s)) {
-                    return true;
-                }
-                if (!*s) {
-                    return false;
-                }
-            }
+            return glob_match_doublestar(pat, str);
         }
 
         if (*pat == '*') {
-            /* * — match any sequence not containing / */
-            pat++;
-            /* Try matching rest at every position that doesn't cross / */
-            for (const char *s = str;; s++) {
-                if (glob_match(pat, s)) {
-                    return true;
-                }
-                if (!*s || *s == '/') {
-                    return false;
-                }
-            }
+            return glob_match_star(pat + 1, str);
         }
 
         if (*pat == '?') {
-            /* ? — match any single character except / */
             if (*str == '/') {
                 return false;
             }
@@ -100,46 +143,15 @@ static bool glob_match(const char *pat, const char *str) {
         }
 
         if (*pat == '[') {
-            /* Character class */
-            pat++;
-            bool negate_class = false;
-            if (*pat == '!' || *pat == '^') {
-                negate_class = true;
-                pat++;
-            }
-            bool matched = false;
-            char prev = 0;
-            while (*pat && *pat != ']') {
-                if (*pat == '-' && prev && pat[1] && pat[1] != ']') {
-                    /* Range: [a-z] */
-                    pat++;
-                    if (*str >= prev && *str <= *pat) {
-                        matched = true;
-                    }
-                    prev = *pat;
-                    pat++;
-                } else {
-                    if (*str == *pat) {
-                        matched = true;
-                    }
-                    prev = *pat;
-                    pat++;
-                }
-            }
-            if (*pat == ']') {
-                pat++;
-            }
-            if (negate_class) {
-                matched = !matched;
-            }
-            if (!matched) {
+            const char *new_pat = NULL;
+            if (!glob_match_charclass(pat + 1, *str, &new_pat)) {
                 return false;
             }
+            pat = new_pat;
             str++;
             continue;
         }
 
-        /* Literal character */
         if (*pat != *str) {
             return false;
         }
@@ -147,11 +159,9 @@ static bool glob_match(const char *pat, const char *str) {
         str++;
     }
 
-    /* Handle trailing * or ** in pattern */
     while (*pat == '*') {
         pat++;
     }
-
     return *pat == '\0' && *str == '\0';
 }
 
@@ -301,7 +311,29 @@ cbm_gitignore_t *cbm_gitignore_load(const char *path) {
     return gi;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Match a non-rooted pattern against basename and path suffixes. */
+static bool match_unrooted(const char *pattern, const char *rel_path, const char *basename) {
+    if (glob_match(pattern, basename)) {
+        return true;
+    }
+    if (!strchr(rel_path, '/')) {
+        return false;
+    }
+    /* Try matching at every / boundary */
+    const char *s = rel_path;
+    while (*s) {
+        if (glob_match(pattern, s)) {
+            return true;
+        }
+        const char *next = strchr(s, '/');
+        if (!next) {
+            break;
+        }
+        s = next + 1;
+    }
+    return false;
+}
+
 bool cbm_gitignore_matches(const cbm_gitignore_t *gi, const char *rel_path, bool is_dir) {
     if (!gi || !rel_path) {
         return false;
@@ -316,40 +348,12 @@ bool cbm_gitignore_matches(const cbm_gitignore_t *gi, const char *rel_path, bool
     for (int i = 0; i < gi->count; i++) {
         const gi_pattern_t *p = &gi->patterns[i];
 
-        /* Directory-only patterns only match directories */
         if (p->dir_only && !is_dir) {
             continue;
         }
 
-        bool this_match = false;
-
-        if (p->rooted) {
-            /* Rooted: match against full relative path */
-            this_match = glob_match(p->pattern, rel_path);
-        } else {
-            /* Non-rooted: match against basename, OR against full path
-             * (a non-rooted pattern like "*.log" should match "error.log"
-             *  but NOT "logs/error.log" — unless the pattern uses **) */
-            this_match = glob_match(p->pattern, basename);
-
-            /* Also try matching against every suffix of the path.
-             * This handles "build/" matching "src/build" as a directory. */
-            if (!this_match && strchr(rel_path, '/')) {
-                /* Try matching at every / boundary */
-                const char *s = rel_path;
-                while (*s) {
-                    if (glob_match(p->pattern, s)) {
-                        this_match = true;
-                        break;
-                    }
-                    const char *next = strchr(s, '/');
-                    if (!next) {
-                        break;
-                    }
-                    s = next + 1;
-                }
-            }
-        }
+        bool this_match = p->rooted ? glob_match(p->pattern, rel_path)
+                                    : match_unrooted(p->pattern, rel_path, basename);
 
         if (this_match) {
             matched = !p->negated;

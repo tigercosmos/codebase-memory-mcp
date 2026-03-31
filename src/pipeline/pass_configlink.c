@@ -206,7 +206,36 @@ static const char *path_basename(const char *path) {
     return slash ? slash + 1 : path;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Check if a Cargo.toml QN contains a dependency section in any dotted part. */
+static bool is_cargo_dep_section(const char *qn) {
+    char qn_copy[512];
+    snprintf(qn_copy, sizeof(qn_copy), "%s", qn);
+    char *saveptr = NULL;
+    char *part = strtok_r(qn_copy, ".", &saveptr);
+    while (part) {
+        char lower[128];
+        size_t plen = strlen(part);
+        if (plen >= sizeof(lower)) {
+            plen = sizeof(lower) - 1;
+        }
+        for (size_t j = 0; j < plen; j++) {
+            lower[j] = (char)tolower((unsigned char)part[j]);
+        }
+        lower[plen] = '\0';
+
+        static const char *dep_secs[] = {"dependencies",       "devdependencies",
+                                         "peerdependencies",   "dev-dependencies",
+                                         "build-dependencies", NULL};
+        for (int k = 0; dep_secs[k]; k++) {
+            if (strcmp(lower, dep_secs[k]) == 0) {
+                return true;
+            }
+        }
+        part = strtok_r(NULL, ".", &saveptr);
+    }
+    return false;
+}
+
 static int collect_manifest_deps(const cbm_gbuf_node_t *const *vars, int var_count,
                                  dep_entry_t *out, int max_out) {
     int n = 0;
@@ -216,44 +245,10 @@ static int collect_manifest_deps(const cbm_gbuf_node_t *const *vars, int var_cou
             continue;
         }
 
-        /* Check if QN contains a dependency section name */
-        bool is_dep = false;
-        if (vars[i]->qualified_name) {
-            is_dep = is_dep_section(vars[i]->qualified_name);
-        }
+        bool is_dep = vars[i]->qualified_name && is_dep_section(vars[i]->qualified_name);
 
-        /* Cargo.toml special case: check QN parts */
         if (!is_dep && strcmp(base, "Cargo.toml") == 0 && vars[i]->qualified_name) {
-            /* Check if any dotted part is a dep section */
-            char qn_copy[512];
-            snprintf(qn_copy, sizeof(qn_copy), "%s", vars[i]->qualified_name);
-            char *saveptr = NULL;
-            char *part = strtok_r(qn_copy, ".", &saveptr);
-            while (part) {
-                char lower[128];
-                size_t plen = strlen(part);
-                if (plen >= sizeof(lower)) {
-                    plen = sizeof(lower) - 1;
-                }
-                for (size_t j = 0; j < plen; j++) {
-                    lower[j] = (char)tolower((unsigned char)part[j]);
-                }
-                lower[plen] = '\0';
-
-                static const char *dep_secs[] = {"dependencies",       "devdependencies",
-                                                 "peerdependencies",   "dev-dependencies",
-                                                 "build-dependencies", NULL};
-                for (int k = 0; dep_secs[k]; k++) {
-                    if (strcmp(lower, dep_secs[k]) == 0) {
-                        is_dep = true;
-                        break;
-                    }
-                }
-                if (is_dep) {
-                    break;
-                }
-                part = strtok_r(NULL, ".", &saveptr);
-            }
+            is_dep = is_cargo_dep_section(vars[i]->qualified_name);
         }
 
         if (is_dep) {
@@ -265,7 +260,34 @@ static int collect_manifest_deps(const cbm_gbuf_node_t *const *vars, int var_cou
     return n;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Lowercase a string into buf. */
+static void lowercase_into(char *buf, size_t bufsize, const char *src) {
+    size_t len = src ? strlen(src) : 0;
+    for (size_t j = 0; j < len && j < bufsize - 1; j++) {
+        buf[j] = (char)tolower((unsigned char)src[j]);
+    }
+    buf[len < bufsize ? len : bufsize - 1] = '\0';
+}
+
+/* Match a dep name (lowercased) against an import target node.
+ * Returns confidence > 0 on match, 0 on no match. */
+static double match_dep_to_import(const cbm_gbuf_node_t *target, const char *dep_lower) {
+    char target_lower[256];
+    lowercase_into(target_lower, sizeof(target_lower), target->name);
+
+    if (strcmp(target_lower, dep_lower) == 0) {
+        return CONF_DEP_EXACT;
+    }
+    if (target->qualified_name) {
+        char qn_lower[512];
+        lowercase_into(qn_lower, sizeof(qn_lower), target->qualified_name);
+        if (strstr(qn_lower, dep_lower) != NULL) {
+            return CONF_DEP_QN_SUBSTR;
+        }
+    }
+    return 0.0;
+}
+
 static int strategy_dep_imports(cbm_gbuf_t *gb) {
     const cbm_gbuf_node_t **vars = NULL;
     int var_count = 0;
@@ -291,14 +313,9 @@ static int strategy_dep_imports(cbm_gbuf_t *gb) {
 
     for (int di = 0; di < dep_count; di++) {
         char dep_lower[256];
-        size_t dlen = strlen(deps[di].name);
-        for (size_t j = 0; j < dlen && j < sizeof(dep_lower) - 1; j++) {
-            dep_lower[j] = (char)tolower((unsigned char)deps[di].name[j]);
-        }
-        dep_lower[dlen < sizeof(dep_lower) ? dlen : sizeof(dep_lower) - 1] = '\0';
+        lowercase_into(dep_lower, sizeof(dep_lower), deps[di].name);
 
         for (int ii = 0; ii < import_count; ii++) {
-            /* Resolve target and source nodes from gbuf */
             const cbm_gbuf_node_t *target = cbm_gbuf_find_by_id(gb, imports[ii]->target_id);
             if (!target) {
                 continue;
@@ -309,30 +326,7 @@ static int strategy_dep_imports(cbm_gbuf_t *gb) {
                 continue;
             }
 
-            /* Compare dep name to import target */
-            double confidence = 0.0;
-            char target_lower[256];
-            size_t tlen = target->name ? strlen(target->name) : 0;
-            for (size_t j = 0; j < tlen && j < sizeof(target_lower) - 1; j++) {
-                target_lower[j] = (char)tolower((unsigned char)target->name[j]);
-            }
-            target_lower[tlen < sizeof(target_lower) ? tlen : sizeof(target_lower) - 1] = '\0';
-
-            if (strcmp(target_lower, dep_lower) == 0) {
-                confidence = CONF_DEP_EXACT;
-            } else if (target->qualified_name) {
-                char qn_lower[512];
-                size_t qlen = strlen(target->qualified_name);
-                for (size_t j = 0; j < qlen && j < sizeof(qn_lower) - 1; j++) {
-                    qn_lower[j] = (char)tolower((unsigned char)target->qualified_name[j]);
-                }
-                qn_lower[qlen < sizeof(qn_lower) ? qlen : sizeof(qn_lower) - 1] = '\0';
-
-                if (strstr(qn_lower, dep_lower) != NULL) {
-                    confidence = CONF_DEP_QN_SUBSTR;
-                }
-            }
-
+            double confidence = match_dep_to_import(target, dep_lower);
             if (confidence > 0.0) {
                 char props[512];
                 snprintf(
@@ -352,8 +346,109 @@ static int strategy_dep_imports(cbm_gbuf_t *gb) {
 
 /* ── Strategy 3: Config File Path → Code String Reference ───────── */
 
+typedef struct {
+    const char *key;
+    int64_t node_id;
+} path_map_t;
+
+/* Match a ref_path against config module maps. Returns target node_id (0 = no match). */
+static int64_t match_ref_to_config(const char *ref_path, double *out_confidence,
+                                   const path_map_t *full_map, int full_count,
+                                   const path_map_t *base_map, int base_count) {
+    /* Try full path match */
+    for (int fi = 0; fi < full_count; fi++) {
+        if (strcmp(full_map[fi].key, ref_path) == 0) {
+            *out_confidence = CONF_FILE_FULLPATH;
+            return full_map[fi].node_id;
+        }
+    }
+
+    /* Try basename match */
+    const char *ref_base = path_basename(ref_path);
+    for (int bi = 0; bi < base_count; bi++) {
+        if (strcmp(base_map[bi].key, ref_base) == 0) {
+            *out_confidence = CONF_FILE_BASENAME;
+            return base_map[bi].node_id;
+        }
+    }
+
+    return 0;
+}
+
+/* Scan one source file for config file references and create CONFIGURES edges. */
+static int scan_source_for_config_refs(cbm_gbuf_t *gb, const char *project, const char *repo_path,
+                                       const char *file_path, const cbm_regex_t *re,
+                                       const path_map_t *full_map, int full_count,
+                                       const path_map_t *base_map, int base_count) {
+    char abs_path[1024];
+    snprintf(abs_path, sizeof(abs_path), "%s/%s", repo_path, file_path);
+
+    FILE *f = fopen(abs_path, "r");
+    if (!f) {
+        return 0;
+    }
+
+    (void)fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    (void)fseek(f, 0, SEEK_SET);
+    if (fsize <= 0 || fsize > (long)10 * 1024 * 1024) {
+        (void)fclose(f);
+        return 0;
+    }
+
+    char *source = malloc((size_t)fsize + 1);
+    if (!source) {
+        (void)fclose(f);
+        return 0;
+    }
+    size_t nread = fread(source, 1, (size_t)fsize, f);
+    source[nread] = '\0';
+    (void)fclose(f);
+
+    int edge_count = 0;
+    cbm_regmatch_t match[3];
+    const char *cursor = source;
+    while (cbm_regexec(re, cursor, 3, match, 0) == 0) {
+        int start = match[1].rm_so;
+        int end = match[1].rm_eo;
+        int ref_len = end - start;
+        char ref_path[512];
+        if (ref_len >= (int)sizeof(ref_path)) {
+            ref_len = (int)sizeof(ref_path) - 1;
+        }
+        memcpy(ref_path, cursor + start, (size_t)ref_len);
+        ref_path[ref_len] = '\0';
+
+        double confidence = 0.0;
+        int64_t target_id =
+            match_ref_to_config(ref_path, &confidence, full_map, full_count, base_map, base_count);
+
+        if (target_id != 0) {
+            char *module_qn = cbm_pipeline_fqn_module(project, file_path);
+            if (module_qn) {
+                const cbm_gbuf_node_t *src_node = cbm_gbuf_find_by_qn(gb, module_qn);
+                if (src_node) {
+                    char props[512];
+                    snprintf(props, sizeof(props),
+                             "{\"strategy\":\"file_reference\",\"confidence\":%.2f,\"ref_"
+                             "path\":\"%s\"}",
+                             confidence, ref_path);
+
+                    cbm_gbuf_insert_edge(gb, src_node->id, target_id, "CONFIGURES", props);
+                    edge_count++;
+                }
+                free(module_qn);
+            }
+        }
+
+        cursor += match[0].rm_eo;
+    }
+
+    free(source);
+    return edge_count;
+}
+
 /* Disk-based fallback: reads source from disk (sequential pipeline path). */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static int strategy_file_refs_disk(cbm_gbuf_t *gb, const char *project, const char *repo_path) {
     /* Collect config Module nodes */
     const cbm_gbuf_node_t **modules = NULL;
@@ -363,11 +458,6 @@ static int strategy_file_refs_disk(cbm_gbuf_t *gb, const char *project, const ch
     }
 
     /* Build basename → Module and fullpath → Module maps */
-    typedef struct {
-        const char *key;
-        int64_t node_id;
-    } path_map_t;
-
     path_map_t *base_map = calloc((size_t)mod_count, sizeof(path_map_t));
     path_map_t *full_map = calloc((size_t)mod_count, sizeof(path_map_t));
     int base_count = 0;
@@ -412,97 +502,8 @@ static int strategy_file_refs_disk(cbm_gbuf_t *gb, const char *project, const ch
 
     for (int si = 0; si < scan_count; si++) {
         int idx = scan_indices[si];
-        const char *file_path = modules[idx]->file_path;
-
-        /* Read source file from disk */
-        char abs_path[1024];
-        snprintf(abs_path, sizeof(abs_path), "%s/%s", repo_path, file_path);
-
-        FILE *f = fopen(abs_path, "r");
-        if (!f) {
-            continue;
-        }
-
-        (void)fseek(f, 0, SEEK_END);
-        long fsize = ftell(f);
-        (void)fseek(f, 0, SEEK_SET);
-        if (fsize <= 0 || fsize > (long)10 * 1024 * 1024) {
-            (void)fclose(f);
-            continue;
-        }
-
-        char *source = malloc((size_t)fsize + 1);
-        if (!source) {
-            (void)fclose(f);
-            continue;
-        }
-        size_t nread = fread(source, 1, (size_t)fsize, f);
-        source[nread] = '\0';
-        (void)fclose(f);
-
-        /* Find all config file references via regex */
-        cbm_regmatch_t match[3];
-        const char *cursor = source;
-        while (cbm_regexec(&re, cursor, 3, match, 0) == 0) {
-            /* Extract the captured path (group 1) */
-            int start = match[1].rm_so;
-            int end = match[1].rm_eo;
-            int ref_len = end - start;
-            char ref_path[512];
-            if (ref_len >= (int)sizeof(ref_path)) {
-                ref_len = (int)sizeof(ref_path) - 1;
-            }
-            memcpy(ref_path, cursor + start, (size_t)ref_len);
-            ref_path[ref_len] = '\0';
-
-            /* Match against config modules */
-            int64_t target_id = 0;
-            double confidence = 0.0;
-
-            /* Try full path match */
-            for (int fi = 0; fi < full_count; fi++) {
-                if (strcmp(full_map[fi].key, ref_path) == 0) {
-                    target_id = full_map[fi].node_id;
-                    confidence = CONF_FILE_FULLPATH;
-                    break;
-                }
-            }
-
-            /* Try basename match */
-            if (target_id == 0) {
-                const char *ref_base = path_basename(ref_path);
-                for (int bi = 0; bi < base_count; bi++) {
-                    if (strcmp(base_map[bi].key, ref_base) == 0) {
-                        target_id = base_map[bi].node_id;
-                        confidence = CONF_FILE_BASENAME;
-                        break;
-                    }
-                }
-            }
-
-            if (target_id != 0) {
-                /* Resolve source Module QN */
-                char *module_qn = cbm_pipeline_fqn_module(project, file_path);
-                if (module_qn) {
-                    const cbm_gbuf_node_t *src_node = cbm_gbuf_find_by_qn(gb, module_qn);
-                    if (src_node) {
-                        char props[512];
-                        snprintf(props, sizeof(props),
-                                 "{\"strategy\":\"file_reference\",\"confidence\":%.2f,\"ref_"
-                                 "path\":\"%s\"}",
-                                 confidence, ref_path);
-
-                        cbm_gbuf_insert_edge(gb, src_node->id, target_id, "CONFIGURES", props);
-                        edge_count++;
-                    }
-                    free(module_qn);
-                }
-            }
-
-            cursor += match[0].rm_eo;
-        }
-
-        free(source);
+        edge_count += scan_source_for_config_refs(gb, project, repo_path, modules[idx]->file_path,
+                                                  &re, full_map, full_count, base_map, base_count);
     }
 
     cbm_regfree(&re);

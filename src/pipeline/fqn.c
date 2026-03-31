@@ -47,70 +47,70 @@ static char *join_segments(const char **segments, int count) {
     return result;
 }
 
+/* Strip file extension from the last path component. */
+static void strip_file_extension(char *path) {
+    char *last_slash = strrchr(path, '/');
+    char *start = last_slash ? last_slash + 1 : path;
+    char *ext = strrchr(start, '.');
+    if (ext) {
+        *ext = '\0';
+    }
+}
+
+/* Tokenize path by '/' into segments array. Returns number of segments added. */
+static int tokenize_path(char *path, const char **segments, int max_segs) {
+    int count = 0;
+    if (path[0] == '\0') {
+        return 0;
+    }
+    char *tok = path;
+    while (tok && *tok && count < max_segs) {
+        char *slash = strchr(tok, '/');
+        if (slash) {
+            *slash = '\0';
+        }
+        if (tok[0] != '\0') {
+            segments[count++] = tok;
+        }
+        tok = slash ? slash + 1 : NULL;
+    }
+    return count;
+}
+
+/* Strip __init__ (Python) / index (JS/TS) from the last segment when a
+ * symbol name is provided. Keeps it when no name is given to avoid QN
+ * collision with Folder nodes for the same directory. */
+static void strip_init_or_index(const char **segments, int *seg_count, const char *name) {
+    if (*seg_count <= 1) {
+        return;
+    }
+    const char *last = segments[*seg_count - 1];
+    if (strcmp(last, "__init__") != 0 && strcmp(last, "index") != 0) {
+        return;
+    }
+    if (name && name[0] != '\0') {
+        (*seg_count)--;
+    }
+}
+
 /* ── Public API ──────────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 char *cbm_pipeline_fqn_compute(const char *project, const char *rel_path, const char *name) {
     if (!project) {
         return strdup("");
     }
 
-    /* Work on a mutable copy for path manipulation */
     char *path = strdup(rel_path ? rel_path : "");
-
-    /* Normalize path separators */
     cbm_normalize_path_sep(path);
+    strip_file_extension(path);
 
-    /* Strip file extension */
-    {
-        char *last_slash = strrchr(path, '/');
-        char *start = last_slash ? last_slash + 1 : path;
-        char *ext = strrchr(start, '.');
-        if (ext) {
-            *ext = '\0';
-        }
-    }
-
-    /* Split by '/' into segments */
     const char *segments[256];
     int seg_count = 0;
-
-    /* First segment is always the project */
     segments[seg_count++] = project;
+    seg_count += tokenize_path(path, segments + seg_count, FQN_MAX_PATH_SEGS);
 
-    /* Add path segments */
-    if (path[0] != '\0') {
-        char *tok = path;
-        while (tok && *tok && seg_count < FQN_MAX_PATH_SEGS) {
-            char *slash = strchr(tok, '/');
-            if (slash) {
-                *slash = '\0';
-            }
-            if (tok[0] != '\0') {
-                segments[seg_count++] = tok;
-            }
-            tok = slash ? slash + 1 : NULL;
-        }
-    }
+    strip_init_or_index(segments, &seg_count, name);
 
-    /* Handle __init__ (Python) and index (JS/TS):
-     * Strip from module QN to get the package name, BUT only when a name
-     * suffix is provided (e.g., fqn_compute("proj", "pkg/__init__.py", "MyClass")
-     * → "proj.pkg.MyClass"). When no name is given (fqn_module for the file
-     * itself), keep "__init__" to avoid QN collision with the Folder node
-     * for the same directory. */
-    if (seg_count > 1) {
-        const char *last = segments[seg_count - 1];
-        if (strcmp(last, "__init__") == 0 || strcmp(last, "index") == 0) {
-            if (name && name[0] != '\0') {
-                /* Has a symbol name — strip __init__ so symbols get clean package QN */
-                seg_count--;
-            }
-            /* else: no name → keep __init__/index as disambiguator */
-        }
-    }
-
-    /* Add name if provided */
     if (name && name[0] != '\0') {
         segments[seg_count++] = name;
     }

@@ -1616,7 +1616,49 @@ int cbm_store_node_neighbor_names(cbm_store_t *s, int64_t node_id, int limit, ch
     return 0;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+static int count_degrees_direction(cbm_store_t *s, const int64_t *node_ids, int id_count,
+                                   const char *in_clause, bool has_type, const char *edge_type,
+                                   bool inbound, int *out_counts) {
+    char sql[8192];
+    const char *id_col = inbound ? "target_id" : "source_id";
+    if (has_type) {
+        snprintf(sql, sizeof(sql),
+                 "SELECT %s, COUNT(*) FROM edges "
+                 "WHERE %s IN (%s) AND type = ? GROUP BY %s",
+                 id_col, id_col, in_clause, id_col);
+    } else {
+        snprintf(sql, sizeof(sql),
+                 "SELECT %s, COUNT(*) FROM edges "
+                 "WHERE %s IN (%s) GROUP BY %s",
+                 id_col, id_col, in_clause, id_col);
+    }
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return CBM_STORE_ERR;
+    }
+
+    for (int i = 0; i < id_count; i++) {
+        sqlite3_bind_int64(stmt, i + 1, node_ids[i]);
+    }
+    if (has_type) {
+        bind_text(stmt, id_count + 1, edge_type);
+    }
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        int64_t nid = sqlite3_column_int64(stmt, 0);
+        int cnt = sqlite3_column_int(stmt, 1);
+        for (int i = 0; i < id_count; i++) {
+            if (node_ids[i] == nid) {
+                out_counts[i] = cnt;
+                break;
+            }
+        }
+    }
+    sqlite3_finalize(stmt);
+    return CBM_STORE_OK;
+}
+
 int cbm_store_batch_count_degrees(cbm_store_t *s, const int64_t *node_ids, int id_count,
                                   const char *edge_type, int *out_in, int *out_out) {
     if (!s || !node_ids || id_count <= 0 || !out_in || !out_out) {
@@ -1639,81 +1681,14 @@ int cbm_store_batch_count_degrees(cbm_store_t *s, const int64_t *node_ids, int i
 
     bool has_type = edge_type && edge_type[0] != '\0';
 
-    /* Inbound: COUNT grouped by target_id */
-    char sql[8192];
-    if (has_type) {
-        snprintf(sql, sizeof(sql),
-                 "SELECT target_id, COUNT(*) FROM edges "
-                 "WHERE target_id IN (%s) AND type = ? GROUP BY target_id",
-                 in_clause);
-    } else {
-        snprintf(sql, sizeof(sql),
-                 "SELECT target_id, COUNT(*) FROM edges "
-                 "WHERE target_id IN (%s) GROUP BY target_id",
-                 in_clause);
+    int rc = count_degrees_direction(s, node_ids, id_count, in_clause, has_type, edge_type, true,
+                                     out_in);
+    if (rc != CBM_STORE_OK) {
+        return rc;
     }
 
-    sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-        return CBM_STORE_ERR;
-    }
-
-    for (int i = 0; i < id_count; i++) {
-        sqlite3_bind_int64(stmt, i + 1, node_ids[i]);
-    }
-    if (has_type) {
-        bind_text(stmt, id_count + 1, edge_type);
-    }
-
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int64_t nid = sqlite3_column_int64(stmt, 0);
-        int cnt = sqlite3_column_int(stmt, 1);
-        for (int i = 0; i < id_count; i++) {
-            if (node_ids[i] == nid) {
-                out_in[i] = cnt;
-                break;
-            }
-        }
-    }
-    sqlite3_finalize(stmt);
-
-    /* Outbound: COUNT grouped by source_id */
-    if (has_type) {
-        snprintf(sql, sizeof(sql),
-                 "SELECT source_id, COUNT(*) FROM edges "
-                 "WHERE source_id IN (%s) AND type = ? GROUP BY source_id",
-                 in_clause);
-    } else {
-        snprintf(sql, sizeof(sql),
-                 "SELECT source_id, COUNT(*) FROM edges "
-                 "WHERE source_id IN (%s) GROUP BY source_id",
-                 in_clause);
-    }
-
-    if (sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-        return CBM_STORE_ERR;
-    }
-
-    for (int i = 0; i < id_count; i++) {
-        sqlite3_bind_int64(stmt, i + 1, node_ids[i]);
-    }
-    if (has_type) {
-        bind_text(stmt, id_count + 1, edge_type);
-    }
-
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int64_t nid = sqlite3_column_int64(stmt, 0);
-        int cnt = sqlite3_column_int(stmt, 1);
-        for (int i = 0; i < id_count; i++) {
-            if (node_ids[i] == nid) {
-                out_out[i] = cnt;
-                break;
-            }
-        }
-    }
-    sqlite3_finalize(stmt);
-
-    return CBM_STORE_OK;
+    return count_degrees_direction(s, node_ids, id_count, in_clause, has_type, edge_type, false,
+                                   out_out);
 }
 
 /* ── UpsertFileHashBatch ───────────────────────────────────────── */
@@ -1934,103 +1909,132 @@ const char *cbm_strip_case_flag(const char *pattern) {
     return buf;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Bind value tracker for dynamic query building */
+typedef struct {
+    const char *text;
+} search_bind_t;
+
+static void search_apply_degree_filter(char *sql, size_t sql_sz, const cbm_search_params_t *p) {
+    bool has_degree_filter = (p->min_degree >= 0 || p->max_degree >= 0);
+    if (!has_degree_filter) {
+        return;
+    }
+    char inner_sql[4096];
+    snprintf(inner_sql, sizeof(inner_sql), "%s", sql);
+    if (p->min_degree >= 0 && p->max_degree >= 0) {
+        snprintf(sql, sql_sz,
+                 "SELECT * FROM (%s) WHERE (in_deg + out_deg) >= %d AND (in_deg + out_deg) <= %d",
+                 inner_sql, p->min_degree, p->max_degree);
+    } else if (p->min_degree >= 0) {
+        snprintf(sql, sql_sz, "SELECT * FROM (%s) WHERE (in_deg + out_deg) >= %d", inner_sql,
+                 p->min_degree);
+    } else {
+        snprintf(sql, sql_sz, "SELECT * FROM (%s) WHERE (in_deg + out_deg) <= %d", inner_sql,
+                 p->max_degree);
+    }
+}
+
+/* Append a WHERE clause fragment, joining with AND if not the first. */
+static int where_append(char *where, int where_sz, int wlen, int *nparams, const char *cond) {
+    if (*nparams > 0) {
+        wlen += snprintf(where + wlen, where_sz - wlen, " AND ");
+    }
+    wlen += snprintf(where + wlen, where_sz - wlen, "%s", cond);
+    (*nparams)++;
+    return wlen;
+}
+
+/* Bind a text parameter and increment the bind index. */
+static void where_bind_text(search_bind_t *binds, int *bind_idx, const char *val) {
+    binds[*bind_idx].text = val;
+    (*bind_idx)++;
+}
+
+/* Build exclude-labels NOT IN clause with bind placeholders. */
+static void search_build_exclude_labels(const char **labels, search_bind_t *binds, int *bind_idx,
+                                        char *clause, int clause_sz) {
+    int elen = snprintf(clause, clause_sz, "n.label NOT IN (");
+    for (int i = 0; labels[i]; i++) {
+        if (i > 0) {
+            elen += snprintf(clause + elen, clause_sz - elen, ",");
+            if (elen >= clause_sz) {
+                elen = clause_sz - 1;
+            }
+        }
+        elen += snprintf(clause + elen, clause_sz - elen, "?%d", *bind_idx + 1);
+        if (elen >= clause_sz) {
+            elen = clause_sz - 1;
+        }
+        where_bind_text(binds, bind_idx, labels[i]);
+    }
+    snprintf(clause + elen, clause_sz - elen, ")");
+}
+
+static int search_build_where(const cbm_search_params_t *params, char *where, int where_sz,
+                              search_bind_t *binds, int *bind_idx, char **like_pattern_out) {
+    int wlen = 0;
+    int nparams = 0;
+    *like_pattern_out = NULL;
+
+    char bind_buf[64];
+
+    if (params->project) {
+        snprintf(bind_buf, sizeof(bind_buf), "n.project = ?%d", *bind_idx + 1);
+        wlen = where_append(where, where_sz, wlen, &nparams, bind_buf);
+        where_bind_text(binds, bind_idx, params->project);
+    }
+    if (params->label) {
+        snprintf(bind_buf, sizeof(bind_buf), "n.label = ?%d", *bind_idx + 1);
+        wlen = where_append(where, where_sz, wlen, &nparams, bind_buf);
+        where_bind_text(binds, bind_idx, params->label);
+    }
+    if (params->name_pattern) {
+        if (params->case_sensitive) {
+            snprintf(bind_buf, sizeof(bind_buf), "n.name REGEXP ?%d", *bind_idx + 1);
+        } else {
+            snprintf(bind_buf, sizeof(bind_buf), "iregexp(?%d, n.name)", *bind_idx + 1);
+        }
+        wlen = where_append(where, where_sz, wlen, &nparams, bind_buf);
+        where_bind_text(binds, bind_idx, params->name_pattern);
+    }
+    if (params->file_pattern) {
+        *like_pattern_out = cbm_glob_to_like(params->file_pattern);
+        snprintf(bind_buf, sizeof(bind_buf), "n.file_path LIKE ?%d", *bind_idx + 1);
+        wlen = where_append(where, where_sz, wlen, &nparams, bind_buf);
+        where_bind_text(binds, bind_idx, *like_pattern_out);
+    }
+    if (params->exclude_labels) {
+        char excl_clause[512];
+        search_build_exclude_labels(params->exclude_labels, binds, bind_idx, excl_clause,
+                                    (int)sizeof(excl_clause));
+        (void)where_append(where, where_sz, wlen, &nparams, excl_clause);
+    }
+
+    return nparams;
+}
+
 int cbm_store_search(cbm_store_t *s, const cbm_search_params_t *params, cbm_search_output_t *out) {
     memset(out, 0, sizeof(*out));
     if (!s || !s->db) {
         return CBM_STORE_ERR;
     }
 
-    /* Build WHERE clauses dynamically */
     char sql[4096];
     char count_sql[4096];
     int bind_idx = 0;
 
-    /* We build a query that selects nodes with optional degree subqueries */
     const char *select_cols =
         "SELECT n.id, n.project, n.label, n.name, n.qualified_name, "
         "n.file_path, n.start_line, n.end_line, n.properties, "
         "(SELECT COUNT(*) FROM edges e WHERE e.target_id = n.id AND e.type = 'CALLS') AS in_deg, "
         "(SELECT COUNT(*) FROM edges e WHERE e.source_id = n.id AND e.type = 'CALLS') AS out_deg ";
 
-    /* Start building WHERE */
     char where[2048] = "";
-    int wlen = 0;
-    int nparams = 0;
-
-    /* Track bind values */
-    struct {
-        enum { BV_TEXT } type;
-        const char *text;
-    } binds[16];
-
-#define ADD_WHERE(cond)                                                    \
-    do {                                                                   \
-        if (nparams > 0)                                                   \
-            wlen += snprintf(where + wlen, sizeof(where) - wlen, " AND "); \
-        wlen += snprintf(where + wlen, sizeof(where) - wlen, "%s", cond);  \
-        nparams++;                                                         \
-    } while (0)
-
-#define BIND_TEXT(val)                      \
-    do {                                    \
-        bind_idx++;                         \
-        binds[bind_idx - 1].type = BV_TEXT; \
-        binds[bind_idx - 1].text = val;     \
-    } while (0)
-
-    char bind_buf[64];
+    search_bind_t binds[16];
     char *like_pattern = NULL;
 
-    if (params->project) {
-        snprintf(bind_buf, sizeof(bind_buf), "n.project = ?%d", bind_idx + 1);
-        ADD_WHERE(bind_buf);
-        BIND_TEXT(params->project);
-    }
-    if (params->label) {
-        snprintf(bind_buf, sizeof(bind_buf), "n.label = ?%d", bind_idx + 1);
-        ADD_WHERE(bind_buf);
-        BIND_TEXT(params->label);
-    }
-    if (params->name_pattern) {
-        if (params->case_sensitive) {
-            /* Case-sensitive: use built-in REGEXP operator */
-            snprintf(bind_buf, sizeof(bind_buf), "n.name REGEXP ?%d", bind_idx + 1);
-        } else {
-            /* Case-insensitive: use iregexp() function call syntax */
-            snprintf(bind_buf, sizeof(bind_buf), "iregexp(?%d, n.name)", bind_idx + 1);
-        }
-        ADD_WHERE(bind_buf);
-        BIND_TEXT(params->name_pattern);
-    }
-    if (params->file_pattern) {
-        like_pattern = cbm_glob_to_like(params->file_pattern);
-        snprintf(bind_buf, sizeof(bind_buf), "n.file_path LIKE ?%d", bind_idx + 1);
-        ADD_WHERE(bind_buf);
-        BIND_TEXT(like_pattern);
-    }
-
-    /* Exclude labels: use parameterized placeholders to prevent SQL injection */
-    if (params->exclude_labels) {
-        char excl_clause[512] = "n.label NOT IN (";
-        int elen = (int)strlen(excl_clause);
-        for (int i = 0; params->exclude_labels[i]; i++) {
-            if (i > 0) {
-                elen += snprintf(excl_clause + elen, sizeof(excl_clause) - (size_t)elen, ",");
-                if (elen >= (int)sizeof(excl_clause)) {
-                    elen = (int)sizeof(excl_clause) - 1;
-                }
-            }
-            elen += snprintf(excl_clause + elen, sizeof(excl_clause) - (size_t)elen, "?%d",
-                             bind_idx + 1);
-            if (elen >= (int)sizeof(excl_clause)) {
-                elen = (int)sizeof(excl_clause) - 1;
-            }
-            BIND_TEXT(params->exclude_labels[i]);
-        }
-        snprintf(excl_clause + elen, sizeof(excl_clause) - (size_t)elen, ")");
-        ADD_WHERE(excl_clause);
-    }
+    int nparams =
+        search_build_where(params, where, (int)sizeof(where), binds, &bind_idx, &like_pattern);
 
     /* Build full SQL */
     if (nparams > 0) {
@@ -2039,35 +2043,17 @@ int cbm_store_search(cbm_store_t *s, const cbm_search_params_t *params, cbm_sear
         snprintf(sql, sizeof(sql), "%s FROM nodes n", select_cols);
     }
 
-    /* Degree filters: -1 = no filter, 0+ = active filter.
-     * Wraps in subquery to filter on computed degree columns. */
+    /* Degree filters */
     bool has_degree_filter = (params->min_degree >= 0 || params->max_degree >= 0);
-    if (has_degree_filter) {
-        char inner_sql[4096];
-        snprintf(inner_sql, sizeof(inner_sql), "%s", sql);
-        if (params->min_degree >= 0 && params->max_degree >= 0) {
-            snprintf(
-                sql, sizeof(sql),
-                "SELECT * FROM (%s) WHERE (in_deg + out_deg) >= %d AND (in_deg + out_deg) <= %d",
-                inner_sql, params->min_degree, params->max_degree);
-        } else if (params->min_degree >= 0) {
-            snprintf(sql, sizeof(sql), "SELECT * FROM (%s) WHERE (in_deg + out_deg) >= %d",
-                     inner_sql, params->min_degree);
-        } else {
-            snprintf(sql, sizeof(sql), "SELECT * FROM (%s) WHERE (in_deg + out_deg) <= %d",
-                     inner_sql, params->max_degree);
-        }
-    }
+    search_apply_degree_filter(sql, sizeof(sql), params);
 
     /* Count query (wrap the full query) */
     snprintf(count_sql, sizeof(count_sql), "SELECT COUNT(*) FROM (%s)", sql);
 
-    /* Add ORDER BY + LIMIT.
-     * When degree filter wraps in subquery, column refs lose the "n." prefix. */
+    /* Add ORDER BY + LIMIT */
     int limit = params->limit > 0 ? params->limit : 500000;
     int offset = params->offset;
-    bool has_degree_wrap = has_degree_filter;
-    const char *name_col = has_degree_wrap ? "name" : "n.name";
+    const char *name_col = has_degree_filter ? "name" : "n.name";
     char order_limit[128];
     snprintf(order_limit, sizeof(order_limit), " ORDER BY %s LIMIT %d OFFSET %d", name_col, limit,
              offset);
@@ -2146,12 +2132,97 @@ void cbm_store_search_free(cbm_search_output_t *out) {
 
 /* ── BFS Traversal ──────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+static int bfs_collect_edges(cbm_store_t *s, int64_t start_id, const cbm_node_hop_t *visited,
+                             int visited_count, const char *types_clause, const char **edge_types,
+                             int edge_type_count, cbm_edge_info_t **out_edges,
+                             int *out_edge_count) {
+    /* Build ID set: root + all visited */
+    char id_set[4096];
+    int ilen = snprintf(id_set, sizeof(id_set), "%lld", (long long)start_id);
+    if (ilen >= (int)sizeof(id_set)) {
+        ilen = (int)sizeof(id_set) - 1;
+    }
+    for (int i = 0; i < visited_count; i++) {
+        ilen += snprintf(id_set + ilen, sizeof(id_set) - (size_t)ilen, ",%lld",
+                         (long long)visited[i].node.id);
+        if (ilen >= (int)sizeof(id_set)) {
+            ilen = (int)sizeof(id_set) - 1;
+        }
+    }
+
+    char edge_sql[8192];
+    snprintf(edge_sql, sizeof(edge_sql),
+             "SELECT n1.name, n2.name, e.type "
+             "FROM edges e "
+             "JOIN nodes n1 ON n1.id = e.source_id "
+             "JOIN nodes n2 ON n2.id = e.target_id "
+             "WHERE e.source_id IN (%s) AND e.target_id IN (%s) "
+             "AND e.type IN (%s)",
+             id_set, id_set, types_clause);
+
+    sqlite3_stmt *estmt = NULL;
+    int rc = sqlite3_prepare_v2(s->db, edge_sql, -1, &estmt, NULL);
+    if (rc != SQLITE_OK) {
+        *out_edges = NULL;
+        *out_edge_count = 0;
+        return CBM_STORE_OK;
+    }
+
+    if (edge_type_count > 0) {
+        for (int i = 0; i < edge_type_count; i++) {
+            bind_text(estmt, i + 1, edge_types[i]);
+        }
+    } else {
+        bind_text(estmt, 1, "CALLS");
+    }
+
+    int ecap = 8;
+    int en = 0;
+    cbm_edge_info_t *edges = malloc(ecap * sizeof(cbm_edge_info_t));
+
+    while (sqlite3_step(estmt) == SQLITE_ROW) {
+        if (en >= ecap) {
+            ecap *= 2;
+            edges = safe_realloc(edges, ecap * sizeof(cbm_edge_info_t));
+        }
+        edges[en].from_name = heap_strdup((const char *)sqlite3_column_text(estmt, 0));
+        edges[en].to_name = heap_strdup((const char *)sqlite3_column_text(estmt, 1));
+        edges[en].type = heap_strdup((const char *)sqlite3_column_text(estmt, 2));
+        edges[en].confidence = 1.0;
+        en++;
+    }
+    sqlite3_finalize(estmt);
+
+    *out_edges = edges;
+    *out_edge_count = en;
+    return CBM_STORE_OK;
+}
+
+/* Build parameterized placeholder list "?1,?2,?3" for N edge types. */
+static void bfs_build_types_clause(int edge_type_count, char *buf, int buf_sz) {
+    if (edge_type_count <= 0) {
+        snprintf(buf, buf_sz, "?1");
+        return;
+    }
+    int tlen = 0;
+    for (int i = 0; i < edge_type_count; i++) {
+        if (i > 0) {
+            tlen += snprintf(buf + tlen, buf_sz - tlen, ",");
+            if (tlen >= buf_sz) {
+                tlen = buf_sz - 1;
+            }
+        }
+        tlen += snprintf(buf + tlen, buf_sz - tlen, "?%d", i + 1);
+        if (tlen >= buf_sz) {
+            tlen = buf_sz - 1;
+        }
+    }
+}
+
 int cbm_store_bfs(cbm_store_t *s, int64_t start_id, const char *direction, const char **edge_types,
                   int edge_type_count, int max_depth, int max_results, cbm_traverse_result_t *out) {
     memset(out, 0, sizeof(*out));
 
-    /* Load root node */
     cbm_node_t root = {0};
     int rc = cbm_store_find_node_by_id(s, start_id, &root);
     if (rc != CBM_STORE_OK) {
@@ -2159,25 +2230,8 @@ int cbm_store_bfs(cbm_store_t *s, int64_t start_id, const char *direction, const
     }
     out->root = root;
 
-    /* Build edge type IN clause with parameterized placeholders */
-    char types_clause[512] = "?1";
-    const char *default_edge_type = "CALLS";
-    if (edge_type_count > 0) {
-        int tlen = 0;
-        for (int i = 0; i < edge_type_count; i++) {
-            if (i > 0) {
-                tlen += snprintf(types_clause + tlen, sizeof(types_clause) - (size_t)tlen, ",");
-                if (tlen >= (int)sizeof(types_clause)) {
-                    tlen = (int)sizeof(types_clause) - 1;
-                }
-            }
-            tlen +=
-                snprintf(types_clause + tlen, sizeof(types_clause) - (size_t)tlen, "?%d", i + 1);
-            if (tlen >= (int)sizeof(types_clause)) {
-                tlen = (int)sizeof(types_clause) - 1;
-            }
-        }
-    }
+    char types_clause[512];
+    bfs_build_types_clause(edge_type_count, types_clause, (int)sizeof(types_clause));
 
     /* Build recursive CTE for BFS */
     char sql[4096];
@@ -2224,7 +2278,7 @@ int cbm_store_bfs(cbm_store_t *s, int64_t start_id, const char *direction, const
             bind_text(stmt, i + 1, edge_types[i]);
         }
     } else {
-        bind_text(stmt, 1, default_edge_type);
+        bind_text(stmt, 1, "CALLS");
     }
 
     int cap = 16;
@@ -2248,62 +2302,8 @@ int cbm_store_bfs(cbm_store_t *s, int64_t start_id, const char *direction, const
 
     /* Collect edges between visited nodes (including root) */
     if (n > 0) {
-        /* Build ID set: root + all visited */
-        char id_set[4096];
-        int ilen = snprintf(id_set, sizeof(id_set), "%lld", (long long)start_id);
-        if (ilen >= (int)sizeof(id_set)) {
-            ilen = (int)sizeof(id_set) - 1;
-        }
-        for (int i = 0; i < n; i++) {
-            ilen += snprintf(id_set + ilen, sizeof(id_set) - (size_t)ilen, ",%lld",
-                             (long long)out->visited[i].node.id);
-            if (ilen >= (int)sizeof(id_set)) {
-                ilen = (int)sizeof(id_set) - 1;
-            }
-        }
-
-        char edge_sql[8192];
-        snprintf(edge_sql, sizeof(edge_sql),
-                 "SELECT n1.name, n2.name, e.type "
-                 "FROM edges e "
-                 "JOIN nodes n1 ON n1.id = e.source_id "
-                 "JOIN nodes n2 ON n2.id = e.target_id "
-                 "WHERE e.source_id IN (%s) AND e.target_id IN (%s) "
-                 "AND e.type IN (%s)",
-                 id_set, id_set, types_clause);
-
-        sqlite3_stmt *estmt = NULL;
-        rc = sqlite3_prepare_v2(s->db, edge_sql, -1, &estmt, NULL);
-        if (rc == SQLITE_OK) {
-            /* Bind edge type parameters for the edge query */
-            if (edge_type_count > 0) {
-                for (int i = 0; i < edge_type_count; i++) {
-                    bind_text(estmt, i + 1, edge_types[i]);
-                }
-            } else {
-                bind_text(estmt, 1, default_edge_type);
-            }
-
-            int ecap = 8;
-            int en = 0;
-            cbm_edge_info_t *edges = malloc(ecap * sizeof(cbm_edge_info_t));
-
-            while (sqlite3_step(estmt) == SQLITE_ROW) {
-                if (en >= ecap) {
-                    ecap *= 2;
-                    edges = safe_realloc(edges, ecap * sizeof(cbm_edge_info_t));
-                }
-                edges[en].from_name = heap_strdup((const char *)sqlite3_column_text(estmt, 0));
-                edges[en].to_name = heap_strdup((const char *)sqlite3_column_text(estmt, 1));
-                edges[en].type = heap_strdup((const char *)sqlite3_column_text(estmt, 2));
-                edges[en].confidence = 1.0;
-                en++;
-            }
-            sqlite3_finalize(estmt);
-
-            out->edges = edges;
-            out->edge_count = en;
-        }
+        bfs_collect_edges(s, start_id, out->visited, n, types_clause, edge_types, edge_type_count,
+                          &out->edges, &out->edge_count);
     } else {
         out->edges = NULL;
         out->edge_count = 0;
@@ -2608,114 +2608,35 @@ bool cbm_is_test_file_path(const char *fp) {
     return strstr(fp, "test") != NULL;
 }
 
-/* File extension → language name mapping */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* File extension → language name mapping (table-driven) */
+typedef struct {
+    const char *ext;
+    const char *lang;
+} ext_lang_entry_t;
+
+static const ext_lang_entry_t ext_lang_table[] = {
+    {".py", "Python"},     {".go", "Go"},          {".js", "JavaScript"}, {".jsx", "JavaScript"},
+    {".ts", "TypeScript"}, {".tsx", "TypeScript"}, {".rs", "Rust"},       {".java", "Java"},
+    {".cpp", "C++"},       {".cc", "C++"},         {".cxx", "C++"},       {".c", "C"},
+    {".h", "C"},           {".cs", "C#"},          {".php", "PHP"},       {".lua", "Lua"},
+    {".scala", "Scala"},   {".kt", "Kotlin"},      {".rb", "Ruby"},       {".sh", "Bash"},
+    {".bash", "Bash"},     {".zig", "Zig"},        {".ex", "Elixir"},     {".exs", "Elixir"},
+    {".hs", "Haskell"},    {".ml", "OCaml"},       {".mli", "OCaml"},     {".html", "HTML"},
+    {".css", "CSS"},       {".yaml", "YAML"},      {".yml", "YAML"},      {".toml", "TOML"},
+    {".hcl", "HCL"},       {".tf", "HCL"},         {".sql", "SQL"},       {".erl", "Erlang"},
+    {".swift", "Swift"},   {".dart", "Dart"},      {".groovy", "Groovy"}, {".pl", "Perl"},
+    {".r", "R"},           {".scss", "SCSS"},      {".vue", "Vue"},       {".svelte", "Svelte"},
+    {NULL, NULL},
+};
+
 static const char *ext_to_lang(const char *ext) {
     if (!ext) {
         return NULL;
     }
-    /* Common extensions */
-    if (strcmp(ext, ".py") == 0) {
-        return "Python";
-    }
-    if (strcmp(ext, ".go") == 0) {
-        return "Go";
-    }
-    if (strcmp(ext, ".js") == 0 || strcmp(ext, ".jsx") == 0) {
-        return "JavaScript";
-    }
-    if (strcmp(ext, ".ts") == 0 || strcmp(ext, ".tsx") == 0) {
-        return "TypeScript";
-    }
-    if (strcmp(ext, ".rs") == 0) {
-        return "Rust";
-    }
-    if (strcmp(ext, ".java") == 0) {
-        return "Java";
-    }
-    if (strcmp(ext, ".cpp") == 0 || strcmp(ext, ".cc") == 0 || strcmp(ext, ".cxx") == 0) {
-        return "C++";
-    }
-    if (strcmp(ext, ".c") == 0 || strcmp(ext, ".h") == 0) {
-        return "C";
-    }
-    if (strcmp(ext, ".cs") == 0) {
-        return "C#";
-    }
-    if (strcmp(ext, ".php") == 0) {
-        return "PHP";
-    }
-    if (strcmp(ext, ".lua") == 0) {
-        return "Lua";
-    }
-    if (strcmp(ext, ".scala") == 0) {
-        return "Scala";
-    }
-    if (strcmp(ext, ".kt") == 0) {
-        return "Kotlin";
-    }
-    if (strcmp(ext, ".rb") == 0) {
-        return "Ruby";
-    }
-    if (strcmp(ext, ".sh") == 0 || strcmp(ext, ".bash") == 0) {
-        return "Bash";
-    }
-    if (strcmp(ext, ".zig") == 0) {
-        return "Zig";
-    }
-    if (strcmp(ext, ".ex") == 0 || strcmp(ext, ".exs") == 0) {
-        return "Elixir";
-    }
-    if (strcmp(ext, ".hs") == 0) {
-        return "Haskell";
-    }
-    if (strcmp(ext, ".ml") == 0 || strcmp(ext, ".mli") == 0) {
-        return "OCaml";
-    }
-    if (strcmp(ext, ".html") == 0) {
-        return "HTML";
-    }
-    if (strcmp(ext, ".css") == 0) {
-        return "CSS";
-    }
-    if (strcmp(ext, ".yaml") == 0 || strcmp(ext, ".yml") == 0) {
-        return "YAML";
-    }
-    if (strcmp(ext, ".toml") == 0) {
-        return "TOML";
-    }
-    if (strcmp(ext, ".hcl") == 0 || strcmp(ext, ".tf") == 0) {
-        return "HCL";
-    }
-    if (strcmp(ext, ".sql") == 0) {
-        return "SQL";
-    }
-    if (strcmp(ext, ".erl") == 0) {
-        return "Erlang";
-    }
-    if (strcmp(ext, ".swift") == 0) {
-        return "Swift";
-    }
-    if (strcmp(ext, ".dart") == 0) {
-        return "Dart";
-    }
-    if (strcmp(ext, ".groovy") == 0) {
-        return "Groovy";
-    }
-    if (strcmp(ext, ".pl") == 0) {
-        return "Perl";
-    }
-    if (strcmp(ext, ".r") == 0) {
-        return "R";
-    }
-    if (strcmp(ext, ".scss") == 0) {
-        return "SCSS";
-    }
-    if (strcmp(ext, ".vue") == 0) {
-        return "Vue";
-    }
-    if (strcmp(ext, ".svelte") == 0) {
-        return "Svelte";
+    for (const ext_lang_entry_t *e = ext_lang_table; e->ext; e++) {
+        if (strcmp(ext, e->ext) == 0) {
+            return e->lang;
+        }
     }
     return NULL;
 }
@@ -2839,7 +2760,30 @@ static int arch_entry_points(cbm_store_t *s, const char *project, cbm_architectu
     return CBM_STORE_OK;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Extract a JSON string value from a simple JSON object by key name. */
+static char *extract_json_string_prop(const char *json, const char *key, int key_len) {
+    if (!json) {
+        return NULL;
+    }
+    const char *m = strstr(json, key);
+    if (!m) {
+        return NULL;
+    }
+    m = strchr(m + key_len, '"');
+    if (!m) {
+        return NULL;
+    }
+    m++;
+    const char *end = strchr(m, '"');
+    if (!end || end - m >= 256) {
+        return NULL;
+    }
+    char vbuf[256];
+    memcpy(vbuf, m, end - m);
+    vbuf[end - m] = '\0';
+    return heap_strdup(vbuf);
+}
+
 static int arch_routes(cbm_store_t *s, const char *project, cbm_architecture_info_t *out) {
     const char *sql = "SELECT name, properties, COALESCE(file_path, '') FROM nodes "
                       "WHERE project=?1 AND label='Route' "
@@ -2868,57 +2812,25 @@ static int arch_routes(cbm_store_t *s, const char *project, cbm_architecture_inf
             arr = safe_realloc(arr, cap * sizeof(cbm_route_info_t));
         }
 
-        /* Parse JSON properties for method, path, handler */
         arr[n].method = heap_strdup("");
         arr[n].path = heap_strdup(name);
         arr[n].handler = heap_strdup("");
 
-        if (props) {
-            /* Simple JSON extraction — find "method":"...", "path":"...", "handler":"..." */
-            const char *m;
-            char vbuf[256];
-            m = strstr(props, "\"method\"");
-            if (m) {
-                m = strchr(m + 8, '"');
-                if (m) {
-                    m++;
-                    const char *end = strchr(m, '"');
-                    if (end && end - m < (int)sizeof(vbuf)) {
-                        memcpy(vbuf, m, end - m);
-                        vbuf[end - m] = '\0';
-                        free((void *)arr[n].method);
-                        arr[n].method = heap_strdup(vbuf);
-                    }
-                }
-            }
-            m = strstr(props, "\"path\"");
-            if (m) {
-                m = strchr(m + 6, '"');
-                if (m) {
-                    m++;
-                    const char *end = strchr(m, '"');
-                    if (end && end - m < (int)sizeof(vbuf)) {
-                        memcpy(vbuf, m, end - m);
-                        vbuf[end - m] = '\0';
-                        free((void *)arr[n].path);
-                        arr[n].path = heap_strdup(vbuf);
-                    }
-                }
-            }
-            m = strstr(props, "\"handler\"");
-            if (m) {
-                m = strchr(m + 9, '"');
-                if (m) {
-                    m++;
-                    const char *end = strchr(m, '"');
-                    if (end && end - m < (int)sizeof(vbuf)) {
-                        memcpy(vbuf, m, end - m);
-                        vbuf[end - m] = '\0';
-                        free((void *)arr[n].handler);
-                        arr[n].handler = heap_strdup(vbuf);
-                    }
-                }
-            }
+        char *val;
+        val = extract_json_string_prop(props, "\"method\"", 8);
+        if (val) {
+            free((void *)arr[n].method);
+            arr[n].method = val;
+        }
+        val = extract_json_string_prop(props, "\"path\"", 6);
+        if (val) {
+            free((void *)arr[n].path);
+            arr[n].path = val;
+        }
+        val = extract_json_string_prop(props, "\"handler\"", 9);
+        if (val) {
+            free((void *)arr[n].handler);
+            arr[n].handler = val;
         }
         n++;
     }
@@ -2962,7 +2874,36 @@ static int arch_hotspots(cbm_store_t *s, const char *project, cbm_architecture_i
     return CBM_STORE_OK;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Look up package name for a node ID in the parallel arrays. */
+static const char *lookup_pkg(const int64_t *nids, char **npkgs, int nn, int64_t id) {
+    for (int i = 0; i < nn; i++) {
+        if (nids[i] == id) {
+            return npkgs[i];
+        }
+    }
+    return NULL;
+}
+
+/* Accumulate a cross-package boundary into parallel arrays. */
+static void accum_boundary(const char *src_pkg, const char *tgt_pkg, char **bfroms, char **btos,
+                           int *bcounts, int *bn, int bcap) {
+    int found = -1;
+    for (int i = 0; i < *bn; i++) {
+        if (strcmp(bfroms[i], src_pkg) == 0 && strcmp(btos[i], tgt_pkg) == 0) {
+            found = i;
+            break;
+        }
+    }
+    if (found >= 0) {
+        bcounts[found]++;
+    } else if (*bn < bcap) {
+        bfroms[*bn] = heap_strdup(src_pkg);
+        btos[*bn] = heap_strdup(tgt_pkg);
+        bcounts[*bn] = 1;
+        (*bn)++;
+    }
+}
+
 static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_boundary_t **out_arr,
                            int *out_count) {
     /* Build nodeID → package map */
@@ -2975,7 +2916,6 @@ static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_bo
     }
     bind_text(nstmt, 1, project);
 
-    /* Simple parallel arrays for node → package mapping */
     int ncap = 256;
     int nn = 0;
     int64_t *nids = malloc(ncap * sizeof(int64_t));
@@ -3008,7 +2948,6 @@ static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_bo
     }
     bind_text(estmt, 1, project);
 
-    /* Boundary counts: parallel arrays for from→to→count */
     int bcap = 32;
     int bn = 0;
     char **bfroms = malloc(bcap * sizeof(char *));
@@ -3018,35 +2957,12 @@ static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_bo
     while (sqlite3_step(estmt) == SQLITE_ROW) {
         int64_t src_id = sqlite3_column_int64(estmt, 0);
         int64_t tgt_id = sqlite3_column_int64(estmt, 1);
-        const char *src_pkg = NULL;
-        const char *tgt_pkg = NULL;
-        for (int i = 0; i < nn; i++) {
-            if (nids[i] == src_id) {
-                src_pkg = npkgs[i];
-            }
-            if (nids[i] == tgt_id) {
-                tgt_pkg = npkgs[i];
-            }
-        }
+        const char *src_pkg = lookup_pkg(nids, npkgs, nn, src_id);
+        const char *tgt_pkg = lookup_pkg(nids, npkgs, nn, tgt_id);
         if (!src_pkg || !tgt_pkg || !src_pkg[0] || !tgt_pkg[0] || strcmp(src_pkg, tgt_pkg) == 0) {
             continue;
         }
-
-        int found = -1;
-        for (int i = 0; i < bn; i++) {
-            if (strcmp(bfroms[i], src_pkg) == 0 && strcmp(btos[i], tgt_pkg) == 0) {
-                found = i;
-                break;
-            }
-        }
-        if (found >= 0) {
-            bcounts[found]++;
-        } else if (bn < bcap) {
-            bfroms[bn] = heap_strdup(src_pkg);
-            btos[bn] = heap_strdup(tgt_pkg);
-            bcounts[bn] = 1;
-            bn++;
-        }
+        accum_boundary(src_pkg, tgt_pkg, bfroms, btos, bcounts, &bn, bcap);
     }
     sqlite3_finalize(estmt);
     for (int i = 0; i < nn; i++) {
@@ -3093,7 +3009,76 @@ static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_bo
     return CBM_STORE_OK;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+#define MAX_PREVIEW_NAMES 15
+
+/* Fallback: derive packages from QN segments when no Package nodes exist. */
+static int arch_packages_from_qn(cbm_store_t *s, const char *project,
+                                 cbm_package_summary_t **out_arr, int *out_count) {
+    const char *qsql = "SELECT qualified_name FROM nodes WHERE project=?1 AND label IN "
+                       "('Function','Method','Class')";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(s->db, qsql, -1, &stmt, NULL) != SQLITE_OK) {
+        store_set_error_sqlite(s, "arch_packages_qn");
+        return CBM_STORE_ERR;
+    }
+    bind_text(stmt, 1, project);
+
+    char *pnames[64];
+    int pcounts[64];
+    int np = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *qn = (const char *)sqlite3_column_text(stmt, 0);
+        const char *pkg = cbm_qn_to_package(qn);
+        if (!pkg[0]) {
+            continue;
+        }
+        int found = -1;
+        for (int i = 0; i < np; i++) {
+            if (strcmp(pnames[i], pkg) == 0) {
+                found = i;
+                break;
+            }
+        }
+        if (found >= 0) {
+            pcounts[found]++;
+        } else if (np < 64) {
+            pnames[np] = heap_strdup(pkg);
+            pcounts[np] = 1;
+            np++;
+        }
+    }
+    sqlite3_finalize(stmt);
+
+    /* Sort by count desc */
+    for (int i = 1; i < np; i++) {
+        int j = i;
+        while (j > 0 && pcounts[j] > pcounts[j - 1]) {
+            int tc = pcounts[j];
+            pcounts[j] = pcounts[j - 1];
+            pcounts[j - 1] = tc;
+            char *tn = pnames[j];
+            pnames[j] = pnames[j - 1];
+            pnames[j - 1] = tn;
+            j--;
+        }
+    }
+    if (np > MAX_PREVIEW_NAMES) {
+        for (int i = MAX_PREVIEW_NAMES; i < np; i++) {
+            free(pnames[i]);
+        }
+        np = MAX_PREVIEW_NAMES;
+    }
+
+    cbm_package_summary_t *arr = calloc(np, sizeof(cbm_package_summary_t));
+    for (int i = 0; i < np; i++) {
+        arr[i].name = pnames[i];
+        arr[i].node_count = pcounts[i];
+    }
+    *out_arr = arr;
+    *out_count = np;
+    return CBM_STORE_OK;
+}
+
 static int arch_packages(cbm_store_t *s, const char *project, cbm_architecture_info_t *out) {
     /* Try Package nodes first */
     const char *sql =
@@ -3123,69 +3108,9 @@ static int arch_packages(cbm_store_t *s, const char *project, cbm_architecture_i
     /* Fallback: group by QN segment if no Package nodes */
     if (n == 0) {
         free(arr);
-        const char *qsql = "SELECT qualified_name FROM nodes WHERE project=?1 AND label IN "
-                           "('Function','Method','Class')";
-        if (sqlite3_prepare_v2(s->db, qsql, -1, &stmt, NULL) != SQLITE_OK) {
-            store_set_error_sqlite(s, "arch_packages_qn");
-            return CBM_STORE_ERR;
-        }
-        bind_text(stmt, 1, project);
-
-        /* Count per package using parallel arrays */
-        char *pnames[64];
-        int pcounts[64];
-        int np = 0;
-        while (sqlite3_step(stmt) == SQLITE_ROW) {
-            const char *qn = (const char *)sqlite3_column_text(stmt, 0);
-            const char *pkg = cbm_qn_to_package(qn);
-            if (!pkg[0]) {
-                continue;
-            }
-            int found = -1;
-            for (int i = 0; i < np; i++) {
-                if (strcmp(pnames[i], pkg) == 0) {
-                    found = i;
-                    break;
-                }
-            }
-            if (found >= 0) {
-                {
-                    pcounts[found]++;
-                }
-            } else if (np < 64) {
-                pnames[np] = heap_strdup(pkg);
-                pcounts[np] = 1;
-                np++;
-            }
-        }
-        sqlite3_finalize(stmt);
-
-        /* Sort by count desc */
-        for (int i = 1; i < np; i++) {
-            int j = i;
-            while (j > 0 && pcounts[j] > pcounts[j - 1]) {
-                int tc = pcounts[j];
-                pcounts[j] = pcounts[j - 1];
-                pcounts[j - 1] = tc;
-                char *tn = pnames[j];
-                pnames[j] = pnames[j - 1];
-                pnames[j - 1] = tn;
-                j--;
-            }
-        }
-#define MAX_PREVIEW_NAMES 15
-        if (np > MAX_PREVIEW_NAMES) {
-            for (int i = MAX_PREVIEW_NAMES; i < np; i++) {
-                free(pnames[i]);
-            }
-            np = MAX_PREVIEW_NAMES;
-        }
-
-        arr = calloc(np, sizeof(cbm_package_summary_t));
-        n = np;
-        for (int i = 0; i < np; i++) {
-            arr[i].name = pnames[i];
-            arr[i].node_count = pcounts[i];
+        int rc = arch_packages_from_qn(s, project, &arr, &n);
+        if (rc != CBM_STORE_OK) {
+            return rc;
         }
     }
 
@@ -3229,7 +3154,47 @@ static void classify_layer(const char *pkg, int in, int out_deg, bool has_routes
     (void)pkg;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Find or insert a package name, returning its index. Returns -1 if full. */
+static int find_or_add_pkg(char **all_pkgs, int *npkgs, int max_pkgs, const char *pkg) {
+    for (int j = 0; j < *npkgs; j++) {
+        if (strcmp(all_pkgs[j], pkg) == 0) {
+            return j;
+        }
+    }
+    if (*npkgs < max_pkgs) {
+        int idx = *npkgs;
+        all_pkgs[idx] = heap_strdup(pkg);
+        (*npkgs)++;
+        return idx;
+    }
+    return -1;
+}
+
+/* Check if a package name appears in an array. */
+static bool pkg_in_list(const char *pkg, char **list, int count) {
+    for (int j = 0; j < count; j++) {
+        if (strcmp(pkg, list[j]) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Collect package names from nodes matching a SQL query. */
+static int collect_pkg_names(cbm_store_t *s, const char *sql, const char *project, char **pkgs,
+                             int max_pkgs) {
+    sqlite3_stmt *stmt = NULL;
+    sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL);
+    bind_text(stmt, 1, project);
+    int count = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && count < max_pkgs) {
+        const char *qn = (const char *)sqlite3_column_text(stmt, 0);
+        pkgs[count++] = heap_strdup(cbm_qn_to_package(qn));
+    }
+    sqlite3_finalize(stmt);
+    return count;
+}
+
 static int arch_layers(cbm_store_t *s, const char *project, cbm_architecture_info_t *out) {
     /* Get boundaries for fan analysis */
     cbm_cross_pkg_boundary_t *boundaries = NULL;
@@ -3239,36 +3204,17 @@ static int arch_layers(cbm_store_t *s, const char *project, cbm_architecture_inf
         return rc;
     }
 
-    /* Check which packages have Route nodes */
+    /* Collect route and entry point packages */
     char *route_pkgs[32];
-    int nrpkgs = 0;
-    {
-        const char *sql = "SELECT qualified_name FROM nodes WHERE project=?1 AND label='Route'";
-        sqlite3_stmt *stmt = NULL;
-        sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL);
-        bind_text(stmt, 1, project);
-        while (sqlite3_step(stmt) == SQLITE_ROW && nrpkgs < 32) {
-            const char *qn = (const char *)sqlite3_column_text(stmt, 0);
-            route_pkgs[nrpkgs++] = heap_strdup(cbm_qn_to_package(qn));
-        }
-        sqlite3_finalize(stmt);
-    }
+    int nrpkgs =
+        collect_pkg_names(s, "SELECT qualified_name FROM nodes WHERE project=?1 AND label='Route'",
+                          project, route_pkgs, 32);
 
-    /* Check which packages have entry points */
     char *entry_pkgs[32];
-    int nepkgs = 0;
-    {
-        const char *sql = "SELECT qualified_name FROM nodes WHERE project=?1 AND "
-                          "json_extract(properties, '$.is_entry_point') = 1";
-        sqlite3_stmt *stmt = NULL;
-        sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL);
-        bind_text(stmt, 1, project);
-        while (sqlite3_step(stmt) == SQLITE_ROW && nepkgs < 32) {
-            const char *qn = (const char *)sqlite3_column_text(stmt, 0);
-            entry_pkgs[nepkgs++] = heap_strdup(cbm_qn_to_package(qn));
-        }
-        sqlite3_finalize(stmt);
-    }
+    int nepkgs = collect_pkg_names(s,
+                                   "SELECT qualified_name FROM nodes WHERE project=?1 AND "
+                                   "json_extract(properties, '$.is_entry_point') = 1",
+                                   project, entry_pkgs, 32);
 
     /* Compute fan-in/out per package */
     char *all_pkgs[64];
@@ -3279,35 +3225,11 @@ static int arch_layers(cbm_store_t *s, const char *project, cbm_architecture_inf
     memset(fan_out, 0, sizeof(fan_out));
 
     for (int i = 0; i < bcount; i++) {
-        /* Add or find "from" package */
-        int fi = -1;
-        for (int j = 0; j < npkgs; j++) {
-            if (strcmp(all_pkgs[j], boundaries[i].from) == 0) {
-                fi = j;
-                break;
-            }
-        }
-        if (fi < 0 && npkgs < 64) {
-            fi = npkgs;
-            all_pkgs[npkgs] = heap_strdup(boundaries[i].from);
-            npkgs++;
-        }
+        int fi = find_or_add_pkg(all_pkgs, &npkgs, 64, boundaries[i].from);
         if (fi >= 0) {
             fan_out[fi] += boundaries[i].call_count;
         }
-
-        int ti = -1;
-        for (int j = 0; j < npkgs; j++) {
-            if (strcmp(all_pkgs[j], boundaries[i].to) == 0) {
-                ti = j;
-                break;
-            }
-        }
-        if (ti < 0 && npkgs < 64) {
-            ti = npkgs;
-            all_pkgs[npkgs] = heap_strdup(boundaries[i].to);
-            npkgs++;
-        }
+        int ti = find_or_add_pkg(all_pkgs, &npkgs, 64, boundaries[i].to);
         if (ti >= 0) {
             fan_in[ti] += boundaries[i].call_count;
         }
@@ -3315,49 +3237,18 @@ static int arch_layers(cbm_store_t *s, const char *project, cbm_architecture_inf
 
     /* Also include route/entry packages */
     for (int i = 0; i < nrpkgs; i++) {
-        int found = -1;
-        for (int j = 0; j < npkgs; j++) {
-            if (strcmp(all_pkgs[j], route_pkgs[i]) == 0) {
-                found = j;
-                break;
-            }
-        }
-        if (found < 0 && npkgs < 64) {
-            all_pkgs[npkgs] = heap_strdup(route_pkgs[i]);
-            npkgs++;
-        }
+        find_or_add_pkg(all_pkgs, &npkgs, 64, route_pkgs[i]);
     }
     for (int i = 0; i < nepkgs; i++) {
-        int found = -1;
-        for (int j = 0; j < npkgs; j++) {
-            if (strcmp(all_pkgs[j], entry_pkgs[i]) == 0) {
-                found = j;
-                break;
-            }
-        }
-        if (found < 0 && npkgs < 64) {
-            all_pkgs[npkgs] = heap_strdup(entry_pkgs[i]);
-            npkgs++;
-        }
+        find_or_add_pkg(all_pkgs, &npkgs, 64, entry_pkgs[i]);
     }
 
     /* Classify each package */
     out->layers = calloc(npkgs, sizeof(cbm_package_layer_t));
     out->layer_count = npkgs;
     for (int i = 0; i < npkgs; i++) {
-        bool has_route = false, has_entry = false;
-        for (int j = 0; j < nrpkgs; j++) {
-            if (strcmp(all_pkgs[i], route_pkgs[j]) == 0) {
-                has_route = true;
-                break;
-            }
-        }
-        for (int j = 0; j < nepkgs; j++) {
-            if (strcmp(all_pkgs[i], entry_pkgs[j]) == 0) {
-                has_entry = true;
-                break;
-            }
-        }
+        bool has_route = pkg_in_list(all_pkgs[i], route_pkgs, nrpkgs);
+        bool has_entry = pkg_in_list(all_pkgs[i], entry_pkgs, nepkgs);
         const char *layer;
         const char *reason;
         classify_layer(all_pkgs[i], fan_in[i], fan_out[i], has_route, has_entry, &layer, &reason);
@@ -3393,151 +3284,139 @@ static int arch_layers(cbm_store_t *s, const char *project, cbm_architecture_inf
     return CBM_STORE_OK;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
-static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_info_t *out) {
-    const char *sql = "SELECT file_path FROM nodes WHERE project=?1 AND label='File'";
-    sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
-        store_set_error_sqlite(s, "arch_file_tree");
-        return CBM_STORE_ERR;
+/* Add a child to a dir entry if not already present. */
+static void dir_add_child(char ***children, int *child_count, int *child_cap, const char *child) {
+    for (int k = 0; k < *child_count; k++) {
+        if (strcmp((*children)[k], child) == 0) {
+            return;
+        }
     }
-    bind_text(stmt, 1, project);
+    if (*child_count >= *child_cap) {
+        *child_cap = *child_cap ? *child_cap * 2 : 4;
+        *children = realloc(*children, *child_cap * sizeof(char *));
+    }
+    (*children)[(*child_count)++] = heap_strdup(child);
+}
 
-    /* Collect all file paths + build directory children map */
-    int fcap = 32;
-    int fn = 0;
-    char **files = malloc(fcap * sizeof(char *));
+/* Find or create a directory entry by path. Returns its index, or -1 if full. */
+static int dir_find_or_create(char **dir_paths, int *dir_child_counts, char ***dir_children,
+                              int *dir_children_caps, int *dn, int dcap, const char *dir) {
+    for (int i = 0; i < *dn; i++) {
+        if (strcmp(dir_paths[i], dir) == 0) {
+            return i;
+        }
+    }
+    if (*dn < dcap) {
+        int idx = *dn;
+        dir_paths[idx] = heap_strdup(dir);
+        dir_child_counts[idx] = 0;
+        dir_children[idx] = NULL;
+        dir_children_caps[idx] = 0;
+        (*dn)++;
+        return idx;
+    }
+    return -1;
+}
 
-    /* Directory tree: parallel arrays of dir → children set */
-    int dcap = 64;
-    int dn = 0;
-    char **dir_paths = calloc(dcap, sizeof(char *));
-    int *dir_child_counts = calloc(dcap, sizeof(int));
-    /* Track unique children per dir using a simple string array */
-    char ***dir_children = calloc(dcap, sizeof(char **));
-    int *dir_children_caps = calloc(dcap, sizeof(int));
+/* Create a file tree entry by checking if a path is a file and counting dir children. */
+static cbm_file_tree_entry_t make_tree_entry(const char *path, char **files, int fn,
+                                             char **dir_paths, const int *dir_child_counts,
+                                             int dn) {
+    cbm_file_tree_entry_t e = {0};
+    e.path = heap_strdup(path);
+    bool is_file = false;
+    for (int f = 0; f < fn; f++) {
+        if (strcmp(files[f], path) == 0) {
+            is_file = true;
+            break;
+        }
+    }
+    e.type = heap_strdup(is_file ? "file" : "dir");
+    for (int d = 0; d < dn; d++) {
+        if (strcmp(dir_paths[d], path) == 0) {
+            e.children = dir_child_counts[d];
+            break;
+        }
+    }
+    return e;
+}
 
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        const char *fp = (const char *)sqlite3_column_text(stmt, 0);
-        if (!fp) {
+/* Split a path by '/' into parts. Returns number of parts. */
+static int split_path_parts(const char *fp, char *buf, int buf_sz, char **parts, int max_parts) {
+    strncpy(buf, fp, buf_sz - 1);
+    buf[buf_sz - 1] = '\0';
+    int nparts = 0;
+    char *p = buf;
+    parts[nparts++] = p;
+    while (*p && nparts < max_parts) {
+        if (*p == '/') {
+            *p = '\0';
+            parts[nparts++] = p + 1;
+        }
+        p++;
+    }
+    return nparts;
+}
+
+/* Register dir hierarchy for one file path. */
+static void arch_register_file_dirs(const char *fp, char **dir_paths, int *dir_child_counts,
+                                    char ***dir_children, int *dir_children_caps, int *dn,
+                                    int dcap) {
+    char tmp[512];
+    char *parts[16];
+    int nparts = split_path_parts(fp, tmp, (int)sizeof(tmp), parts, 16);
+
+    int ri = dir_find_or_create(dir_paths, dir_child_counts, dir_children, dir_children_caps, dn,
+                                dcap, "");
+    if (ri >= 0 && nparts > 0) {
+        dir_add_child(&dir_children[ri], &dir_child_counts[ri], &dir_children_caps[ri], parts[0]);
+    }
+
+    for (int depth = 0; depth < nparts - 1 && depth < 3; depth++) {
+        char dir[512] = "";
+        for (int k = 0; k <= depth; k++) {
+            if (k > 0) {
+                strcat(dir, "/");
+            }
+            strcat(dir, parts[k]);
+        }
+        const char *child = (depth + 1 < nparts) ? parts[depth + 1] : NULL;
+        if (!child) {
             continue;
         }
-        if (fn >= fcap) {
-            fcap *= 2;
-            files = safe_realloc(files, fcap * sizeof(char *));
-        }
-        files[fn++] = heap_strdup(fp);
-
-        /* Register path components in dir tree (up to 3 levels deep) */
-        char tmp[512];
-        strncpy(tmp, fp, sizeof(tmp) - 1);
-        tmp[sizeof(tmp) - 1] = '\0';
-
-        /* Split by '/' */
-        char *parts[16];
-        int nparts = 0;
-        char *p = tmp;
-        parts[nparts++] = p;
-        while (*p && nparts < 16) {
-            if (*p == '/') {
-                *p = '\0';
-                parts[nparts++] = p + 1;
-            }
-            p++;
-        }
-
-        /* Register root children */
-        {
-            int ri = -1;
-            for (int i = 0; i < dn; i++) {
-                if (strcmp(dir_paths[i], "") == 0) {
-                    ri = i;
-                    break;
-                }
-            }
-            if (ri < 0 && dn < dcap) {
-                ri = dn;
-                dir_paths[dn] = heap_strdup("");
-                dir_child_counts[dn] = 0;
-                dir_children[dn] = NULL;
-                dir_children_caps[dn] = 0;
-                dn++;
-            }
-            if (ri >= 0 && nparts > 0) {
-                /* Check if child already exists */
-                bool exists = false;
-                for (int k = 0; k < dir_child_counts[ri]; k++) {
-                    if (strcmp(dir_children[ri][k], parts[0]) == 0) {
-                        exists = true;
-                        break;
-                    }
-                }
-                if (!exists) {
-                    if (dir_child_counts[ri] >= dir_children_caps[ri]) {
-                        dir_children_caps[ri] =
-                            dir_children_caps[ri] ? dir_children_caps[ri] * 2 : 4;
-                        dir_children[ri] =
-                            realloc(dir_children[ri], dir_children_caps[ri] * sizeof(char *));
-                    }
-                    dir_children[ri][dir_child_counts[ri]++] = heap_strdup(parts[0]);
-                }
-            }
-        }
-
-        /* Register deeper dir children (depth 0..2) */
-        for (int depth = 0; depth < nparts - 1 && depth < 3; depth++) {
-            /* Build dir path */
-            char dir[512] = "";
-            for (int k = 0; k <= depth; k++) {
-                if (k > 0) {
-                    strcat(dir, "/");
-                }
-                strcat(dir, parts[k]);
-            }
-            const char *child = (depth + 1 < nparts) ? parts[depth + 1] : NULL;
-            if (!child) {
-                continue;
-            }
-
-            int di = -1;
-            for (int i = 0; i < dn; i++) {
-                if (strcmp(dir_paths[i], dir) == 0) {
-                    di = i;
-                    break;
-                }
-            }
-            if (di < 0 && dn < dcap) {
-                di = dn;
-                dir_paths[dn] = heap_strdup(dir);
-                dir_child_counts[dn] = 0;
-                dir_children[dn] = NULL;
-                dir_children_caps[dn] = 0;
-                dn++;
-            }
-            if (di >= 0) {
-                bool exists = false;
-                for (int k = 0; k < dir_child_counts[di]; k++) {
-                    if (strcmp(dir_children[di][k], child) == 0) {
-                        exists = true;
-                        break;
-                    }
-                }
-                if (!exists) {
-                    if (dir_child_counts[di] >= dir_children_caps[di]) {
-                        dir_children_caps[di] =
-                            dir_children_caps[di] ? dir_children_caps[di] * 2 : 4;
-                        dir_children[di] =
-                            realloc(dir_children[di], dir_children_caps[di] * sizeof(char *));
-                    }
-                    dir_children[di][dir_child_counts[di]++] = heap_strdup(child);
-                }
-            }
+        int di = dir_find_or_create(dir_paths, dir_child_counts, dir_children, dir_children_caps,
+                                    dn, dcap, dir);
+        if (di >= 0) {
+            dir_add_child(&dir_children[di], &dir_child_counts[di], &dir_children_caps[di], child);
         }
     }
-    sqlite3_finalize(stmt);
+}
 
-    /* Build file set for type detection */
-    /* Collect tree entries */
+/* Count the number of '/' in a string. */
+static int count_slashes(const char *s) {
+    int n = 0;
+    for (; *s; s++) {
+        if (*s == '/') {
+            n++;
+        }
+    }
+    return n;
+}
+
+/* Push a tree entry, growing the array if needed. */
+static void push_tree_entry(cbm_file_tree_entry_t **entries, int *en, int *ecap,
+                            cbm_file_tree_entry_t e) {
+    if (*en >= *ecap) {
+        *ecap *= 2;
+        *entries = safe_realloc(*entries, *ecap * sizeof(cbm_file_tree_entry_t));
+    }
+    (*entries)[(*en)++] = e;
+}
+
+/* Collect tree entries from dir arrays. */
+static void arch_collect_entries(char **dir_paths, int *dir_child_counts, char ***dir_children,
+                                 int dn, char **files, int fn, cbm_file_tree_entry_t **entries_out,
+                                 int *en_out) {
     int ecap = 64;
     int en = 0;
     cbm_file_tree_entry_t *entries = calloc(ecap, sizeof(cbm_file_tree_entry_t));
@@ -3548,83 +3427,22 @@ static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_
             continue;
         }
         for (int k = 0; k < dir_child_counts[i]; k++) {
-            if (en >= ecap) {
-                ecap *= 2;
-                entries = safe_realloc(entries, ecap * sizeof(cbm_file_tree_entry_t));
-            }
-            const char *child = dir_children[i][k];
-            /* Check if it's a file */
-            bool is_file = false;
-            for (int f = 0; f < fn; f++) {
-                if (strcmp(files[f], child) == 0) {
-                    is_file = true;
-                    break;
-                }
-            }
-            /* Count its children in dir tree */
-            int nch = 0;
-            for (int d = 0; d < dn; d++) {
-                if (strcmp(dir_paths[d], child) == 0) {
-                    nch = dir_child_counts[d];
-                    break;
-                }
-            }
-            entries[en].path = heap_strdup(child);
-            if (is_file) {
-                entries[en].type = heap_strdup("file");
-            } else {
-                entries[en].type = heap_strdup("dir");
-            }
-            entries[en].children = nch;
-            en++;
+            push_tree_entry(
+                &entries, &en, &ecap,
+                make_tree_entry(dir_children[i][k], files, fn, dir_paths, dir_child_counts, dn));
         }
     }
 
-    /* Non-root dir children */
+    /* Non-root dir children (depth < 3) */
     for (int i = 0; i < dn; i++) {
-        if (strcmp(dir_paths[i], "") == 0) {
+        if (strcmp(dir_paths[i], "") == 0 || count_slashes(dir_paths[i]) >= 3) {
             continue;
         }
-        /* Limit depth to 3 levels */
-        int slashes = 0;
-        for (const char *p = dir_paths[i]; *p; p++) {
-            if (*p == '/') {
-                slashes++;
-            }
-        }
-        if (slashes >= 3) {
-            continue;
-        }
-
         for (int k = 0; k < dir_child_counts[i]; k++) {
-            if (en >= ecap) {
-                ecap *= 2;
-                entries = safe_realloc(entries, ecap * sizeof(cbm_file_tree_entry_t));
-            }
             char path[512];
             snprintf(path, sizeof(path), "%s/%s", dir_paths[i], dir_children[i][k]);
-            bool is_file = false;
-            for (int f = 0; f < fn; f++) {
-                if (strcmp(files[f], path) == 0) {
-                    is_file = true;
-                    break;
-                }
-            }
-            int nch = 0;
-            for (int d = 0; d < dn; d++) {
-                if (strcmp(dir_paths[d], path) == 0) {
-                    nch = dir_child_counts[d];
-                    break;
-                }
-            }
-            entries[en].path = heap_strdup(path);
-            if (is_file) {
-                entries[en].type = heap_strdup("file");
-            } else {
-                entries[en].type = heap_strdup("dir");
-            }
-            entries[en].children = nch;
-            en++;
+            push_tree_entry(&entries, &en, &ecap,
+                            make_tree_entry(path, files, fn, dir_paths, dir_child_counts, dn));
         }
     }
 
@@ -3639,7 +3457,13 @@ static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_
         }
     }
 
-    /* Cleanup dir tree */
+    *entries_out = entries;
+    *en_out = en;
+}
+
+/* Free dir arrays. */
+static void arch_free_dirs(char **dir_paths, int *dir_child_counts, char ***dir_children,
+                           int *dir_children_caps, int dn, char **files, int fn) {
     for (int i = 0; i < dn; i++) {
         free(dir_paths[i]);
         for (int k = 0; k < dir_child_counts[i]; k++) {
@@ -3655,54 +3479,84 @@ static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_
         free(files[i]);
     }
     free(files);
+}
 
-    out->file_tree = entries;
-    out->file_tree_count = en;
+static int arch_file_tree(cbm_store_t *s, const char *project, cbm_architecture_info_t *out) {
+    const char *sql = "SELECT file_path FROM nodes WHERE project=?1 AND label='File'";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        store_set_error_sqlite(s, "arch_file_tree");
+        return CBM_STORE_ERR;
+    }
+    bind_text(stmt, 1, project);
+
+    int fcap = 32;
+    int fn = 0;
+    char **files = malloc(fcap * sizeof(char *));
+
+    int dcap = 64;
+    int dn = 0;
+    char **dir_paths = calloc(dcap, sizeof(char *));
+    int *dir_child_counts = calloc(dcap, sizeof(int));
+    char ***dir_children = calloc(dcap, sizeof(char **));
+    int *dir_children_caps = calloc(dcap, sizeof(int));
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        const char *fp = (const char *)sqlite3_column_text(stmt, 0);
+        if (!fp) {
+            continue;
+        }
+        if (fn >= fcap) {
+            fcap *= 2;
+            files = safe_realloc(files, fcap * sizeof(char *));
+        }
+        files[fn++] = heap_strdup(fp);
+        arch_register_file_dirs(fp, dir_paths, dir_child_counts, dir_children, dir_children_caps,
+                                &dn, dcap);
+    }
+    sqlite3_finalize(stmt);
+
+    arch_collect_entries(dir_paths, dir_child_counts, dir_children, dn, files, fn, &out->file_tree,
+                         &out->file_tree_count);
+
+    arch_free_dirs(dir_paths, dir_child_counts, dir_children, dir_children_caps, dn, files, fn);
     return CBM_STORE_OK;
 }
 
 /* ── Louvain community detection ───────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity,readability-function-size)
-int cbm_louvain(const int64_t *nodes, int node_count, const cbm_louvain_edge_t *edges,
-                int edge_count, cbm_louvain_result_t **out, int *out_count) {
-    if (node_count <= 0) {
-        *out = NULL;
-        *out_count = 0;
-        return CBM_STORE_OK;
+/* Build deduplicated, normalized edge weight arrays from raw edges.
+ * Returns total number of unique edges in *out_wn. */
+/* Find the index of a node ID in the nodes array, or -1. */
+static int louvain_node_index(const int64_t *nodes, int n, int64_t id) {
+    for (int i = 0; i < n; i++) {
+        if (nodes[i] == id) {
+            return i;
+        }
     }
+    return -1;
+}
 
-    int n = node_count;
-
-    /* Build adjacency: edge weights */
+static void louvain_build_weights(const int64_t *nodes, int n, const cbm_louvain_edge_t *edges,
+                                  int edge_count, int **out_wsi, int **out_wdi, double **out_ww,
+                                  int *out_wn) {
     int wcap = edge_count > 0 ? edge_count : 1;
     int wn = 0;
     int *wsi = malloc(wcap * sizeof(int));
     int *wdi = malloc(wcap * sizeof(int));
     double *ww = malloc(wcap * sizeof(double));
 
-    /* Map node IDs to indices */
     for (int e = 0; e < edge_count; e++) {
-        int si = -1;
-        int di = -1;
-        for (int i = 0; i < n; i++) {
-            if (nodes[i] == edges[e].src) {
-                si = i;
-            }
-            if (nodes[i] == edges[e].dst) {
-                di = i;
-            }
-        }
+        int si = louvain_node_index(nodes, n, edges[e].src);
+        int di = louvain_node_index(nodes, n, edges[e].dst);
         if (si < 0 || di < 0 || si == di) {
             continue;
         }
-        /* Normalize edge key */
         if (si > di) {
             int tmp = si;
             si = di;
             di = tmp;
         }
-        /* Check if already exists */
         int found = -1;
         for (int i = 0; i < wn; i++) {
             if (wsi[i] == si && wdi[i] == di) {
@@ -3725,39 +3579,165 @@ int cbm_louvain(const int64_t *nodes, int node_count, const cbm_louvain_edge_t *
             wn++;
         }
     }
+    *out_wsi = wsi;
+    *out_wdi = wdi;
+    *out_ww = ww;
+    *out_wn = wn;
+}
+
+/* Add a bidirectional edge to adjacency lists. */
+static void adj_add_edge(int **adj, double **adj_w, int *adj_n, int *adj_cap, int si, int di,
+                         double w) {
+    if (adj_n[si] >= adj_cap[si]) {
+        int new_cap = adj_cap[si] ? adj_cap[si] * 2 : 4;
+        int *new_adj = safe_realloc(adj[si], new_cap * sizeof(int));
+        double *new_w = safe_realloc(adj_w[si], new_cap * sizeof(double));
+        /* Zero-init new slots to satisfy static analyzer */
+        for (int k = adj_cap[si]; k < new_cap; k++) {
+            new_adj[k] = 0;
+            new_w[k] = 0.0;
+        }
+        adj[si] = new_adj;
+        adj_w[si] = new_w;
+        adj_cap[si] = new_cap;
+    }
+    adj[si][adj_n[si]] = di;
+    adj_w[si][adj_n[si]] = w;
+    adj_n[si]++;
+
+    if (adj_n[di] >= adj_cap[di]) {
+        adj_cap[di] = adj_cap[di] ? adj_cap[di] * 2 : 4;
+        adj[di] = safe_realloc(adj[di], adj_cap[di] * sizeof(int));
+        adj_w[di] = safe_realloc(adj_w[di], adj_cap[di] * sizeof(double));
+    }
+    adj[di][adj_n[di]] = si;
+    adj_w[di][adj_n[di]] = w;
+    adj_n[di]++;
+}
+
+/* Run one Louvain iteration. Returns true if any node moved. */
+/* Linear congruential generator (glibc constants) */
+#define LCG_MULTIPLIER 1103515245U
+#define LCG_INCREMENT 12345U
+
+static bool louvain_iteration(int n, int **adj, double **adj_w, const int *adj_n, int *community,
+                              const double *degree, double total_weight, int iter) {
+    bool improved = false;
+
+    double *comm_degree = calloc(n, sizeof(double));
+    for (int i = 0; i < n; i++) {
+        comm_degree[community[i]] += degree[i];
+    }
+
+    int *order = calloc(n, sizeof(int));
+    for (int i = 0; i < n; i++) {
+        order[i] = i;
+    }
+    unsigned int seed = (unsigned int)((iter * 1000) + n);
+    for (int i = n - 1; i > 0; i--) {
+        seed = (seed * LCG_MULTIPLIER) + LCG_INCREMENT;
+        int j = (int)((seed >> 16) % (unsigned int)(i + 1));
+        int tmp = order[i];
+        order[i] = order[j];
+        order[j] = tmp;
+    }
+
+    for (int oi = 0; oi < n; oi++) {
+        int i = order[oi];
+        int cur_comm = community[i];
+
+        double *nc_weight = calloc(n, sizeof(double));
+        bool *nc_seen = calloc(n, sizeof(bool));
+        for (int j = 0; j < adj_n[i]; j++) {
+            int nc = community[adj[i][j]];
+            nc_weight[nc] += adj_w[i][j];
+            nc_seen[nc] = true;
+        }
+
+        comm_degree[cur_comm] -= degree[i];
+
+        int best_comm = cur_comm;
+        double best_gain = 0.0;
+        for (int c = 0; c < n; c++) {
+            if (!nc_seen[c]) {
+                continue;
+            }
+            double gain = nc_weight[c] - (degree[i] * comm_degree[c] / (2.0 * total_weight));
+            if (gain > best_gain) {
+                best_gain = gain;
+                best_comm = c;
+            }
+        }
+
+        double cur_gain =
+            nc_weight[cur_comm] - (degree[i] * comm_degree[cur_comm] / (2.0 * total_weight));
+        if (cur_gain >= best_gain) {
+            best_comm = cur_comm;
+        }
+
+        community[i] = best_comm;
+        comm_degree[best_comm] += degree[i];
+
+        if (best_comm != cur_comm) {
+            improved = true;
+        }
+
+        free(nc_weight);
+        free(nc_seen);
+    }
+    free(order);
+    free(comm_degree);
+    return improved;
+}
+
+static void louvain_free_adj(int **adj, double **adj_w, int *adj_n, int *adj_cap, int n) {
+    for (int i = 0; i < n; i++) {
+        free(adj[i]);
+        free(adj_w[i]);
+    }
+    free(adj);
+    free(adj_w);
+    free(adj_n);
+    free(adj_cap);
+}
+
+int cbm_louvain(const int64_t *nodes, int node_count, const cbm_louvain_edge_t *edges,
+                int edge_count, cbm_louvain_result_t **out, int *out_count) {
+    if (node_count <= 0) {
+        *out = NULL;
+        *out_count = 0;
+        return CBM_STORE_OK;
+    }
+
+    int n = node_count;
+
+    /* Build deduplicated edge weights */
+    int *wsi;
+    int *wdi;
+    double *ww;
+    int wn;
+    louvain_build_weights(nodes, n, edges, edge_count, &wsi, &wdi, &ww, &wn);
 
     /* Build adjacency lists */
     int **adj = calloc(n, sizeof(int *));
     double **adj_w = calloc(n, sizeof(double *));
     int *adj_n = calloc(n, sizeof(int));
     int *adj_cap = calloc(n, sizeof(int));
+    if (!adj || !adj_w || !adj_n || !adj_cap) {
+        free(adj);
+        free(adj_w);
+        free(adj_n);
+        free(adj_cap);
+        free(wsi);
+        free(wdi);
+        free(ww);
+        return -1;
+    }
 
     double total_weight = 0;
     for (int i = 0; i < wn; i++) {
-        int si = wsi[i];
-        int di = wdi[i];
-        double w = ww[i];
-        total_weight += w;
-
-        /* Add si → di */
-        if (adj_n[si] >= adj_cap[si]) {
-            adj_cap[si] = adj_cap[si] ? adj_cap[si] * 2 : 4;
-            adj[si] = safe_realloc(adj[si], adj_cap[si] * sizeof(int));
-            adj_w[si] = safe_realloc(adj_w[si], adj_cap[si] * sizeof(double));
-        }
-        adj[si][adj_n[si]] = di;
-        adj_w[si][adj_n[si]] = w;
-        adj_n[si]++;
-
-        /* Add di → si */
-        if (adj_n[di] >= adj_cap[di]) {
-            adj_cap[di] = adj_cap[di] ? adj_cap[di] * 2 : 4;
-            adj[di] = safe_realloc(adj[di], adj_cap[di] * sizeof(int));
-            adj_w[di] = safe_realloc(adj_w[di], adj_cap[di] * sizeof(double));
-        }
-        adj[di][adj_n[di]] = si;
-        adj_w[di][adj_n[di]] = w;
-        adj_n[di]++;
+        total_weight += ww[i];
+        adj_add_edge(adj, adj_w, adj_n, adj_cap, wsi[i], wdi[i], ww[i]);
     }
     free(wsi);
     free(wdi);
@@ -3770,7 +3750,6 @@ int cbm_louvain(const int64_t *nodes, int node_count, const cbm_louvain_edge_t *
     }
 
     if (total_weight == 0) {
-        /* No edges: each node in its own community */
         cbm_louvain_result_t *result = malloc(n * sizeof(cbm_louvain_result_t));
         for (int i = 0; i < n; i++) {
             result[i].node_id = nodes[i];
@@ -3779,6 +3758,14 @@ int cbm_louvain(const int64_t *nodes, int node_count, const cbm_louvain_edge_t *
         *out = result;
         *out_count = n;
         free(community);
+        louvain_free_adj(adj, adj_w, adj_n, adj_cap, n);
+        return CBM_STORE_OK;
+    }
+
+    /* Compute node degrees */
+    double *degree = calloc(n, sizeof(double));
+    if (!degree) {
+        free(community);
         for (int i = 0; i < n; i++) {
             free(adj[i]);
             free(adj_w[i]);
@@ -3786,96 +3773,19 @@ int cbm_louvain(const int64_t *nodes, int node_count, const cbm_louvain_edge_t *
         free(adj);
         free(adj_w);
         free(adj_n);
-        free(adj_cap);
-        return CBM_STORE_OK;
+        return -1;
     }
-
-    /* Compute node degrees */
-    double *degree = calloc(n, sizeof(double));
     for (int i = 0; i < n; i++) {
-        for (int j = 0; j < adj_n[i]; j++) {
-            degree[i] += adj_w[i][j];
+        if (adj_w[i]) {
+            for (int j = 0; j < adj_n[i]; j++) {
+                degree[i] += adj_w[i][j];
+            }
         }
     }
 
     /* Main Louvain loop (10 iterations max) */
     for (int iter = 0; iter < 10; iter++) {
-        bool improved = false;
-
-        /* Community total degree */
-        double *comm_degree = calloc(n, sizeof(double));
-        for (int i = 0; i < n; i++) {
-            comm_degree[community[i]] += degree[i];
-        }
-
-        /* Random order (simple LCG shuffle) */
-        int *order = calloc(n, sizeof(int));
-        for (int i = 0; i < n; i++) {
-            order[i] = i;
-        }
-        unsigned int seed = (unsigned int)((iter * 1000) + n);
-        for (int i = n - 1; i > 0; i--) {
-/* Linear congruential generator (glibc constants) */
-#define LCG_MULTIPLIER 1103515245U
-#define LCG_INCREMENT 12345U
-            seed = (seed * LCG_MULTIPLIER) + LCG_INCREMENT;
-            int j = (int)((seed >> 16) % (unsigned int)(i + 1));
-            int tmp = order[i];
-            order[i] = order[j];
-            order[j] = tmp;
-        }
-
-        for (int oi = 0; oi < n; oi++) {
-            int i = order[oi];
-            int cur_comm = community[i];
-
-            /* Compute weights to neighboring communities */
-            double *nc_weight = calloc(n, sizeof(double));
-            bool *nc_seen = calloc(n, sizeof(bool));
-            for (int j = 0; j < adj_n[i]; j++) {
-                int nc = community[adj[i][j]];
-                nc_weight[nc] += adj_w[i][j];
-                nc_seen[nc] = true;
-            }
-
-            /* Remove node from community */
-            comm_degree[cur_comm] -= degree[i];
-
-            int best_comm = cur_comm;
-            double best_gain = 0.0;
-
-            for (int c = 0; c < n; c++) {
-                if (!nc_seen[c]) {
-                    continue;
-                }
-                double gain = nc_weight[c] - (degree[i] * comm_degree[c] / (2.0 * total_weight));
-                if (gain > best_gain) {
-                    best_gain = gain;
-                    best_comm = c;
-                }
-            }
-
-            /* Also consider staying */
-            double cur_gain =
-                nc_weight[cur_comm] - (degree[i] * comm_degree[cur_comm] / (2.0 * total_weight));
-            if (cur_gain >= best_gain) {
-                best_comm = cur_comm;
-            }
-
-            community[i] = best_comm;
-            comm_degree[best_comm] += degree[i];
-
-            if (best_comm != cur_comm) {
-                improved = true;
-            }
-
-            free(nc_weight);
-            free(nc_seen);
-        }
-        free(order);
-        free(comm_degree);
-
-        if (!improved) {
+        if (!louvain_iteration(n, adj, adj_w, adj_n, community, degree, total_weight, iter)) {
             break;
         }
     }
@@ -3891,14 +3801,7 @@ int cbm_louvain(const int64_t *nodes, int node_count, const cbm_louvain_edge_t *
 
     free(community);
     free(degree);
-    for (int i = 0; i < n; i++) {
-        free(adj[i]);
-        free(adj_w[i]);
-    }
-    free(adj);
-    free(adj_w);
-    free(adj_n);
-    free(adj_cap);
+    louvain_free_adj(adj, adj_w, adj_n, adj_cap, n);
     return CBM_STORE_OK;
 }
 
@@ -4065,7 +3968,61 @@ static bool is_canonical_section(const char *name) {
     return false;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Save a completed ADR section into result, trimming whitespace. */
+static void adr_save_section(cbm_adr_sections_t *result, char *section_name, char *buf,
+                             int buf_len) {
+    if (!section_name || result->count >= 16) {
+        return;
+    }
+    /* Trim trailing whitespace */
+    while (buf_len > 0 && (buf[buf_len - 1] == '\n' || buf[buf_len - 1] == ' ')) {
+        buf[--buf_len] = '\0';
+    }
+    /* Skip leading whitespace */
+    char *trimmed = buf;
+    while (*trimmed == '\n' || *trimmed == ' ') {
+        trimmed++;
+    }
+    result->keys[result->count] = section_name;
+    result->values[result->count] = heap_strdup(trimmed);
+    result->count++;
+}
+
+/* Try to extract a canonical section header from a "## Header" line.
+ * Returns heap-allocated header string if canonical, NULL otherwise. */
+static char *adr_try_section_header(const char *line, int line_len) {
+    if (line_len <= 3 || line[0] != '#' || line[1] != '#' || line[2] != ' ') {
+        return NULL;
+    }
+    char header[64];
+    int hlen = line_len - 3;
+    if (hlen >= (int)sizeof(header)) {
+        hlen = (int)sizeof(header) - 1;
+    }
+    memcpy(header, line + 3, hlen);
+    header[hlen] = '\0';
+    while (hlen > 0 &&
+           (header[hlen - 1] == ' ' || header[hlen - 1] == '\t' || header[hlen - 1] == '\r')) {
+        header[--hlen] = '\0';
+    }
+    if (!is_canonical_section(header)) {
+        return NULL;
+    }
+    return heap_strdup(header);
+}
+
+/* Append a line to the current section content buffer. */
+static void adr_append_line(char *buf, int buf_sz, int *len, const char *line, int line_len) {
+    if (*len > 0) {
+        buf[(*len)++] = '\n';
+    }
+    if (*len + line_len < buf_sz - 1) {
+        memcpy(buf + *len, line, line_len);
+        *len += line_len;
+        buf[*len] = '\0';
+    }
+}
+
 cbm_adr_sections_t cbm_adr_parse_sections(const char *content) {
     cbm_adr_sections_t result;
     memset(&result, 0, sizeof(result));
@@ -4079,86 +4036,36 @@ cbm_adr_sections_t cbm_adr_parse_sections(const char *content) {
     int content_len = 0;
 
     while (*p) {
-        /* Find end of line */
         const char *eol = strchr(p, '\n');
         int line_len = eol ? (int)(eol - p) : (int)strlen(p);
 
-        /* Check for canonical section header */
-        if (line_len > 3 && p[0] == '#' && p[1] == '#' && p[2] == ' ') {
-            char header[64];
-            int hlen = line_len - 3;
-            if (hlen >= (int)sizeof(header)) {
-                hlen = (int)sizeof(header) - 1;
-            }
-            memcpy(header, p + 3, hlen);
-            header[hlen] = '\0';
-            /* Trim trailing whitespace */
-            while (hlen > 0 && (header[hlen - 1] == ' ' || header[hlen - 1] == '\t' ||
-                                header[hlen - 1] == '\r')) {
-                header[--hlen] = '\0';
-            }
-
-            if (is_canonical_section(header)) {
-                /* Save previous section */
-                if (current_section && result.count < 16) {
-                    /* Trim content */
-                    while (content_len > 0 && (current_content[content_len - 1] == '\n' ||
-                                               current_content[content_len - 1] == ' ')) {
-                        current_content[--content_len] = '\0';
-                    }
-                    /* Skip leading whitespace */
-                    char *trimmed = current_content;
-                    while (*trimmed == '\n' || *trimmed == ' ') {
-                        trimmed++;
-                    }
-                    result.keys[result.count] = current_section;
-                    result.values[result.count] = heap_strdup(trimmed);
-                    result.count++;
-                }
-                current_section = heap_strdup(header);
-                current_content[0] = '\0';
-                content_len = 0;
-                p = eol ? eol + 1 : p + line_len;
-                continue;
-            }
-        }
-
-        /* Append line to current content */
-        if (current_section) {
-            if (content_len > 0 || line_len > 0) {
-                if (content_len > 0) {
-                    current_content[content_len++] = '\n';
-                }
-                if (content_len + line_len < (int)sizeof(current_content) - 1) {
-                    memcpy(current_content + content_len, p, line_len);
-                    content_len += line_len;
-                    current_content[content_len] = '\0';
-                }
-            }
+        char *new_section = adr_try_section_header(p, line_len);
+        if (new_section) {
+            adr_save_section(&result, current_section, current_content, content_len);
+            current_section = new_section;
+            current_content[0] = '\0';
+            content_len = 0;
+        } else if (current_section && (content_len > 0 || line_len > 0)) {
+            adr_append_line(current_content, (int)sizeof(current_content), &content_len, p,
+                            line_len);
         }
 
         p = eol ? eol + 1 : p + line_len;
     }
 
-    /* Save last section */
-    if (current_section && result.count < 16) {
-        while (content_len > 0 && (current_content[content_len - 1] == '\n' ||
-                                   current_content[content_len - 1] == ' ')) {
-            current_content[--content_len] = '\0';
-        }
-        char *trimmed = current_content;
-        while (*trimmed == '\n' || *trimmed == ' ') {
-            trimmed++;
-        }
-        result.keys[result.count] = current_section;
-        result.values[result.count] = heap_strdup(trimmed);
-        result.count++;
-    }
-
+    adr_save_section(&result, current_section, current_content, content_len);
     return result;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Append a section to the render buffer. */
+static int adr_render_section(char *buf, int buf_sz, int pos, const char *key, const char *value) {
+    if (pos > 0) {
+        pos += snprintf(buf + pos, buf_sz - pos, "\n\n");
+    }
+    pos += snprintf(buf + pos, buf_sz - pos, "## %s\n%s", key, value);
+    return pos;
+}
+
 char *cbm_adr_render(const cbm_adr_sections_t *sections) {
     if (!sections || sections->count == 0) {
         return heap_strdup("");
@@ -4175,11 +4082,8 @@ char *cbm_adr_render(const cbm_adr_sections_t *sections) {
                 continue;
             }
             if (strcmp(sections->keys[i], canonical_sections[c]) == 0) {
-                if (pos > 0) {
-                    pos += snprintf(buf + pos, sizeof(buf) - pos, "\n\n");
-                }
-                pos += snprintf(buf + pos, sizeof(buf) - pos, "## %s\n%s", sections->keys[i],
-                                sections->values[i]);
+                pos = adr_render_section(buf, (int)sizeof(buf), pos, sections->keys[i],
+                                         sections->values[i]);
                 rendered[i] = true;
                 break;
             }
@@ -4187,7 +4091,6 @@ char *cbm_adr_render(const cbm_adr_sections_t *sections) {
     }
 
     /* Non-canonical sections alphabetically */
-    /* Collect indices of non-rendered sections */
     int extra[16];
     int nextra = 0;
     for (int i = 0; i < sections->count; i++) {
@@ -4195,7 +4098,6 @@ char *cbm_adr_render(const cbm_adr_sections_t *sections) {
             extra[nextra++] = i;
         }
     }
-    /* Sort extra by key name */
     for (int i = 1; i < nextra; i++) {
         int j = i;
         while (j > 0 && strcmp(sections->keys[extra[j]], sections->keys[extra[j - 1]]) < 0) {
@@ -4207,11 +4109,8 @@ char *cbm_adr_render(const cbm_adr_sections_t *sections) {
     }
     for (int i = 0; i < nextra; i++) {
         int idx = extra[i];
-        if (pos > 0) {
-            pos += snprintf(buf + pos, sizeof(buf) - pos, "\n\n");
-        }
-        pos += snprintf(buf + pos, sizeof(buf) - pos, "## %s\n%s", sections->keys[idx],
-                        sections->values[idx]);
+        pos = adr_render_section(buf, (int)sizeof(buf), pos, sections->keys[idx],
+                                 sections->values[idx]);
     }
 
     return heap_strdup(buf);

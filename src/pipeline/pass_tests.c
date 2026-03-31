@@ -132,54 +132,44 @@ bool cbm_is_test_func_name(const char *name) {
     return false;
 }
 
+/* Assemble dir/name+ext into a heap-allocated path. */
+static char *build_path(const char *test_path, size_t dir_len, const char *name, size_t name_len,
+                        const char *ext, size_t ext_len) {
+    char *result = malloc(dir_len + 1 + name_len + ext_len + 1);
+    if (dir_len > 0) {
+        memcpy(result, test_path, dir_len);
+        result[dir_len] = '/';
+        memcpy(result + dir_len + 1, name, name_len);
+        memcpy(result + dir_len + 1 + name_len, ext, ext_len + 1);
+    } else {
+        memcpy(result, name, name_len);
+        memcpy(result + name_len, ext, ext_len + 1);
+    }
+    return result;
+}
+
 /* Try to derive the production file path from a test file path.
  * Returns heap-allocated string or NULL. Caller must free(). */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static char *test_to_prod_path(const char *test_path) {
     if (!test_path) {
         return NULL;
     }
 
     const char *base = strrchr(test_path, '/');
-    const char *dir_end = base ? base : test_path;
     size_t dir_len = base ? (size_t)(base - test_path) : 0;
-
     base = base ? base + 1 : test_path;
 
     /* Go: foo_test.go → foo.go */
     const char *suffix = strstr(base, "_test.go");
     if (suffix && suffix[8] == '\0') {
-        size_t name_len = suffix - base;
-        char *result = malloc(dir_len + 1 + name_len + 3 + 1);
-        if (dir_len > 0) {
-            memcpy(result, test_path, dir_len);
-            result[dir_len] = '/';
-            memcpy(result + dir_len + 1, base, name_len);
-            memcpy(result + dir_len + 1 + name_len, ".go", 4);
-        } else {
-            memcpy(result, base, name_len);
-            memcpy(result + name_len, ".go", 4);
-        }
-        return result;
+        return build_path(test_path, dir_len, base, (size_t)(suffix - base), ".go", 3);
     }
 
     /* Python: test_foo.py → foo.py */
     if (strncmp(base, "test_", 5) == 0) {
         const char *ext = strstr(base, ".py");
         if (ext && ext[3] == '\0') {
-            const char *name_start = base + 5;
-            size_t name_len = ext - name_start;
-            char *result = malloc(dir_len + 1 + name_len + 3 + 1);
-            if (dir_len > 0) {
-                memcpy(result, test_path, dir_len);
-                result[dir_len] = '/';
-                memcpy(result + dir_len + 1, name_start, name_len);
-                memcpy(result + dir_len + 1 + name_len, ".py", 4);
-            } else {
-                memcpy(result, name_start, name_len);
-                memcpy(result + name_len, ".py", 4);
-            }
-            return result;
+            return build_path(test_path, dir_len, base + 5, (size_t)(ext - base - 5), ".py", 3);
         }
     }
 
@@ -188,102 +178,95 @@ static char *test_to_prod_path(const char *test_path) {
         const char *pat = s == 0 ? ".test." : ".spec.";
         const char *found = strstr(base, pat);
         if (found) {
-            size_t prefix_len = found - base;
-            const char *ext = found + 5; /* skip ".test" or ".spec" (both 5 chars) */
-            size_t ext_len = strlen(ext);
-            char *result = malloc(dir_len + 1 + prefix_len + ext_len + 1);
-            if (dir_len > 0) {
-                memcpy(result, test_path, dir_len);
-                result[dir_len] = '/';
-                memcpy(result + dir_len + 1, base, prefix_len);
-                memcpy(result + dir_len + 1 + prefix_len, ext, ext_len + 1);
-            } else {
-                memcpy(result, base, prefix_len);
-                memcpy(result + prefix_len, ext, ext_len + 1);
-            }
-            return result;
+            const char *ext = found + 5;
+            return build_path(test_path, dir_len, base, (size_t)(found - base), ext, strlen(ext));
         }
     }
 
-    (void)dir_end;
     return NULL;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Create TESTS edges from test functions to production functions via CALLS edges. */
+static int create_tests_edges(cbm_pipeline_ctx_t *ctx) {
+    int count = 0;
+    const cbm_gbuf_edge_t **call_edges = NULL;
+    int call_count = 0;
+    int rc = cbm_gbuf_find_edges_by_type(ctx->gbuf, "CALLS", &call_edges, &call_count);
+    if (rc != 0 || call_count == 0) {
+        return 0;
+    }
+
+    for (int i = 0; i < call_count; i++) {
+        const cbm_gbuf_edge_t *e = call_edges[i];
+        const cbm_gbuf_node_t *src = cbm_gbuf_find_by_id(ctx->gbuf, e->source_id);
+        const cbm_gbuf_node_t *tgt = cbm_gbuf_find_by_id(ctx->gbuf, e->target_id);
+        if (!src || !tgt) {
+            continue;
+        }
+
+        bool src_is_test =
+            node_is_test(src) || (src->file_path && cbm_is_test_path(src->file_path));
+        if (!src_is_test) {
+            continue;
+        }
+
+        bool tgt_is_test =
+            node_is_test(tgt) || (tgt->file_path && cbm_is_test_path(tgt->file_path));
+        if (tgt_is_test) {
+            continue;
+        }
+
+        if (!cbm_is_test_func_name(src->name)) {
+            continue;
+        }
+
+        cbm_gbuf_insert_edge(ctx->gbuf, src->id, tgt->id, "TESTS", "{}");
+        count++;
+    }
+    return count;
+}
+
+/* Create TESTS_FILE edges from test File nodes to production File nodes. */
+static int create_tests_file_edges(cbm_pipeline_ctx_t *ctx) {
+    int count = 0;
+    const cbm_gbuf_node_t **file_nodes = NULL;
+    int file_node_count = 0;
+    int rc = cbm_gbuf_find_by_label(ctx->gbuf, "File", &file_nodes, &file_node_count);
+    if (rc != 0) {
+        return 0;
+    }
+
+    for (int i = 0; i < file_node_count; i++) {
+        const cbm_gbuf_node_t *fnode = file_nodes[i];
+        if (!fnode->file_path || !cbm_is_test_path(fnode->file_path)) {
+            continue;
+        }
+
+        char *prod_path = test_to_prod_path(fnode->file_path);
+        if (!prod_path) {
+            continue;
+        }
+
+        char *prod_qn = cbm_pipeline_fqn_compute(ctx->project_name, prod_path, "__file__");
+        const cbm_gbuf_node_t *prod_node = cbm_gbuf_find_by_qn(ctx->gbuf, prod_qn);
+        free(prod_qn);
+        free(prod_path);
+
+        if (prod_node && fnode->id != prod_node->id) {
+            cbm_gbuf_insert_edge(ctx->gbuf, fnode->id, prod_node->id, "TESTS_FILE", "{}");
+            count++;
+        }
+    }
+    return count;
+}
+
 int cbm_pipeline_pass_tests(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count) {
     cbm_log_info("pass.start", "pass", "tests");
     (void)files;
     (void)file_count;
 
-    int tests_count = 0;
-    int tests_file_count = 0;
-
-    /* ── TESTS edges: test function → production function ────────── */
-    /* Scan CALLS edges: if src is test + target is not test → TESTS edge */
-    const cbm_gbuf_edge_t **call_edges = NULL;
-    int call_count = 0;
-    int rc = cbm_gbuf_find_edges_by_type(ctx->gbuf, "CALLS", &call_edges, &call_count);
-    if (rc == 0 && call_count > 0) {
-        for (int i = 0; i < call_count; i++) {
-            const cbm_gbuf_edge_t *e = call_edges[i];
-            const cbm_gbuf_node_t *src = cbm_gbuf_find_by_id(ctx->gbuf, e->source_id);
-            const cbm_gbuf_node_t *tgt = cbm_gbuf_find_by_id(ctx->gbuf, e->target_id);
-            if (!src || !tgt) {
-                continue;
-            }
-
-            /* Source must be a test, target must not */
-            bool src_is_test =
-                node_is_test(src) || (src->file_path && cbm_is_test_path(src->file_path));
-            if (!src_is_test) {
-                continue;
-            }
-
-            bool tgt_is_test =
-                node_is_test(tgt) || (tgt->file_path && cbm_is_test_path(tgt->file_path));
-            if (tgt_is_test) {
-                continue;
-            }
-
-            /* Gate: source must have a test function name */
-            if (!cbm_is_test_func_name(src->name)) {
-                continue;
-            }
-
-            cbm_gbuf_insert_edge(ctx->gbuf, src->id, tgt->id, "TESTS", "{}");
-            tests_count++;
-        }
-    }
-
-    /* ── TESTS_FILE edges: test file → production file ───────────── */
-    /* For each File node that is a test, find the corresponding prod file */
-    const cbm_gbuf_node_t **file_nodes = NULL;
-    int file_node_count = 0;
-    rc = cbm_gbuf_find_by_label(ctx->gbuf, "File", &file_nodes, &file_node_count);
-    if (rc == 0) {
-        for (int i = 0; i < file_node_count; i++) {
-            const cbm_gbuf_node_t *fnode = file_nodes[i];
-            if (!fnode->file_path || !cbm_is_test_path(fnode->file_path)) {
-                continue;
-            }
-
-            char *prod_path = test_to_prod_path(fnode->file_path);
-            if (!prod_path) {
-                continue;
-            }
-
-            /* Find the production file node */
-            char *prod_qn = cbm_pipeline_fqn_compute(ctx->project_name, prod_path, "__file__");
-            const cbm_gbuf_node_t *prod_node = cbm_gbuf_find_by_qn(ctx->gbuf, prod_qn);
-            free(prod_qn);
-            free(prod_path);
-
-            if (prod_node && fnode->id != prod_node->id) {
-                cbm_gbuf_insert_edge(ctx->gbuf, fnode->id, prod_node->id, "TESTS_FILE", "{}");
-                tests_file_count++;
-            }
-        }
-    }
+    int tests_count = create_tests_edges(ctx);
+    int tests_file_count = create_tests_file_edges(ctx);
 
     cbm_log_info("pass.done", "pass", "tests", "tests", itoa_log(tests_count), "tests_file",
                  itoa_log(tests_file_count));

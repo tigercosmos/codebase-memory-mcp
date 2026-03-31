@@ -545,7 +545,97 @@ static const char *module_parents_matlab[] = {"source_file", NULL};
 static const char *module_parents_form[] = {"source_file", NULL};
 static const char *module_parents_magma[] = {"source_file", NULL};
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// Check if parent node kind matches direct-or-grandparent for scripting languages.
+// Returns true if pk matches root_kind, or pk matches wrapper_kind and grandparent is root_kind.
+static bool check_script_module_level(TSNode parent, const char *pk, const char *root_kind,
+                                      const char *wrapper_kind) {
+    if (strcmp(pk, root_kind) == 0) {
+        return true;
+    }
+    if (wrapper_kind && strcmp(pk, wrapper_kind) == 0) {
+        TSNode gp = ts_node_parent(parent);
+        return !ts_node_is_null(gp) && strcmp(ts_node_type(gp), root_kind) == 0;
+    }
+    return false;
+}
+
+// Get the module-level parent type list for table-driven languages.
+static const char **get_module_parents(CBMLanguage lang) {
+    switch (lang) {
+    case CBM_LANG_GO:
+        return module_parents_go;
+    case CBM_LANG_RUST:
+        return module_parents_rust;
+    case CBM_LANG_JAVA:
+        return module_parents_java;
+    case CBM_LANG_KOTLIN:
+        return module_parents_kotlin;
+    case CBM_LANG_SCALA:
+        return module_parents_scala;
+    case CBM_LANG_CSHARP:
+        return module_parents_csharp;
+    case CBM_LANG_PHP:
+        return module_parents_php;
+    case CBM_LANG_RUBY:
+        return module_parents_ruby;
+    case CBM_LANG_C:
+    case CBM_LANG_CPP:
+    case CBM_LANG_OBJC:
+        return module_parents_c;
+    case CBM_LANG_ZIG:
+        return module_parents_zig;
+    case CBM_LANG_BASH:
+        return module_parents_bash;
+    case CBM_LANG_ERLANG:
+        return module_parents_erlang;
+    case CBM_LANG_HASKELL:
+        return module_parents_haskell;
+    case CBM_LANG_OCAML:
+        return module_parents_ocaml;
+    case CBM_LANG_ELIXIR:
+        return module_parents_elixir;
+    case CBM_LANG_HTML:
+        return module_parents_html;
+    case CBM_LANG_CSS:
+    case CBM_LANG_SCSS:
+        return module_parents_css;
+    case CBM_LANG_SQL:
+        return module_parents_sql;
+    case CBM_LANG_TOML:
+        return module_parents_toml;
+    case CBM_LANG_HCL:
+        return module_parents_hcl;
+    case CBM_LANG_JSON:
+    case CBM_LANG_INI:
+    case CBM_LANG_XML:
+    case CBM_LANG_MARKDOWN:
+        return module_parents_config;
+    case CBM_LANG_SWIFT:
+        return module_parents_zig;
+    case CBM_LANG_DART:
+        return module_parents_php;
+    case CBM_LANG_PERL:
+    case CBM_LANG_GROOVY:
+        return module_parents_zig;
+    case CBM_LANG_R:
+        return module_parents_php;
+    case CBM_LANG_MAKEFILE:
+        return module_parents_makefile;
+    case CBM_LANG_COMMONLISP:
+        return module_parents_commonlisp;
+    case CBM_LANG_MATLAB:
+        return module_parents_matlab;
+    case CBM_LANG_LEAN:
+        return module_parents_zig;
+    case CBM_LANG_FORM:
+        return module_parents_form;
+    case CBM_LANG_MAGMA:
+        return module_parents_magma;
+    default:
+        return NULL;
+    }
+}
+
 bool cbm_is_module_level(TSNode node, CBMLanguage lang) {
     TSNode parent = ts_node_parent(node);
     if (ts_node_is_null(parent)) {
@@ -553,155 +643,23 @@ bool cbm_is_module_level(TSNode node, CBMLanguage lang) {
     }
     const char *pk = ts_node_type(parent);
 
-    // Python: module or expression_statement -> module
+    // Languages with wrapper-pattern (expression_statement/export_statement/assignment_statement)
     if (lang == CBM_LANG_PYTHON) {
-        if (strcmp(pk, "module") == 0) {
-            return true;
-        }
-        if (strcmp(pk, "expression_statement") == 0) {
-            TSNode gp = ts_node_parent(parent);
-            return !ts_node_is_null(gp) && strcmp(ts_node_type(gp), "module") == 0;
-        }
-        return false;
+        return check_script_module_level(parent, pk, "module", "expression_statement");
     }
-
-    // JS/TS: program, or export_statement -> program
     if (lang == CBM_LANG_JAVASCRIPT || lang == CBM_LANG_TYPESCRIPT || lang == CBM_LANG_TSX) {
-        if (strcmp(pk, "program") == 0) {
-            return true;
-        }
-        if (strcmp(pk, "export_statement") == 0) {
-            TSNode gp = ts_node_parent(parent);
-            return !ts_node_is_null(gp) && strcmp(ts_node_type(gp), "program") == 0;
-        }
-        return false;
+        return check_script_module_level(parent, pk, "program", "export_statement");
     }
-
-    // Lua: chunk
     if (lang == CBM_LANG_LUA) {
-        if (strcmp(pk, "chunk") == 0) {
-            return true;
-        }
-        // assignment_statement -> chunk
-        if (strcmp(pk, "assignment_statement") == 0) {
-            TSNode gp = ts_node_parent(parent);
-            return !ts_node_is_null(gp) && strcmp(ts_node_type(gp), "chunk") == 0;
-        }
-        return false;
+        return check_script_module_level(parent, pk, "chunk", "assignment_statement");
     }
-
-    // YAML: document or stream
     if (lang == CBM_LANG_YAML) {
         return strcmp(pk, "document") == 0 || strcmp(pk, "stream") == 0 ||
                strcmp(pk, "block_mapping") == 0;
     }
 
     // Table lookup for the rest
-    const char **parents = NULL;
-    switch (lang) {
-    case CBM_LANG_GO:
-        parents = module_parents_go;
-        break;
-    case CBM_LANG_RUST:
-        parents = module_parents_rust;
-        break;
-    case CBM_LANG_JAVA:
-        parents = module_parents_java;
-        break;
-    case CBM_LANG_KOTLIN:
-        parents = module_parents_kotlin;
-        break;
-    case CBM_LANG_SCALA:
-        parents = module_parents_scala;
-        break;
-    case CBM_LANG_CSHARP:
-        parents = module_parents_csharp;
-        break;
-    case CBM_LANG_PHP:
-        parents = module_parents_php;
-        break;
-    case CBM_LANG_RUBY:
-        parents = module_parents_ruby;
-        break;
-    case CBM_LANG_C:
-    case CBM_LANG_CPP:
-    case CBM_LANG_OBJC:
-        parents = module_parents_c;
-        break;
-    case CBM_LANG_ZIG:
-        parents = module_parents_zig;
-        break;
-    case CBM_LANG_BASH:
-        parents = module_parents_bash;
-        break;
-    case CBM_LANG_ERLANG:
-        parents = module_parents_erlang;
-        break;
-    case CBM_LANG_HASKELL:
-        parents = module_parents_haskell;
-        break;
-    case CBM_LANG_OCAML:
-        parents = module_parents_ocaml;
-        break;
-    case CBM_LANG_ELIXIR:
-        parents = module_parents_elixir;
-        break;
-    case CBM_LANG_HTML:
-        parents = module_parents_html;
-        break;
-    case CBM_LANG_CSS:
-    case CBM_LANG_SCSS:
-        parents = module_parents_css;
-        break;
-    case CBM_LANG_SQL:
-        parents = module_parents_sql;
-        break;
-    case CBM_LANG_TOML:
-        parents = module_parents_toml;
-        break;
-    case CBM_LANG_HCL:
-        parents = module_parents_hcl;
-        break;
-    case CBM_LANG_JSON:
-    case CBM_LANG_INI:
-    case CBM_LANG_XML:
-    case CBM_LANG_MARKDOWN:
-        parents = module_parents_config;
-        break;
-    case CBM_LANG_SWIFT:
-        parents = module_parents_zig;
-        break; // source_file
-    case CBM_LANG_DART:
-        parents = module_parents_php;
-        break; // program
-    case CBM_LANG_PERL:
-    case CBM_LANG_GROOVY:
-        parents = module_parents_zig;
-        break; // source_file
-    case CBM_LANG_R:
-        parents = module_parents_php;
-        break; // program
-    case CBM_LANG_MAKEFILE:
-        parents = module_parents_makefile;
-        break;
-    case CBM_LANG_COMMONLISP:
-        parents = module_parents_commonlisp;
-        break;
-    case CBM_LANG_MATLAB:
-        parents = module_parents_matlab;
-        break;
-    case CBM_LANG_LEAN:
-        parents = module_parents_zig;
-        break; // source_file
-    case CBM_LANG_FORM:
-        parents = module_parents_form;
-        break;
-    case CBM_LANG_MAGMA:
-        parents = module_parents_magma;
-        break;
-    default:
-        return false;
-    }
+    const char **parents = get_module_parents(lang);
     if (parents) {
         for (const char **p = parents; *p; p++) {
             if (strcmp(pk, *p) == 0) {
@@ -728,16 +686,47 @@ static size_t strip_ext_len(const char *s, size_t len) {
     return len;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// Check if a path part should be skipped (Python __init__, JS/TS index).
+static bool should_skip_fqn_part(const char *part, size_t part_len, bool is_last, bool has_name) {
+    if (!is_last || !has_name) {
+        return false;
+    }
+    if (part_len == 8 && memcmp(part, "__init__", 8) == 0) {
+        return true;
+    }
+    if (part_len == 5 && memcmp(part, "index", 5) == 0) {
+        return true;
+    }
+    return false;
+}
+
+// Append dotted path segments from rel_path (extension-stripped) to output buffer.
+static char *append_path_segments(char *out, const char *rel_path, size_t plen, bool has_name) {
+    const char *start = rel_path;
+    const char *end_ptr = rel_path + plen;
+    while (start < end_ptr) {
+        const char *slash = (const char *)memchr(start, '/', end_ptr - start);
+        const char *part_end = slash ? slash : end_ptr;
+        size_t part_len = (size_t)(part_end - start);
+
+        if (part_len > 0) {
+            bool is_last = (part_end == end_ptr);
+            if (!should_skip_fqn_part(start, part_len, is_last, has_name)) {
+                *out++ = '.';
+                memcpy(out, start, part_len);
+                out += part_len;
+            }
+        }
+        start = part_end + 1;
+    }
+    return out;
+}
+
 char *cbm_fqn_compute(CBMArena *a, const char *project, const char *rel_path, const char *name) {
-    // Build: project.path1.path2.filename.name
-    // where rel_path = "path1/path2/filename.ext"
-    // Strip extension, replace / with ., drop __init__ and index
     size_t proj_len = strlen(project);
     size_t path_len = strlen(rel_path);
     size_t name_len = name ? strlen(name) : 0;
 
-    // Worst case: project + . + path (with / -> .) + . + name + NUL
     size_t max_len = proj_len + 1 + path_len + 1 + name_len + 1;
     char *buf = (char *)cbm_arena_alloc(a, max_len);
     if (!buf) {
@@ -748,43 +737,8 @@ char *cbm_fqn_compute(CBMArena *a, const char *project, const char *rel_path, co
     memcpy(out, project, proj_len);
     out += proj_len;
 
-    // Process path: strip extension, split by /, replace with dots
-    // Skip trailing extension
     size_t plen = strip_ext_len(rel_path, path_len);
-
-    // Split by '/' and append each part as .part
-    const char *start = rel_path;
-    const char *end_ptr = rel_path + plen;
-    while (start < end_ptr) {
-        const char *slash = (const char *)memchr(start, '/', end_ptr - start);
-        const char *part_end = slash ? slash : end_ptr;
-        size_t part_len = (size_t)(part_end - start);
-
-        if (part_len > 0) {
-            /* Handle __init__ (Python) and index (JS/TS):
-             * Strip ONLY when a name suffix is provided, so that symbols
-             * inside __init__.py get clean package QNs (proj.pkg.MyClass).
-             * When no name is given (fqn_module for the file itself),
-             * keep __init__/index to avoid QN collision with the Folder
-             * node for the same directory. */
-            bool is_last = (part_end == end_ptr);
-            bool skip = false;
-            if (is_last && name && name_len > 0) {
-                if (part_len == 8 && memcmp(start, "__init__", 8) == 0) {
-                    skip = true;
-                }
-                if (part_len == 5 && memcmp(start, "index", 5) == 0) {
-                    skip = true;
-                }
-            }
-            if (!skip) {
-                *out++ = '.';
-                memcpy(out, start, part_len);
-                out += part_len;
-            }
-        }
-        start = part_end + 1;
-    }
+    out = append_path_segments(out, rel_path, plen, name && name_len > 0);
 
     if (name && name_len > 0) {
         *out++ = '.';
@@ -834,58 +788,54 @@ char *cbm_fqn_folder(CBMArena *a, const char *project, const char *rel_dir) {
 
 /* ── String literal classifier ──────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// Check if a slash-prefixed string looks like a filesystem path.
+static bool is_filesystem_path(const char *s, int len) {
+    if (len <= 4) {
+        return false;
+    }
+    return strncmp(s, "/usr/", 5) == 0 || strncmp(s, "/bin/", 5) == 0 ||
+           strncmp(s, "/etc/", 5) == 0 || strncmp(s, "/var/", 5) == 0 ||
+           strncmp(s, "/tmp/", 5) == 0 || strncmp(s, "/opt/", 5) == 0 ||
+           strncmp(s, "/home/", 6) == 0 || strncmp(s, "/dev/", 5) == 0 ||
+           strncmp(s, "/sys/", 5) == 0 || strncmp(s, "/proc/", 6) == 0;
+}
+
+// Check if a slash-prefixed string looks like a REST API path.
+static bool is_rest_path(const char *s, int len) {
+    if (is_filesystem_path(s, len)) {
+        return false;
+    }
+    if (len > 1 && s[len - 1] == '/') {
+        return false; /* regex pattern */
+    }
+    if (s[1] == '^') {
+        return false; /* regex */
+    }
+    if (len == 1 || (len == 2 && s[1] == '/')) {
+        return false; /* bare / or // */
+    }
+    if (s[1] == '.') {
+        return false; /* relative path */
+    }
+    for (int i = 1; i < len && i < 20; i++) {
+        char c = s[i];
+        if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static bool is_url_like(const char *s, int len) {
     if (len < 3) {
         return false;
     }
-
-    /* Full URL: contains :// */
     if (strstr(s, "://")) {
         return true;
     }
-
-    /* REST path: starts with / + alphanumeric */
     if (s[0] == '/') {
-        /* Reject file system paths */
-        if (len > 4 && (strncmp(s, "/usr/", 5) == 0 || strncmp(s, "/bin/", 5) == 0 ||
-                        strncmp(s, "/etc/", 5) == 0 || strncmp(s, "/var/", 5) == 0 ||
-                        strncmp(s, "/tmp/", 5) == 0 || strncmp(s, "/opt/", 5) == 0 ||
-                        strncmp(s, "/home/", 6) == 0 || strncmp(s, "/dev/", 5) == 0 ||
-                        strncmp(s, "/sys/", 5) == 0 || strncmp(s, "/proc/", 6) == 0)) {
-            return false;
-        }
-        /* Reject regex patterns */
-        if (len > 1 && s[len - 1] == '/') {
-            return false;
-        }
-        if (s[1] == '^') {
-            return false;
-        }
-
-        /* Reject single / or // */
-        if (len == 1) {
-            return false;
-        }
-        if (len == 2 && s[1] == '/') {
-            return false;
-        }
-
-        /* Reject relative paths ./ ../ */
-        if (s[1] == '.') {
-            return false;
-        }
-
-        /* Must have at least one path segment with alphanumeric */
-        for (int i = 1; i < len && i < 20; i++) {
-            char c = s[i];
-            if ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9')) {
-                return true;
-            }
-        }
-        return false;
+        return is_rest_path(s, len);
     }
-
     return false;
 }
 

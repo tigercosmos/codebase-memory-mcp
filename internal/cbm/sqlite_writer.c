@@ -392,7 +392,8 @@ static void pb_flush_leaf(PageBuilder *pb) {
 
     // Record this leaf for interior page building
     if (pb->leaf_count >= pb->leaf_cap) {
-        pb->leaf_cap = pb->leaf_cap == 0 ? 256 : pb->leaf_cap * 2;
+        int old_cap = pb->leaf_cap;
+        pb->leaf_cap = old_cap == 0 ? 256 : old_cap * 2;
         void *tmp = realloc(pb->leaves, (size_t)pb->leaf_cap * sizeof(PageRef));
         if (!tmp) {
             free(pb->leaves);
@@ -400,6 +401,8 @@ static void pb_flush_leaf(PageBuilder *pb) {
             return;
         }
         pb->leaves = (PageRef *)tmp;
+        /* Zero-init new slots */
+        memset(&pb->leaves[old_cap], 0, ((size_t)pb->leaf_cap - (size_t)old_cap) * sizeof(PageRef));
     }
     pb->leaves[pb->leaf_count].page_num = page_num;
     // max_key is set by caller before flush
@@ -447,7 +450,107 @@ static void pb_add_cell(PageBuilder *pb, const uint8_t *cell, int cell_len) {
 //   - Lookup: X ≤ K0 → cell[0].left_child, K0 < X ≤ K1 → cell[1].left_child, etc.
 //   - Table keys: varint(rowid)
 //   - Index keys: varint(payload_len) + payload (full index record)
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+// Build an interior cell for a child PageRef. Returns cell length.
+// For table B-trees: child_page(4) + varint(rowid).
+// For index B-trees: child_page(4) + separator_cell.
+// cell_buf must be at least 20 bytes for table cells.
+// For index cells, returns malloc'd data via *out_heap (caller frees).
+static int build_interior_cell(const PageRef *child, bool is_index, uint8_t *cell_buf,
+                               uint8_t **out_heap) {
+    *out_heap = NULL;
+    if (!is_index) {
+        put_u32(cell_buf, child->page_num);
+        return 4 + put_varint(cell_buf + 4, child->max_key);
+    }
+    int clen = 4 + child->sep_cell_len;
+    uint8_t *data = (uint8_t *)malloc(clen);
+    put_u32(data, child->page_num);
+    memcpy(data + 4, child->sep_cell, child->sep_cell_len);
+    *out_heap = data;
+    return clen;
+}
+
+// Write a completed interior page to disk and record it as a parent.
+// Returns updated parent_count, or -1 on allocation failure.
+static int write_interior_page(PageBuilder *pb, uint8_t *page, int cell_count, int content_offset,
+                               uint32_t right_child_page, const PageRef *children,
+                               int right_child_idx, bool is_index, PageRef **parents,
+                               int parent_count, int *parent_cap) {
+    uint32_t pnum = pb->next_page++;
+    page[0] = is_index ? 0x02 : 0x05;
+    put_u16(page + 1, 0);
+    put_u16(page + 3, (uint16_t)cell_count);
+    put_u16(page + 5, (uint16_t)content_offset);
+    page[7] = 0;
+    put_u32(page + 8, right_child_page);
+
+    fseek(pb->fp, (long)(pnum - 1) * PAGE_SIZE, SEEK_SET);
+    fwrite(page, 1, PAGE_SIZE, pb->fp);
+
+    if (parent_count >= *parent_cap) {
+        int old_pcap = *parent_cap;
+        *parent_cap = old_pcap == 0 ? 64 : old_pcap * 2;
+        PageRef *tmp = (PageRef *)realloc(*parents, *parent_cap * sizeof(PageRef));
+        if (!tmp) {
+            free(*parents);
+            *parents = NULL;
+            return -1;
+        }
+        *parents = tmp;
+        memset(&(*parents)[old_pcap], 0,
+               ((size_t)*parent_cap - (size_t)old_pcap) * sizeof(PageRef));
+    }
+    (*parents)[parent_count].page_num = pnum;
+    (*parents)[parent_count].max_key = children[right_child_idx].max_key;
+    if (is_index && children[right_child_idx].sep_cell) {
+        int slen = children[right_child_idx].sep_cell_len;
+        (*parents)[parent_count].sep_cell = (uint8_t *)malloc(slen);
+        memcpy((*parents)[parent_count].sep_cell, children[right_child_idx].sep_cell, slen);
+        (*parents)[parent_count].sep_cell_len = slen;
+    } else {
+        (*parents)[parent_count].sep_cell = NULL;
+        (*parents)[parent_count].sep_cell_len = 0;
+    }
+    return parent_count + 1;
+}
+
+// Free a PageRef array (sep_cell allocations), unless it's the original leaves.
+static void free_children(PageRef *children, int child_count, const PageRef *leaves) {
+    if (children != leaves) {
+        for (int j = 0; j < child_count; j++) {
+            free(children[j].sep_cell);
+        }
+        free(children);
+    }
+}
+
+// Fill an interior page with cells from children[*idx..child_count-2].
+// Updates cell_count, content_offset, ptr_offset, and *idx.
+static void fill_interior_page(uint8_t *page, const PageRef *children, int child_count,
+                               bool is_index, int *idx, int *cell_count, int *content_offset,
+                               int *ptr_offset) {
+    while (*idx < child_count - 1) {
+        uint8_t tbuf[20];
+        uint8_t *heap_cell = NULL;
+        int clen = build_interior_cell(&children[*idx], is_index, tbuf, &heap_cell);
+        uint8_t *cell_data = heap_cell ? heap_cell : tbuf;
+
+        int available = *content_offset - *ptr_offset - 2;
+        if (clen > available && *cell_count > 0) {
+            free(heap_cell);
+            break;
+        }
+
+        *content_offset -= clen;
+        memcpy(page + *content_offset, cell_data, clen);
+        put_u16(page + *ptr_offset, (uint16_t)*content_offset);
+        *ptr_offset += 2;
+        (*cell_count)++;
+        free(heap_cell);
+        (*idx)++;
+    }
+}
+
 static uint32_t pb_build_interior(PageBuilder *pb, bool is_index) {
     if (!pb->leaves) {
         return 0;
@@ -466,144 +569,41 @@ static uint32_t pb_build_interior(PageBuilder *pb, bool is_index) {
 
         int i = 0;
         while (i < child_count) {
-            // Start a new interior page
             uint8_t page[PAGE_SIZE];
             memset(page, 0, PAGE_SIZE);
             int cell_count = 0;
             int content_offset = PAGE_SIZE;
-            // Interior header:
-            // flag(1)+freeblock(2)+cell_count(2)+content_start(2)+frag(1)+right_child(4) = 12
             int ptr_offset = 12;
 
-            // Add cells for children[i..] until page fills or children exhausted.
-            // Each child gets a cell EXCEPT the last one (which becomes right_child).
-            while (i < child_count - 1) {
-                // Build cell: child_page(4) + key for children[i]
-                uint8_t *cell_data = NULL;
-                int clen;
-                uint8_t tbuf[20];
-                bool heap_cell = false;
+            fill_interior_page(page, children, child_count, is_index, &i, &cell_count,
+                               &content_offset, &ptr_offset);
 
-                if (!is_index) {
-                    put_u32(tbuf, children[i].page_num);
-                    clen = 4 + put_varint(tbuf + 4, children[i].max_key);
-                    cell_data = tbuf;
-                } else {
-                    clen = 4 + children[i].sep_cell_len;
-                    cell_data = (uint8_t *)malloc(clen);
-                    heap_cell = true;
-                    put_u32(cell_data, children[i].page_num);
-                    memcpy(cell_data + 4, children[i].sep_cell, children[i].sep_cell_len);
-                }
-
-                int available = content_offset - ptr_offset - 2;
-                if (clen > available && cell_count > 0) {
-                    if (heap_cell) {
-                        free(cell_data);
-                    }
-                    break; // page full, flush with what we have
-                }
-
-                content_offset -= clen;
-                memcpy(page + content_offset, cell_data, clen);
-                put_u16(page + ptr_offset, (uint16_t)content_offset);
-                ptr_offset += 2;
-                cell_count++;
-                if (heap_cell) {
-                    free(cell_data);
-                }
-                i++;
+            int right_child_idx = (i < child_count - 1) ? i : child_count - 1;
+            uint32_t right_child_page = 0;
+            if (right_child_idx >= 0 && right_child_idx < child_count) {
+                right_child_page = children[right_child_idx].page_num;
             }
-
-            // Determine right-child: if we consumed all children, it's the last one.
-            // If we stopped early due to page full, right-child is children[i-1]
-            // (the last child we added a cell for)... No: cells were added for
-            // children[page_start..i-1], so right-child = children[i].
-            // But if cell_count == 0 and we didn't add anything, we have a problem.
-            // That can happen only if the first cell doesn't fit — shouldn't happen
-            // for typical cell sizes on a 4096 page.
-
-            uint32_t right_child_page;
-            int right_child_idx;
             if (i < child_count - 1) {
-                // Page full before reaching the end. Cells cover children[page_start..i-1].
-                // Right-child = children[i] (first child NOT given a cell on this page).
-                // But wait, we need right-child to be the last child whose keys are > last cell's
-                // key. Actually: cells[page_start..i-1] have keys K_{page_start}..K_{i-1}.
-                // Right-child should contain keys > K_{i-1}, which is children[i].
-                // But children[i] hasn't been processed yet — it will be on the next interior page.
-                // The right-child for THIS page should be children[i], and on the NEXT page,
-                // children[i] will get a cell too. But that would mean children[i] is both
-                // the right-child of this page AND has a cell on the next page.
-                // That's wrong — each child should appear exactly once.
-                //
-                // Correct approach: cells for children[page_start..i-1], right-child = children[i].
-                // Then next page starts at i+1.
-                right_child_page = children[i].page_num;
-                right_child_idx = i;
-                i++; // skip the right-child for the next page's iteration
+                i++;
             } else {
-                // Reached the end normally. Last child = right-child.
-                right_child_page = children[child_count - 1].page_num;
-                right_child_idx = child_count - 1;
-                i = child_count; // exit outer loop
+                i = child_count;
             }
 
-            // Write the interior page
-            uint32_t pnum = pb->next_page++;
-            page[0] = is_index ? 0x02 : 0x05;
-            put_u16(page + 1, 0);
-            put_u16(page + 3, (uint16_t)cell_count);
-            put_u16(page + 5, (uint16_t)content_offset);
-            page[7] = 0;
-            put_u32(page + 8, right_child_page);
-
-            fseek(pb->fp, (long)(pnum - 1) * PAGE_SIZE, SEEK_SET);
-            fwrite(page, 1, PAGE_SIZE, pb->fp);
-
-            // Record this interior page as a parent for the next level
-            if (parent_count >= parent_cap) {
-                parent_cap = parent_cap == 0 ? 64 : parent_cap * 2;
-                PageRef *tmp = (PageRef *)realloc(parents, parent_cap * sizeof(PageRef));
-                if (!tmp) {
-                    free(parents);
-                    parents = NULL;
-                    break;
-                }
-                parents = tmp;
+            parent_count = write_interior_page(pb, page, cell_count, content_offset,
+                                               right_child_page, children, right_child_idx,
+                                               is_index, &parents, parent_count, &parent_cap);
+            if (parent_count < 0) {
+                break;
             }
-            parents[parent_count].page_num = pnum;
-            parents[parent_count].max_key = children[right_child_idx].max_key;
-            // For multi-level index trees, copy the separator from the rightmost child
-            if (is_index && children[right_child_idx].sep_cell) {
-                int slen = children[right_child_idx].sep_cell_len;
-                parents[parent_count].sep_cell = (uint8_t *)malloc(slen);
-                memcpy(parents[parent_count].sep_cell, children[right_child_idx].sep_cell, slen);
-                parents[parent_count].sep_cell_len = slen;
-            } else {
-                parents[parent_count].sep_cell = NULL;
-                parents[parent_count].sep_cell_len = 0;
-            }
-            parent_count++;
         }
 
-        if (children != pb->leaves) {
-            for (int j = 0; j < child_count; j++) {
-                free(children[j].sep_cell);
-            }
-            free(children);
-        }
+        free_children(children, child_count, pb->leaves);
         children = parents;
         child_count = parent_count;
     }
 
     uint32_t root = children ? children[0].page_num : 0;
-    if (children != pb->leaves) {
-        for (int j = 0; j < child_count; j++) {
-            free(children[j].sep_cell);
-        }
-        free(children);
-    }
+    free_children(children, child_count, pb->leaves);
     return root;
 }
 
@@ -818,18 +818,21 @@ static uint8_t *build_index_entry_unique_2int_text_rowid(int64_t v1, int64_t v2,
 
 // --- Write a table B-tree from records ---
 
-// Helper: ensure leaf_cap, flush current leaf page with given max_key
-static void pb_ensure_leaf_cap(PageBuilder *pb) {
-    if (pb->leaf_count >= pb->leaf_cap) {
-        pb->leaf_cap = pb->leaf_cap == 0 ? 256 : pb->leaf_cap * 2;
-        void *tmp = realloc(pb->leaves, (size_t)pb->leaf_cap * sizeof(PageRef));
-        if (!tmp) {
-            free(pb->leaves);
-            pb->leaves = NULL;
-            return;
-        }
-        pb->leaves = (PageRef *)tmp;
+// Ensure leaves array has capacity for one more entry.
+// Returns false on allocation failure.
+static bool pb_ensure_leaf_cap(PageBuilder *pb) {
+    if (pb->leaf_count < pb->leaf_cap) {
+        return true;
     }
+    pb->leaf_cap = pb->leaf_cap == 0 ? 256 : pb->leaf_cap * 2;
+    void *tmp = realloc(pb->leaves, (size_t)pb->leaf_cap * sizeof(PageRef));
+    if (!tmp) {
+        free(pb->leaves);
+        pb->leaves = NULL;
+        return false;
+    }
+    pb->leaves = (PageRef *)tmp;
+    return true;
 }
 
 // Add a table cell to the PageBuilder, flushing leaf pages as needed.
@@ -842,8 +845,7 @@ static void pb_add_table_cell_with_flush(PageBuilder *pb, int64_t rowid, const u
     }
 
     if (!pb_cell_fits(pb, cell_len) && pb->cell_count > 0) {
-        pb_ensure_leaf_cap(pb);
-        if (!pb->leaves) {
+        if (!pb_ensure_leaf_cap(pb)) {
             free(cell);
             return;
         }
@@ -919,76 +921,64 @@ static uint32_t write_table_btree(FILE *fp, uint32_t *next_page, const uint8_t *
     return pb_finalize_table(&pb, next_page, rowids[count - 1]);
 }
 
+// Promote the last cell from current page to separator, un-add it, and flush.
+static bool pb_promote_and_flush(PageBuilder *pb, uint8_t **cells, int *cell_lens, int prev_idx) {
+    if (!pb_ensure_leaf_cap(pb)) {
+        return false;
+    }
+    pb->leaves[pb->leaf_count].max_key = 0;
+    pb->leaves[pb->leaf_count].sep_cell = (uint8_t *)malloc(cell_lens[prev_idx]);
+    memcpy(pb->leaves[pb->leaf_count].sep_cell, cells[prev_idx], cell_lens[prev_idx]);
+    pb->leaves[pb->leaf_count].sep_cell_len = cell_lens[prev_idx];
+
+    // Un-add the last cell
+    pb->cell_count--;
+    pb->content_offset += cell_lens[prev_idx];
+    pb->ptr_offset -= 2;
+
+    pb_flush_leaf(pb);
+    return true;
+}
+
+// Write an empty index leaf page.
+static uint32_t write_empty_index_leaf(FILE *fp, uint32_t *next_page) {
+    uint32_t pnum = (*next_page)++;
+    uint8_t page[PAGE_SIZE];
+    memset(page, 0, PAGE_SIZE);
+    page[0] = 0x0A;
+    put_u16(page + 1, 0);
+    put_u16(page + 3, 0);
+    put_u16(page + 5, (uint16_t)PAGE_SIZE);
+    page[7] = 0;
+    fseek(fp, (long)(pnum - 1) * PAGE_SIZE, SEEK_SET);
+    fwrite(page, 1, PAGE_SIZE, fp);
+    return pnum;
+}
+
 // Write leaf pages for an index, returns root page.
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 static uint32_t write_index_btree(FILE *fp, uint32_t *next_page, uint8_t **cells, int *cell_lens,
                                   int count) {
     if (count == 0) {
-        uint32_t pnum = (*next_page)++;
-        uint8_t page[PAGE_SIZE];
-        memset(page, 0, PAGE_SIZE);
-        page[0] = 0x0A;                         // leaf index
-        put_u16(page + 1, 0);                   // no freeblocks
-        put_u16(page + 3, 0);                   // 0 cells
-        put_u16(page + 5, (uint16_t)PAGE_SIZE); // content at end of page
-        page[7] = 0;                            // 0 fragmented bytes
-        fseek(fp, (long)(pnum - 1) * PAGE_SIZE, SEEK_SET);
-        fwrite(page, 1, PAGE_SIZE, fp);
-        return pnum;
+        return write_empty_index_leaf(fp, next_page);
     }
 
     PageBuilder pb;
     pb_init(&pb, fp, *next_page, true);
 
-    // SQLite index B-trees are B-trees (NOT B+ trees): separator keys on interior
-    // pages are real entries that must NOT also appear on leaf pages. When a leaf
-    // overflows, the last entry is PROMOTED to the interior page and removed from
-    // the leaf. This ensures each entry exists exactly once in the tree.
     for (int i = 0; i < count; i++) {
         if (!pb_cell_fits(&pb, cell_lens[i]) && pb.cell_count > 0) {
-            if (pb.leaf_count >= pb.leaf_cap) {
-                pb.leaf_cap = pb.leaf_cap == 0 ? 256 : pb.leaf_cap * 2;
-                void *tmp = realloc(pb.leaves, (size_t)pb.leaf_cap * sizeof(PageRef));
-                if (!tmp) {
-                    free(pb.leaves);
-                    pb.leaves = NULL;
-                    return 0;
-                }
-                pb.leaves = (PageRef *)tmp;
+            if (!pb_promote_and_flush(&pb, cells, cell_lens, i - 1)) {
+                return 0;
             }
-            pb.leaves[pb.leaf_count].max_key = 0; // unused for index
-
-            // Promote last cell from leaf to interior: remove it from the leaf page
-            // and store it as the separator for the interior page.
-            int last = i - 1;
-            pb.leaves[pb.leaf_count].sep_cell = (uint8_t *)malloc(cell_lens[last]);
-            memcpy(pb.leaves[pb.leaf_count].sep_cell, cells[last], cell_lens[last]);
-            pb.leaves[pb.leaf_count].sep_cell_len = cell_lens[last];
-
-            // "Un-add" the last cell from the current page
-            pb.cell_count--;
-            pb.content_offset += cell_lens[last];
-            pb.ptr_offset -= 2;
-
-            pb_flush_leaf(&pb);
         }
         pb_add_cell(&pb, cells[i], cell_lens[i]);
     }
 
     if (pb.cell_count > 0) {
-        if (pb.leaf_count >= pb.leaf_cap) {
-            pb.leaf_cap = pb.leaf_cap == 0 ? 256 : pb.leaf_cap * 2;
-            void *tmp = realloc(pb.leaves, (size_t)pb.leaf_cap * sizeof(PageRef));
-            if (!tmp) {
-                free(pb.leaves);
-                pb.leaves = NULL;
-                return 0;
-            }
-            pb.leaves = (PageRef *)tmp;
+        if (!pb_ensure_leaf_cap(&pb)) {
+            return 0;
         }
         pb.leaves[pb.leaf_count].max_key = 0;
-        // Last leaf: no promotion needed — last cell stays on the leaf.
-        // Store last cell as separator in case multi-level interior pages need it.
         int last = count - 1;
         pb.leaves[pb.leaf_count].sep_cell = (uint8_t *)malloc(cell_lens[last]);
         memcpy(pb.leaves[pb.leaf_count].sep_cell, cells[last], cell_lens[last]);

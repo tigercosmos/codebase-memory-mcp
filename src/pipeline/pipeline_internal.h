@@ -284,7 +284,7 @@ char *cbm_infra_qn(const char *project_name, const char *rel_path, const char *i
  * Each worker creates nodes in a per-worker gbuf, then merges into ctx->gbuf.
  * Caches CBMFileResult* in result_cache[file_idx] for reuse in Phase 3B/4.
  * shared_ids provides globally unique node/edge IDs across workers. */
-int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *files, int file_count,
+int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count,
                          CBMFileResult **result_cache, _Atomic int64_t *shared_ids,
                          int worker_count);
 

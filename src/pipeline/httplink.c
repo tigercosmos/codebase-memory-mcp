@@ -177,7 +177,50 @@ const char *cbm_confidence_band(double score) {
 
 /* ── Path matching ─────────────────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Strip URL scheme + host, returning pointer to path portion.
+ * Returns NULL if URL has no path component. */
+static char *strip_scheme_host(char *work) {
+    char *path_start = work;
+    char *scheme = strstr(work, "://");
+    if (scheme) {
+        path_start = scheme + 3;
+        while (*path_start && *path_start != '/') {
+            path_start++;
+        }
+        if (!*path_start) {
+            return NULL;
+        }
+    }
+    return path_start;
+}
+
+/* Replace :param and {param} path segments with wildcard '*'. */
+static int replace_path_params(const char *path_start, int plen, char *out, int out_max) {
+    int out_len = 0;
+    for (int i = 0; i < plen && out_len < out_max;) {
+        if (path_start[i] == ':' && (i == 0 || path_start[i - 1] == '/')) {
+            out[out_len++] = '*';
+            i++;
+            while (i < plen && path_start[i] != '/') {
+                i++;
+            }
+        } else if (path_start[i] == '{') {
+            out[out_len++] = '*';
+            i++;
+            while (i < plen && path_start[i] != '}') {
+                i++;
+            }
+            if (i < plen) {
+                i++;
+            }
+        } else {
+            out[out_len++] = path_start[i++];
+        }
+    }
+    out[out_len] = '\0';
+    return out_len;
+}
+
 const char *cbm_normalize_path(const char *input) {
     static CBM_TLS char buf[1024];
     if (!input || !*input) {
@@ -193,19 +236,10 @@ const char *cbm_normalize_path(const char *input) {
     }
     work[len] = '\0';
 
-    /* Strip URL scheme + host: https://host/path → /path */
-    char *path_start = work;
-    char *scheme = strstr(work, "://");
-    if (scheme) {
-        path_start = scheme + 3;
-        /* Skip host */
-        while (*path_start && *path_start != '/') {
-            path_start++;
-        }
-        if (!*path_start) {
-            buf[0] = '\0';
-            return buf;
-        }
+    char *path_start = strip_scheme_host(work);
+    if (!path_start) {
+        buf[0] = '\0';
+        return buf;
     }
 
     /* Strip trailing slash */
@@ -214,29 +248,7 @@ const char *cbm_normalize_path(const char *input) {
         path_start[--plen] = '\0';
     }
 
-    /* Replace :param and {param} with * */
-    int out_len = 0;
-    for (int i = 0; i < plen && out_len < PARAM_BUF_GUARD;) {
-        if (path_start[i] == ':' && (i == 0 || path_start[i - 1] == '/')) {
-            buf[out_len++] = '*';
-            i++;
-            while (i < plen && path_start[i] != '/') {
-                i++;
-            }
-        } else if (path_start[i] == '{') {
-            buf[out_len++] = '*';
-            i++;
-            while (i < plen && path_start[i] != '}') {
-                i++;
-            }
-            if (i < plen) {
-                i++;
-            }
-        } else {
-            buf[out_len++] = path_start[i++];
-        }
-    }
-    buf[out_len] = '\0';
+    replace_path_params(path_start, plen, buf, PARAM_BUF_GUARD);
 
     if (strcmp(buf, "/") == 0) {
         buf[0] = '\0';
@@ -256,7 +268,20 @@ static void normalize_to_buf(const char *input, char *out, int out_size) {
     out[len] = '\0';
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Compare two segment arrays with wildcard matching.
+ * a_segs[a_off..a_off+count-1] vs b_segs[0..count-1]. */
+static bool segments_match_wildcard(char **a_segs, int a_off, char **b_segs, int count) {
+    for (int i = 0; i < count; i++) {
+        if (strcmp(a_segs[a_off + i], "*") == 0 || strcmp(b_segs[i], "*") == 0) {
+            continue;
+        }
+        if (strcmp(a_segs[a_off + i], b_segs[i]) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
 bool cbm_paths_match(const char *call_path, const char *route_path) {
     char norm_call[1024];
     char norm_route[1024];
@@ -267,29 +292,21 @@ bool cbm_paths_match(const char *call_path, const char *route_path) {
         return false;
     }
 
-    /* Exact match */
     if (strcmp(norm_call, norm_route) == 0) {
         return true;
     }
 
-    /* Suffix match: normalized call ends with normalized route */
     int lc = (int)strlen(norm_call);
     int lr = (int)strlen(norm_route);
     if (lc > lr && strcmp(norm_call + lc - lr, norm_route) == 0) {
         return true;
     }
 
-    /* Segment-by-segment comparison with wildcard matching */
-    /* Split both into segments */
     char call_copy[1024];
     char route_copy[1024];
     strncpy(call_copy, norm_call, sizeof(call_copy) - 1);
     call_copy[sizeof(call_copy) - 1] = '\0';
-    strncpy(route_copy, norm_route, sizeof(route_copy) - 1);
-    route_copy[sizeof(route_copy) - 1] = '\0';
 
-    /* For suffix matching with segments: try matching from the end.
-     * But first try direct segment comparison. */
     char *call_segs[64];
     char *route_segs[64];
     int nc = 0;
@@ -301,7 +318,6 @@ bool cbm_paths_match(const char *call_path, const char *route_path) {
         tok = strtok(NULL, "/");
     }
 
-    /* Need to re-copy route since strtok consumed call_copy's context */
     normalize_to_buf(route_path, route_copy, sizeof(route_copy));
     tok = strtok(route_copy, "/");
     while (tok && nr < 64) {
@@ -309,38 +325,12 @@ bool cbm_paths_match(const char *call_path, const char *route_path) {
         tok = strtok(NULL, "/");
     }
 
-    if (nc == nr) {
-        bool match = true;
-        for (int i = 0; i < nc; i++) {
-            if (strcmp(call_segs[i], "*") == 0 || strcmp(route_segs[i], "*") == 0) {
-                continue; /* wildcard matches anything */
-            }
-            if (strcmp(call_segs[i], route_segs[i]) != 0) {
-                match = false;
-                break;
-            }
-        }
-        if (match) {
-            return true;
-        }
+    if (nc == nr && segments_match_wildcard(call_segs, 0, route_segs, nc)) {
+        return true;
     }
 
-    /* Suffix match at segment level */
-    if (nc > nr) {
-        int offset = nc - nr;
-        bool match = true;
-        for (int i = 0; i < nr; i++) {
-            if (strcmp(call_segs[offset + i], "*") == 0 || strcmp(route_segs[i], "*") == 0) {
-                continue;
-            }
-            if (strcmp(call_segs[offset + i], route_segs[i]) != 0) {
-                match = false;
-                break;
-            }
-        }
-        if (match) {
-            return true;
-        }
+    if (nc > nr && segments_match_wildcard(call_segs, nc - nr, route_segs, nr)) {
+        return true;
     }
 
     return false;
@@ -405,7 +395,53 @@ static double segment_jaccard(const char *norm_call, const char *norm_route) {
     return (double)intersect / (double)max_len;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Determine match type between two normalized paths.
+ * Returns base score (CONF_PATH_EXACT, CONF_PATH_SUFFIX, or 0.0).
+ * Sets *is_suffix if it was a suffix match. */
+static double classify_path_match(const char *norm_call, const char *norm_route, bool *is_suffix) {
+    *is_suffix = false;
+
+    if (strcmp(norm_call, norm_route) == 0) {
+        return CONF_PATH_EXACT;
+    }
+
+    int lc = (int)strlen(norm_call);
+    int lr = (int)strlen(norm_route);
+    if (lc > lr && strcmp(norm_call + lc - lr, norm_route) == 0) {
+        *is_suffix = true;
+        return CONF_PATH_SUFFIX;
+    }
+
+    /* Segment-wise match with wildcards */
+    char c2[1024];
+    char r2[1024];
+    strncpy(c2, norm_call, sizeof(c2) - 1);
+    c2[sizeof(c2) - 1] = '\0';
+    strncpy(r2, norm_route, sizeof(r2) - 1);
+    r2[sizeof(r2) - 1] = '\0';
+
+    char *cs[64];
+    char *rs[64];
+    int nc2 = 0;
+    int nr2 = 0;
+    char *tk = strtok(c2, "/");
+    while (tk && nc2 < 64) {
+        cs[nc2++] = tk;
+        tk = strtok(NULL, "/");
+    }
+    tk = strtok(r2, "/");
+    while (tk && nr2 < 64) {
+        rs[nr2++] = tk;
+        tk = strtok(NULL, "/");
+    }
+
+    if (nc2 == nr2 && segments_match_wildcard(cs, 0, rs, nc2)) {
+        return CONF_PATH_EXACT;
+    }
+
+    return 0.0;
+}
+
 double cbm_path_match_score(const char *call_path, const char *route_path) {
     char norm_call[1024];
     char norm_route[1024];
@@ -416,65 +452,12 @@ double cbm_path_match_score(const char *call_path, const char *route_path) {
         return 0.0;
     }
 
-    /* Determine match type and base score */
-    double match_base = 0.0;
     bool is_suffix = false;
-
-    if (strcmp(norm_call, norm_route) == 0) {
-        match_base = CONF_PATH_EXACT;
-    } else {
-        int lc = (int)strlen(norm_call);
-        int lr = (int)strlen(norm_route);
-
-        /* Check suffix match */
-        if (lc > lr && strcmp(norm_call + lc - lr, norm_route) == 0) {
-            match_base = CONF_PATH_SUFFIX;
-            is_suffix = true;
-        } else {
-            /* Segment-wise match with wildcards */
-            char c2[1024];
-            char r2[1024];
-            strncpy(c2, norm_call, sizeof(c2) - 1);
-            c2[sizeof(c2) - 1] = '\0';
-            strncpy(r2, norm_route, sizeof(r2) - 1);
-            r2[sizeof(r2) - 1] = '\0';
-
-            char *cs[64];
-            char *rs[64];
-            int nc2 = 0;
-            int nr2 = 0;
-            char *tk = strtok(c2, "/");
-            while (tk && nc2 < 64) {
-                cs[nc2++] = tk;
-                tk = strtok(NULL, "/");
-            }
-            tk = strtok(r2, "/");
-            while (tk && nr2 < 64) {
-                rs[nr2++] = tk;
-                tk = strtok(NULL, "/");
-            }
-
-            if (nc2 == nr2) {
-                bool all_match = true;
-                for (int i = 0; i < nc2; i++) {
-                    if (strcmp(cs[i], "*") != 0 && strcmp(rs[i], "*") != 0 &&
-                        strcmp(cs[i], rs[i]) != 0) {
-                        all_match = false;
-                        break;
-                    }
-                }
-                if (all_match) {
-                    match_base = CONF_PATH_EXACT;
-                }
-            }
-        }
-    }
-
+    double match_base = classify_path_match(norm_call, norm_route, &is_suffix);
     if (match_base == 0.0) {
         return 0.0;
     }
 
-    /* Compute confidence: 0.5 × jaccard + 0.5 × depthFactor */
     double jaccard = segment_jaccard(norm_call, norm_route);
     int depth = count_segments(is_suffix ? norm_route : norm_call);
     double depth_factor = (double)depth / DEPTH_DIVISOR;
@@ -754,7 +737,37 @@ int cbm_extract_json_string_paths(const char *text, char **out, int max_out) {
 
 /* ── Route extraction: Python ──────────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Fill common route fields (function_name, qualified_name). */
+static void fill_route_identity(cbm_route_handler_t *r, const char *name, const char *qn) {
+    strncpy(r->function_name, name ? name : "", sizeof(r->function_name) - 1);
+    strncpy(r->qualified_name, qn ? qn : "", sizeof(r->qualified_name) - 1);
+}
+
+/* Copy a regex match group into a buffer, uppercase it, return length. */
+static int copy_match_upper(char *dst, int dst_size, const char *src, int so, int eo) {
+    int len = eo - so;
+    if (len >= dst_size) {
+        len = dst_size - 1;
+    }
+    memcpy(dst, src + so, (size_t)len);
+    dst[len] = '\0';
+    for (int j = 0; dst[j]; j++) {
+        dst[j] = (char)toupper((unsigned char)dst[j]);
+    }
+    return len;
+}
+
+/* Copy a regex match group into a buffer, return length. */
+static int copy_match(char *dst, int dst_size, const char *src, int so, int eo) {
+    int len = eo - so;
+    if (len >= dst_size) {
+        len = dst_size - 1;
+    }
+    memcpy(dst, src + so, (size_t)len);
+    dst[len] = '\0';
+    return len;
+}
+
 int cbm_extract_python_routes(const char *name, const char *qn, const char **decorators, int ndec,
                               cbm_route_handler_t *out, int max_out) {
     if (!decorators || ndec <= 0) {
@@ -778,53 +791,26 @@ int cbm_extract_python_routes(const char *name, const char *qn, const char **dec
     for (int i = 0; i < ndec && count < max_out; i++) {
         cbm_regmatch_t match[3];
 
-        /* Try websocket first */
         if (cbm_regexec(&py_ws_re, decorators[i], 2, match, 0) == 0) {
             cbm_route_handler_t *r = &out[count];
             memset(r, 0, sizeof(*r));
-
-            int plen = (match[1].rm_eo - match[1].rm_so);
-            if (plen >= (int)sizeof(r->path)) {
-                plen = (int)sizeof(r->path) - 1;
-            }
-            memcpy(r->path, decorators[i] + match[1].rm_so, (size_t)plen);
-            r->path[plen] = '\0';
-
+            copy_match(r->path, (int)sizeof(r->path), decorators[i], match[1].rm_so,
+                       match[1].rm_eo);
             strncpy(r->method, "WS", sizeof(r->method) - 1);
             strncpy(r->protocol, "ws", sizeof(r->protocol) - 1);
-            strncpy(r->function_name, name ? name : "", sizeof(r->function_name) - 1);
-            strncpy(r->qualified_name, qn ? qn : "", sizeof(r->qualified_name) - 1);
+            fill_route_identity(r, name, qn);
             count++;
             continue;
         }
 
-        /* Try regular HTTP route */
         if (cbm_regexec(&py_route_re, decorators[i], 3, match, 0) == 0) {
             cbm_route_handler_t *r = &out[count];
             memset(r, 0, sizeof(*r));
-
-            /* Method */
-            int mlen = (match[1].rm_eo - match[1].rm_so);
-            if (mlen >= (int)sizeof(r->method)) {
-                mlen = (int)sizeof(r->method) - 1;
-            }
-            memcpy(r->method, decorators[i] + match[1].rm_so, (size_t)mlen);
-            r->method[mlen] = '\0';
-            /* Uppercase */
-            for (int j = 0; r->method[j]; j++) {
-                r->method[j] = (char)toupper((unsigned char)r->method[j]);
-            }
-
-            /* Path */
-            int plen = (match[2].rm_eo - match[2].rm_so);
-            if (plen >= (int)sizeof(r->path)) {
-                plen = (int)sizeof(r->path) - 1;
-            }
-            memcpy(r->path, decorators[i] + match[2].rm_so, (size_t)plen);
-            r->path[plen] = '\0';
-
-            strncpy(r->function_name, name ? name : "", sizeof(r->function_name) - 1);
-            strncpy(r->qualified_name, qn ? qn : "", sizeof(r->qualified_name) - 1);
+            copy_match_upper(r->method, (int)sizeof(r->method), decorators[i], match[1].rm_so,
+                             match[1].rm_eo);
+            copy_match(r->path, (int)sizeof(r->path), decorators[i], match[2].rm_so,
+                       match[2].rm_eo);
+            fill_route_identity(r, name, qn);
             count++;
         }
     }
@@ -836,7 +822,226 @@ int cbm_extract_python_routes(const char *name, const char *qn, const char **dec
 
 /* ── Route extraction: Go gin/chi ──────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Gin Group() binding: var → prefix. */
+typedef struct {
+    char var[64];
+    char prefix[256];
+} go_gin_group_t;
+
+/* Chi Route() match position + prefix. */
+typedef struct {
+    int end_pos;
+    char prefix[256];
+} go_chi_match_t;
+
+/* Route regex match with byte positions. */
+typedef struct {
+    int start_pos, end_pos;
+    int method_so, method_eo;
+    int path_so, path_eo;
+    int handler_so, handler_eo;
+} go_route_match_t;
+
+/* Collect gin Group() bindings from source. */
+static int collect_gin_groups(const char *source, const cbm_regex_t *re, go_gin_group_t *out,
+                              int max) {
+    int count = 0;
+    const char *sp = source;
+    cbm_regmatch_t gm[4];
+    while (cbm_regexec(re, sp, 4, gm, 0) == 0 && count < max) {
+        int vlen = (gm[1].rm_eo - gm[1].rm_so);
+        int plen = (gm[3].rm_eo - gm[3].rm_so);
+        if (vlen < 64 && plen < 256) {
+            memcpy(out[count].var, sp + gm[1].rm_so, (size_t)vlen);
+            out[count].var[vlen] = '\0';
+            memcpy(out[count].prefix, sp + gm[3].rm_so, (size_t)plen);
+            out[count].prefix[plen] = '\0';
+            count++;
+        }
+        sp += gm[0].rm_eo;
+    }
+    return count;
+}
+
+/* Collect chi Route() matches with absolute byte positions. */
+static int collect_chi_matches(const char *source, const cbm_regex_t *re, go_chi_match_t *out,
+                               int max) {
+    int count = 0;
+    const char *sp = source;
+    cbm_regmatch_t cm[2];
+    while (cbm_regexec(re, sp, 2, cm, 0) == 0 && count < max) {
+        int abs_end = (int)((sp - source) + cm[0].rm_eo);
+        int plen = (cm[1].rm_eo - cm[1].rm_so);
+        if (plen < 256) {
+            out[count].end_pos = abs_end;
+            memcpy(out[count].prefix, sp + cm[1].rm_so, (size_t)plen);
+            out[count].prefix[plen] = '\0';
+            count++;
+        }
+        sp += cm[0].rm_eo;
+    }
+    return count;
+}
+
+/* Collect route regex matches with absolute byte positions. */
+static int collect_route_matches(const char *source, const cbm_regex_t *re, go_route_match_t *out,
+                                 int max) {
+    int count = 0;
+    const char *sp = source;
+    cbm_regmatch_t rm[4];
+    while (cbm_regexec(re, sp, 4, rm, 0) == 0 && count < max) {
+        int base = (int)(sp - source);
+        out[count].start_pos = (base + rm[0].rm_so);
+        out[count].end_pos = (base + rm[0].rm_eo);
+        out[count].method_so = (base + rm[1].rm_so);
+        out[count].method_eo = (base + rm[1].rm_eo);
+        out[count].path_so = (base + rm[2].rm_so);
+        out[count].path_eo = (base + rm[2].rm_eo);
+        out[count].handler_so = (rm[3].rm_so >= 0) ? (base + rm[3].rm_so) : -1;
+        out[count].handler_eo = (rm[3].rm_eo >= 0) ? (base + rm[3].rm_eo) : -1;
+        count++;
+        sp += rm[0].rm_eo;
+    }
+    return count;
+}
+
+/* Chi prefix stack entry. */
+typedef struct {
+    char prefix[256];
+    int depth;
+} chi_stack_entry_t;
+
+/* Concatenate all active chi prefixes into a route prefix. */
+static void build_chi_prefix(const chi_stack_entry_t *stack, int top, char *out, int out_sz) {
+    out[0] = '\0';
+    for (int s = 0; s < top; s++) {
+        int cur = (int)strlen(out);
+        int pf = (int)strlen(stack[s].prefix);
+        if (cur + pf < out_sz - 1) {
+            strcat(out, stack[s].prefix);
+        }
+    }
+}
+
+/* Handle brace tracking for chi prefix computation. */
+static void chi_handle_brace(char c, chi_stack_entry_t *stack, int *top, int *brace_depth,
+                             bool *pending, const char *pending_prefix) {
+    if (c == '{') {
+        (*brace_depth)++;
+        if (*pending && *top < 32) {
+            strncpy(stack[*top].prefix, pending_prefix, sizeof(stack[*top].prefix) - 1);
+            stack[*top].prefix[sizeof(stack[*top].prefix) - 1] = '\0';
+            stack[*top].depth = *brace_depth;
+            (*top)++;
+            *pending = false;
+        }
+    } else if (c == '}') {
+        while (*top > 0 && stack[*top - 1].depth == *brace_depth) {
+            (*top)--;
+        }
+        (*brace_depth)--;
+    }
+}
+
+/* Compute chi prefix for each route via brace-depth tracking. */
+static void compute_chi_prefixes(const char *source, const go_chi_match_t *chi_matches, int nchi,
+                                 const go_route_match_t *route_matches, int nmatches,
+                                 char (*route_chi_prefix)[512]) {
+    if (nchi == 0 || nmatches == 0) {
+        return;
+    }
+
+    chi_stack_entry_t chi_stack[32];
+    int chi_top = 0;
+    int brace_depth = 0;
+    int next_chi = 0;
+    int next_route = 0;
+    bool pending = false;
+    char pending_prefix[256] = "";
+
+    int src_len = (int)strlen(source);
+    for (int i = 0; i <= src_len && next_route < nmatches; i++) {
+        while (next_chi < nchi && i >= chi_matches[next_chi].end_pos) {
+            pending = true;
+            strncpy(pending_prefix, chi_matches[next_chi].prefix, sizeof(pending_prefix) - 1);
+            pending_prefix[sizeof(pending_prefix) - 1] = '\0';
+            next_chi++;
+        }
+
+        if (i < src_len) {
+            chi_handle_brace(source[i], chi_stack, &chi_top, &brace_depth, &pending,
+                             pending_prefix);
+        }
+
+        while (next_route < nmatches && i == route_matches[next_route].start_pos) {
+            build_chi_prefix(chi_stack, chi_top, route_chi_prefix[next_route], 512);
+            next_route++;
+        }
+    }
+}
+
+/* Extract handler ref from match, trimming whitespace and trailing chars. */
+static void extract_handler_ref(const char *source, const go_route_match_t *rm,
+                                cbm_route_handler_t *r) {
+    if (rm->handler_so < 0) {
+        return;
+    }
+    int hlen = rm->handler_eo - rm->handler_so;
+    const char *hs = source + rm->handler_so;
+    while (hlen > 0 && (hs[0] == ' ' || hs[0] == '\t')) {
+        hs++;
+        hlen--;
+    }
+    while (hlen > 0 && (hs[hlen - 1] == ' ' || hs[hlen - 1] == '\t' || hs[hlen - 1] == ')' ||
+                        hs[hlen - 1] == '\n')) {
+        hlen--;
+    }
+    if (hlen > 0 && hlen < (int)sizeof(r->handler_ref)) {
+        memcpy(r->handler_ref, hs, (size_t)hlen);
+        r->handler_ref[hlen] = '\0';
+    }
+}
+
+/* Find receiver variable name before the dot in ".METHOD(" at start_pos. */
+static void find_receiver(const char *source, int start_pos, char *receiver, int max_len) {
+    receiver[0] = '\0';
+    const char *dot_pos = source + start_pos;
+    if (dot_pos <= source) {
+        return;
+    }
+    const char *rp = dot_pos - 1;
+    while (rp >= source && (isalnum((unsigned char)*rp) || *rp == '_')) {
+        rp--;
+    }
+    rp++;
+    int rlen = (int)(dot_pos - rp);
+    if (rlen > 0 && rlen < max_len) {
+        memcpy(receiver, rp, (size_t)rlen);
+        receiver[rlen] = '\0';
+    }
+}
+
+/* Apply gin group or chi prefix to a route path. */
+static void apply_go_route_prefix(cbm_route_handler_t *r, const char *receiver,
+                                  const go_gin_group_t *gin_groups, int ngin,
+                                  const char *chi_prefix) {
+    for (int g = 0; g < ngin; g++) {
+        if (strcmp(receiver, gin_groups[g].var) == 0) {
+            char full_path[512];
+            snprintf(full_path, sizeof(full_path), "%s%s", gin_groups[g].prefix, r->path);
+            strncpy(r->path, full_path, sizeof(r->path) - 1);
+            r->path[sizeof(r->path) - 1] = '\0';
+            return;
+        }
+    }
+    if (chi_prefix && chi_prefix[0]) {
+        char full_path[512];
+        snprintf(full_path, sizeof(full_path), "%s%s", chi_prefix, r->path);
+        strncpy(r->path, full_path, sizeof(r->path) - 1);
+        r->path[sizeof(r->path) - 1] = '\0';
+    }
+}
+
 int cbm_extract_go_routes(const char *name, const char *qn, const char *source,
                           cbm_route_handler_t *out, int max_out) {
     if (!source || !*source) {
@@ -854,7 +1059,6 @@ int cbm_extract_go_routes(const char *name, const char *qn, const char *source,
             CBM_REG_EXTENDED) != 0) {
         return 0;
     }
-
     if (cbm_regcomp(
             &go_group_re,
             "([a-zA-Z_][a-zA-Z0-9_]*)[[:space:]]*(:=|=)[[:space:]]*[a-zA-Z_][a-zA-Z0-9_]*\\."
@@ -863,7 +1067,6 @@ int cbm_extract_go_routes(const char *name, const char *qn, const char *source,
         cbm_regfree(&go_route_re);
         return 0;
     }
-
     if (cbm_regcomp(&go_chi_re, "\\.Route\\([[:space:]]*\"([^\"]+)\"[[:space:]]*,[[:space:]]*func",
                     CBM_REG_EXTENDED) != 0) {
         cbm_regfree(&go_route_re);
@@ -871,226 +1074,35 @@ int cbm_extract_go_routes(const char *name, const char *qn, const char *source,
         return 0;
     }
 
-    /* ── Step 1: Collect gin Group() bindings (var → prefix) ──── */
-    typedef struct {
-        char var[64];
-        char prefix[256];
-    } gin_group_t;
-    gin_group_t gin_groups[32];
-    int ngin = 0;
+    go_gin_group_t gin_groups[32];
+    int ngin = collect_gin_groups(source, &go_group_re, gin_groups, 32);
 
-    const char *sp = source;
-    cbm_regmatch_t gm[4];
-    while (cbm_regexec(&go_group_re, sp, 4, gm, 0) == 0 && ngin < 32) {
-        int vlen = (gm[1].rm_eo - gm[1].rm_so);
-        int plen = (gm[3].rm_eo - gm[3].rm_so);
-        if (vlen < 64 && plen < 256) {
-            memcpy(gin_groups[ngin].var, sp + gm[1].rm_so, (size_t)vlen);
-            gin_groups[ngin].var[vlen] = '\0';
-            memcpy(gin_groups[ngin].prefix, sp + gm[3].rm_so, (size_t)plen);
-            gin_groups[ngin].prefix[plen] = '\0';
-            ngin++;
-        }
-        sp += gm[0].rm_eo;
-    }
+    go_chi_match_t chi_matches[32];
+    int nchi = collect_chi_matches(source, &go_chi_re, chi_matches, 32);
 
-    /* ── Step 2: Collect chi Route() matches with byte positions ── */
-    typedef struct {
-        int end_pos;
-        char prefix[256];
-    } chi_match_t;
-    chi_match_t chi_matches[32];
-    int nchi = 0;
+    go_route_match_t route_matches[64];
+    int nmatches = collect_route_matches(source, &go_route_re, route_matches, 64);
 
-    sp = source;
-    cbm_regmatch_t cm[2];
-    while (cbm_regexec(&go_chi_re, sp, 2, cm, 0) == 0 && nchi < 32) {
-        int abs_end = (int)((sp - source) + cm[0].rm_eo);
-        int plen = (cm[1].rm_eo - cm[1].rm_so);
-        if (plen < 256) {
-            chi_matches[nchi].end_pos = abs_end;
-            memcpy(chi_matches[nchi].prefix, sp + cm[1].rm_so, (size_t)plen);
-            chi_matches[nchi].prefix[plen] = '\0';
-            nchi++;
-        }
-        sp += cm[0].rm_eo;
-    }
-
-    /* ── Step 3: Collect route matches with byte positions ─────── */
-    typedef struct {
-        int start_pos, end_pos;
-        int method_so, method_eo;
-        int path_so, path_eo;
-        int handler_so, handler_eo; /* capture group 3: handler ref */
-    } route_match_t;
-    route_match_t route_matches[64];
-    int nmatches = 0;
-
-    sp = source;
-    cbm_regmatch_t rm[4];
-    while (cbm_regexec(&go_route_re, sp, 4, rm, 0) == 0 && nmatches < 64) {
-        int base = (int)(sp - source);
-        route_matches[nmatches].start_pos = (base + rm[0].rm_so);
-        route_matches[nmatches].end_pos = (base + rm[0].rm_eo);
-        route_matches[nmatches].method_so = (base + rm[1].rm_so);
-        route_matches[nmatches].method_eo = (base + rm[1].rm_eo);
-        route_matches[nmatches].path_so = (base + rm[2].rm_so);
-        route_matches[nmatches].path_eo = (base + rm[2].rm_eo);
-        route_matches[nmatches].handler_so = (rm[3].rm_so >= 0) ? (base + rm[3].rm_so) : -1;
-        route_matches[nmatches].handler_eo = (rm[3].rm_eo >= 0) ? (base + rm[3].rm_eo) : -1;
-        nmatches++;
-        sp += rm[0].rm_eo;
-    }
-
-    /* ── Step 4: Compute chi prefix for each route via brace tracking ── */
     char route_chi_prefix[64][512];
     memset(route_chi_prefix, 0, sizeof(route_chi_prefix));
+    compute_chi_prefixes(source, chi_matches, nchi, route_matches, nmatches, route_chi_prefix);
 
-    if (nchi > 0 && nmatches > 0) {
-        /* Single pass through source tracking brace depth + chi prefix stack.
-         * When we pass a chi Route() match end, mark it pending.
-         * When we see '{', if pending, push onto stack at current depth.
-         * When we see '}', pop stack entries at current depth, then decrement.
-         * At each route position, concat stack entries for the prefix. */
-
-        struct {
-            char prefix[256];
-            int depth;
-        } chi_stack[32];
-        int chi_top = 0;
-        int brace_depth = 0;
-        int next_chi = 0;
-        int next_route = 0;
-        bool pending = false;
-        char pending_prefix[256] = "";
-
-        int src_len = (int)strlen(source);
-        for (int i = 0; i <= src_len && next_route < nmatches; i++) {
-            /* Check if we've passed a chi Route() match end */
-            while (next_chi < nchi && i >= chi_matches[next_chi].end_pos) {
-                pending = true;
-                strncpy(pending_prefix, chi_matches[next_chi].prefix, sizeof(pending_prefix) - 1);
-                pending_prefix[sizeof(pending_prefix) - 1] = '\0';
-                next_chi++;
-            }
-
-            if (i < src_len && source[i] == '{') {
-                brace_depth++;
-                if (pending && chi_top < 32) {
-                    strncpy(chi_stack[chi_top].prefix, pending_prefix,
-                            sizeof(chi_stack[chi_top].prefix) - 1);
-                    chi_stack[chi_top].prefix[sizeof(chi_stack[chi_top].prefix) - 1] = '\0';
-                    chi_stack[chi_top].depth = brace_depth;
-                    chi_top++;
-                    pending = false;
-                }
-            } else if (i < src_len && source[i] == '}') {
-                while (chi_top > 0 && chi_stack[chi_top - 1].depth == brace_depth) {
-                    chi_top--;
-                }
-                brace_depth--;
-            }
-
-            /* Check if this position is a route match start */
-            while (next_route < nmatches && i == route_matches[next_route].start_pos) {
-                /* Build prefix from chi stack */
-                route_chi_prefix[next_route][0] = '\0';
-                for (int s = 0; s < chi_top; s++) {
-                    int cur = (int)strlen(route_chi_prefix[next_route]);
-                    int pf = (int)strlen(chi_stack[s].prefix);
-                    if (cur + pf < HALF_BUF_GUARD) {
-                        strcat(route_chi_prefix[next_route], chi_stack[s].prefix);
-                    }
-                }
-                next_route++;
-            }
-        }
-    }
-
-    /* ── Step 5: Build output routes ───────────────────────────── */
     int count = 0;
     for (int ri = 0; ri < nmatches && count < max_out; ri++) {
         cbm_route_handler_t *r = &out[count];
         memset(r, 0, sizeof(*r));
 
-        /* Method */
-        int mlen = route_matches[ri].method_eo - route_matches[ri].method_so;
-        if (mlen >= (int)sizeof(r->method)) {
-            mlen = (int)sizeof(r->method) - 1;
-        }
-        memcpy(r->method, source + route_matches[ri].method_so, (size_t)mlen);
-        r->method[mlen] = '\0';
-        for (int j = 0; r->method[j]; j++) {
-            r->method[j] = (char)toupper((unsigned char)r->method[j]);
-        }
+        copy_match_upper(r->method, (int)sizeof(r->method), source, route_matches[ri].method_so,
+                         route_matches[ri].method_eo);
+        copy_match(r->path, (int)sizeof(r->path), source, route_matches[ri].path_so,
+                   route_matches[ri].path_eo);
 
-        /* Path */
-        int plen = route_matches[ri].path_eo - route_matches[ri].path_so;
-        if (plen >= (int)sizeof(r->path)) {
-            plen = (int)sizeof(r->path) - 1;
-        }
-        memcpy(r->path, source + route_matches[ri].path_so, (size_t)plen);
-        r->path[plen] = '\0';
+        char receiver[64];
+        find_receiver(source, route_matches[ri].start_pos, receiver, 64);
+        apply_go_route_prefix(r, receiver, gin_groups, ngin, route_chi_prefix[ri]);
 
-        /* Find the receiver: look back for "varName." before .METHOD */
-        const char *dot_pos = source + route_matches[ri].start_pos;
-        char receiver[64] = "";
-        if (dot_pos > source) {
-            const char *rp = dot_pos - 1;
-            while (rp >= source && (isalnum((unsigned char)*rp) || *rp == '_')) {
-                rp--;
-            }
-            rp++;
-            int rlen = (int)(dot_pos - rp);
-            if (rlen > 0 && rlen < 64) {
-                memcpy(receiver, rp, (size_t)rlen);
-                receiver[rlen] = '\0';
-            }
-        }
-
-        /* Apply gin group prefix if receiver matches a binding */
-        bool gin_applied = false;
-        for (int g = 0; g < ngin; g++) {
-            if (strcmp(receiver, gin_groups[g].var) == 0) {
-                char full_path[512];
-                snprintf(full_path, sizeof(full_path), "%s%s", gin_groups[g].prefix, r->path);
-                strncpy(r->path, full_path, sizeof(r->path) - 1);
-                r->path[sizeof(r->path) - 1] = '\0';
-                gin_applied = true;
-                break;
-            }
-        }
-
-        /* Apply chi prefix (only if gin group wasn't applied) */
-        if (!gin_applied && route_chi_prefix[ri][0]) {
-            char full_path[512];
-            snprintf(full_path, sizeof(full_path), "%s%s", route_chi_prefix[ri], r->path);
-            strncpy(r->path, full_path, sizeof(r->path) - 1);
-            r->path[sizeof(r->path) - 1] = '\0';
-        }
-
-        strncpy(r->function_name, name ? name : "", sizeof(r->function_name) - 1);
-        strncpy(r->qualified_name, qn ? qn : "", sizeof(r->qualified_name) - 1);
-
-        /* Handler ref from capture group 3 (e.g., "h.CreateOrder") */
-        if (route_matches[ri].handler_so >= 0) {
-            int hlen = route_matches[ri].handler_eo - route_matches[ri].handler_so;
-            /* Trim whitespace */
-            const char *hs = source + route_matches[ri].handler_so;
-            while (hlen > 0 && (hs[0] == ' ' || hs[0] == '\t')) {
-                hs++;
-                hlen--;
-            }
-            while (hlen > 0 && (hs[hlen - 1] == ' ' || hs[hlen - 1] == '\t' ||
-                                hs[hlen - 1] == ')' || hs[hlen - 1] == '\n')) {
-                hlen--;
-            }
-            if (hlen > 0 && hlen < (int)sizeof(r->handler_ref)) {
-                memcpy(r->handler_ref, hs, (size_t)hlen);
-                r->handler_ref[hlen] = '\0';
-            }
-        }
-
+        fill_route_identity(r, name, qn);
+        extract_handler_ref(source, &route_matches[ri], r);
         count++;
     }
 
@@ -1102,7 +1114,26 @@ int cbm_extract_go_routes(const char *name, const char *qn, const char *source,
 
 /* ── Route extraction: Java Spring ─────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Resolve Spring annotation name to HTTP method string. */
+static const char *spring_method_from_annotation(const char *ann_name) {
+    if (strcmp(ann_name, "Get") == 0) {
+        return "GET";
+    }
+    if (strcmp(ann_name, "Post") == 0) {
+        return "POST";
+    }
+    if (strcmp(ann_name, "Put") == 0) {
+        return "PUT";
+    }
+    if (strcmp(ann_name, "Delete") == 0) {
+        return "DELETE";
+    }
+    if (strcmp(ann_name, "Patch") == 0) {
+        return "PATCH";
+    }
+    return "ANY";
+}
+
 int cbm_extract_java_routes(const char *name, const char *qn, const char **decorators, int ndec,
                             cbm_route_handler_t *out, int max_out) {
     if (!decorators || ndec <= 0) {
@@ -1128,64 +1159,30 @@ int cbm_extract_java_routes(const char *name, const char *qn, const char **decor
     for (int i = 0; i < ndec && count < max_out; i++) {
         cbm_regmatch_t match[4];
 
-        /* Try WebSocket first */
         if (cbm_regexec(&spring_ws_re, decorators[i], 2, match, 0) == 0) {
             cbm_route_handler_t *r = &out[count];
             memset(r, 0, sizeof(*r));
-
-            int plen = (match[1].rm_eo - match[1].rm_so);
-            if (plen >= (int)sizeof(r->path)) {
-                plen = (int)sizeof(r->path) - 1;
-            }
-            memcpy(r->path, decorators[i] + match[1].rm_so, (size_t)plen);
-            r->path[plen] = '\0';
-
+            copy_match(r->path, (int)sizeof(r->path), decorators[i], match[1].rm_so,
+                       match[1].rm_eo);
             strncpy(r->method, "WS", sizeof(r->method) - 1);
             strncpy(r->protocol, "ws", sizeof(r->protocol) - 1);
-            strncpy(r->function_name, name ? name : "", sizeof(r->function_name) - 1);
-            strncpy(r->qualified_name, qn ? qn : "", sizeof(r->qualified_name) - 1);
+            fill_route_identity(r, name, qn);
             count++;
             continue;
         }
 
-        /* Try Spring mapping */
         if (cbm_regexec(&spring_re, decorators[i], 4, match, 0) == 0) {
             cbm_route_handler_t *r = &out[count];
             memset(r, 0, sizeof(*r));
 
-            /* Method from annotation name */
-            int mlen = (match[1].rm_eo - match[1].rm_so);
             char method_name[32];
-            if (mlen >= (int)sizeof(method_name)) {
-                mlen = (int)sizeof(method_name) - 1;
-            }
-            memcpy(method_name, decorators[i] + match[1].rm_so, (size_t)mlen);
-            method_name[mlen] = '\0';
+            copy_match(method_name, (int)sizeof(method_name), decorators[i], match[1].rm_so,
+                       match[1].rm_eo);
+            strncpy(r->method, spring_method_from_annotation(method_name), sizeof(r->method) - 1);
 
-            if (strcmp(method_name, "Get") == 0) {
-                strncpy(r->method, "GET", sizeof(r->method) - 1);
-            } else if (strcmp(method_name, "Post") == 0) {
-                strncpy(r->method, "POST", sizeof(r->method) - 1);
-            } else if (strcmp(method_name, "Put") == 0) {
-                strncpy(r->method, "PUT", sizeof(r->method) - 1);
-            } else if (strcmp(method_name, "Delete") == 0) {
-                strncpy(r->method, "DELETE", sizeof(r->method) - 1);
-            } else if (strcmp(method_name, "Patch") == 0) {
-                strncpy(r->method, "PATCH", sizeof(r->method) - 1);
-            } else {
-                strncpy(r->method, "ANY", sizeof(r->method) - 1);
-            }
-
-            /* Path */
-            int plen = (match[3].rm_eo - match[3].rm_so);
-            if (plen >= (int)sizeof(r->path)) {
-                plen = (int)sizeof(r->path) - 1;
-            }
-            memcpy(r->path, decorators[i] + match[3].rm_so, (size_t)plen);
-            r->path[plen] = '\0';
-
-            strncpy(r->function_name, name ? name : "", sizeof(r->function_name) - 1);
-            strncpy(r->qualified_name, qn ? qn : "", sizeof(r->qualified_name) - 1);
+            copy_match(r->path, (int)sizeof(r->path), decorators[i], match[3].rm_so,
+                       match[3].rm_eo);
+            fill_route_identity(r, name, qn);
             count++;
         }
     }
@@ -1197,7 +1194,50 @@ int cbm_extract_java_routes(const char *name, const char *qn, const char **decor
 
 /* ── Route extraction: Kotlin Ktor ─────────────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Collect Ktor WebSocket routes. */
+static int collect_ktor_ws_routes(const char *source, const cbm_regex_t *re, const char *name,
+                                  const char *qn, cbm_route_handler_t *out, int max_out) {
+    int count = 0;
+    const char *p = source;
+    cbm_regmatch_t match[2];
+
+    while (count < max_out && cbm_regexec(re, p, 2, match, 0) == 0) {
+        cbm_route_handler_t *r = &out[count];
+        memset(r, 0, sizeof(*r));
+        copy_match(r->path, (int)sizeof(r->path), p, match[1].rm_so, match[1].rm_eo);
+        strncpy(r->method, "WS", sizeof(r->method) - 1);
+        strncpy(r->protocol, "ws", sizeof(r->protocol) - 1);
+        fill_route_identity(r, name, qn);
+        count++;
+        p += match[0].rm_eo;
+    }
+    return count;
+}
+
+/* Collect Ktor HTTP routes, skipping webSocket false positives. */
+static int collect_ktor_http_routes(const char *source, const cbm_regex_t *re, const char *name,
+                                    const char *qn, cbm_route_handler_t *out, int max_out) {
+    int count = 0;
+    const char *p = source;
+    cbm_regmatch_t match[3];
+
+    while (count < max_out && cbm_regexec(re, p, 3, match, 0) == 0) {
+        const char *match_start = p + match[0].rm_so;
+        bool is_ws = (match_start >= source + 3 && strncmp(match_start - 3, "web", 3) == 0);
+
+        if (!is_ws) {
+            cbm_route_handler_t *r = &out[count];
+            memset(r, 0, sizeof(*r));
+            copy_match_upper(r->method, (int)sizeof(r->method), p, match[1].rm_so, match[1].rm_eo);
+            copy_match(r->path, (int)sizeof(r->path), p, match[2].rm_so, match[2].rm_eo);
+            fill_route_identity(r, name, qn);
+            count++;
+        }
+        p += match[0].rm_eo;
+    }
+    return count;
+}
+
 int cbm_extract_ktor_routes(const char *name, const char *qn, const char *source,
                             cbm_route_handler_t *out, int max_out) {
     if (!source || !*source) {
@@ -1217,66 +1257,8 @@ int cbm_extract_ktor_routes(const char *name, const char *qn, const char *source
         return 0;
     }
 
-    int count = 0;
-    const char *p = source;
-    cbm_regmatch_t match[3];
-
-    /* WebSocket routes */
-    while (count < max_out && cbm_regexec(&ktor_ws_re, p, 2, match, 0) == 0) {
-        cbm_route_handler_t *r = &out[count];
-        memset(r, 0, sizeof(*r));
-
-        int plen = (match[1].rm_eo - match[1].rm_so);
-        if (plen >= (int)sizeof(r->path)) {
-            plen = (int)sizeof(r->path) - 1;
-        }
-        memcpy(r->path, p + match[1].rm_so, (size_t)plen);
-        r->path[plen] = '\0';
-
-        strncpy(r->method, "WS", sizeof(r->method) - 1);
-        strncpy(r->protocol, "ws", sizeof(r->protocol) - 1);
-        strncpy(r->function_name, name ? name : "", sizeof(r->function_name) - 1);
-        strncpy(r->qualified_name, qn ? qn : "", sizeof(r->qualified_name) - 1);
-        count++;
-        p += match[0].rm_eo;
-    }
-
-    /* HTTP routes */
-    p = source;
-    while (count < max_out && cbm_regexec(&ktor_re, p, 3, match, 0) == 0) {
-        /* Make sure this isn't the webSocket match (check if preceded by "web") */
-        const char *match_start = p + match[0].rm_so;
-        bool is_ws = (match_start >= source + 3 && strncmp(match_start - 3, "web", 3) == 0);
-
-        if (!is_ws) {
-            cbm_route_handler_t *r = &out[count];
-            memset(r, 0, sizeof(*r));
-
-            /* Method */
-            int mlen = (match[1].rm_eo - match[1].rm_so);
-            if (mlen >= (int)sizeof(r->method)) {
-                mlen = (int)sizeof(r->method) - 1;
-            }
-            memcpy(r->method, p + match[1].rm_so, (size_t)mlen);
-            r->method[mlen] = '\0';
-            for (int j = 0; r->method[j]; j++) {
-                r->method[j] = (char)toupper((unsigned char)r->method[j]);
-            }
-
-            /* Path */
-            int plen = (match[2].rm_eo - match[2].rm_so);
-            if (plen >= (int)sizeof(r->path)) {
-                plen = (int)sizeof(r->path) - 1;
-            }
-            memcpy(r->path, p + match[2].rm_so, (size_t)plen);
-            r->path[plen] = '\0';
-
-            strncpy(r->function_name, name ? name : "", sizeof(r->function_name) - 1);
-            strncpy(r->qualified_name, qn ? qn : "", sizeof(r->qualified_name) - 1);
-            count++;
-        }
-        p += match[0].rm_eo;
-    }
+    int count = collect_ktor_ws_routes(source, &ktor_ws_re, name, qn, out, max_out);
+    count += collect_ktor_http_routes(source, &ktor_re, name, qn, out + count, max_out - count);
 
     cbm_regfree(&ktor_re);
     cbm_regfree(&ktor_ws_re);
@@ -1296,7 +1278,6 @@ static bool is_express_receiver(const char *receiver) {
     return false;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
 int cbm_extract_express_routes(const char *name, const char *qn, const char *source,
                                cbm_route_handler_t *out, int max_out) {
     if (!source || !*source) {
@@ -1317,40 +1298,15 @@ int cbm_extract_express_routes(const char *name, const char *qn, const char *sou
     cbm_regmatch_t match[4];
 
     while (count < max_out && cbm_regexec(&express_re, p, 4, match, 0) == 0) {
-        /* Extract receiver */
-        int rlen = (match[1].rm_eo - match[1].rm_so);
         char receiver[64];
-        if (rlen >= 64) {
-            rlen = RECEIVER_MAX;
-        }
-        memcpy(receiver, p + match[1].rm_so, (size_t)rlen);
-        receiver[rlen] = '\0';
+        copy_match(receiver, (int)sizeof(receiver), p, match[1].rm_so, match[1].rm_eo);
 
         if (is_express_receiver(receiver)) {
             cbm_route_handler_t *r = &out[count];
             memset(r, 0, sizeof(*r));
-
-            /* Method */
-            int mlen = (match[2].rm_eo - match[2].rm_so);
-            if (mlen >= (int)sizeof(r->method)) {
-                mlen = (int)sizeof(r->method) - 1;
-            }
-            memcpy(r->method, p + match[2].rm_so, (size_t)mlen);
-            r->method[mlen] = '\0';
-            for (int j = 0; r->method[j]; j++) {
-                r->method[j] = (char)toupper((unsigned char)r->method[j]);
-            }
-
-            /* Path */
-            int plen = (match[3].rm_eo - match[3].rm_so);
-            if (plen >= (int)sizeof(r->path)) {
-                plen = (int)sizeof(r->path) - 1;
-            }
-            memcpy(r->path, p + match[3].rm_so, (size_t)plen);
-            r->path[plen] = '\0';
-
-            strncpy(r->function_name, name ? name : "", sizeof(r->function_name) - 1);
-            strncpy(r->qualified_name, qn ? qn : "", sizeof(r->qualified_name) - 1);
+            copy_match_upper(r->method, (int)sizeof(r->method), p, match[2].rm_so, match[2].rm_eo);
+            copy_match(r->path, (int)sizeof(r->path), p, match[3].rm_so, match[3].rm_eo);
+            fill_route_identity(r, name, qn);
             count++;
         }
         p += match[0].rm_eo;
@@ -1480,7 +1436,36 @@ char *cbm_read_source_lines_disk(const char *root_dir, const char *rel_path, int
 
 /* ── Read source lines from cached buffer ──────────────────────── */
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Append a line to a dynamically growing result buffer. */
+static void append_line_to_result(char **result, int *result_len, int *result_cap, const char *line,
+                                  int line_len) {
+    /* Strip trailing \r for CRLF files */
+    int copy_len = line_len;
+    // cppcheck-suppress knownConditionTrueFalse
+    if (copy_len > 0 && line[copy_len - 1] == '\r') {
+        copy_len--;
+    }
+
+    /* Add separator between lines */
+    if (*result_len > 0) {
+        if (*result_len + 1 >= *result_cap) {
+            *result_cap = (*result_cap == 0) ? 1024 : *result_cap * 2;
+            *result = safe_realloc(*result, (size_t)*result_cap);
+        }
+        (*result)[(*result_len)++] = '\n';
+    }
+
+    /* Add line content */
+    if (*result_len + copy_len >= *result_cap) {
+        *result_cap = *result_len + copy_len + 256;
+        *result = safe_realloc(*result, (size_t)*result_cap);
+    }
+    if (copy_len > 0 && *result) {
+        memcpy(*result + *result_len, line, (size_t)copy_len);
+        *result_len += copy_len;
+    }
+}
+
 char *cbm_read_source_lines_cached(const char *source, int source_len, int start_line,
                                    int end_line) {
     if (!source || source_len <= 0 || start_line <= 0 || end_line < start_line) {
@@ -1496,36 +1481,11 @@ char *cbm_read_source_lines_cached(const char *source, int source_len, int start
 
     while (p < end) {
         line++;
-        /* Find end of this line */
         const char *eol = memchr(p, '\n', (size_t)(end - p));
         int llen = eol ? (int)(eol - p) : (int)(end - p);
 
         if (line >= start_line && line <= end_line) {
-            /* Strip trailing \r for CRLF files */
-            int copy_len = llen;
-            // cppcheck-suppress knownConditionTrueFalse
-            if (copy_len > 0 && p[copy_len - 1] == '\r') {
-                copy_len--;
-            }
-
-            /* Add separator between lines */
-            if (result_len > 0) {
-                if (result_len + 1 >= result_cap) {
-                    result_cap = (result_cap == 0) ? 1024 : result_cap * 2;
-                    result = safe_realloc(result, (size_t)result_cap);
-                }
-                result[result_len++] = '\n';
-            }
-
-            /* Add line content */
-            if (result_len + copy_len >= result_cap) {
-                result_cap = result_len + copy_len + 256;
-                result = safe_realloc(result, (size_t)result_cap);
-            }
-            if (copy_len > 0) {
-                memcpy(result + result_len, p, (size_t)copy_len);
-                result_len += copy_len;
-            }
+            append_line_to_result(&result, &result_len, &result_cap, p, llen);
         }
 
         if (line > end_line) {

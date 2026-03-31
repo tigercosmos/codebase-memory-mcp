@@ -524,12 +524,21 @@ lint-format:
 	@echo "=== clang-format ==="
 	@$(CLANG_FORMAT) --dry-run --Werror $(LINT_SRCS) $(LINT_HDRS)
 
+# Ban NOLINTNEXTLINE in our code (vendored code exempt)
+lint-no-suppress:
+	@echo "=== NOLINTNEXTLINE check ==="
+	@if grep -rn 'NOLINTNEXTLINE\|NOLINTBEGIN\|NOLINTEND' src/ internal/cbm/*.c 2>/dev/null | grep -v vendored; then \
+		echo "ERROR: NOLINTNEXTLINE/NOLINTBEGIN/NOLINTEND found in source code."; \
+		echo "Fix the underlying issue instead of suppressing the linter."; \
+		exit 1; \
+	fi
+
 # All linters (run with make -j3 lint for parallel execution)
-lint: lint-tidy lint-cppcheck lint-format
+lint: lint-tidy lint-cppcheck lint-format lint-no-suppress
 	@echo "=== All linters passed ==="
 
 # CI linters (no clang-tidy — platform-dependent, enforced locally via pre-commit)
-lint-ci: lint-cppcheck lint-format
+lint-ci: lint-cppcheck lint-format lint-no-suppress
 	@echo "=== CI linters passed ==="
 
 # ── Security audit (6 layers) ────────────────────────────────────

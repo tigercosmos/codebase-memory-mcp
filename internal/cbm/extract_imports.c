@@ -186,10 +186,8 @@ static void emit_py_import_from_name(CBMExtractCtx *ctx, TSNode child, const cha
 static void process_py_import_from(CBMExtractCtx *ctx, TSNode node) {
     CBMArena *a = ctx->arena;
     TSNode module_node = resolve_py_module_node(node);
-    // NOLINTBEGIN(readability-implicit-bool-conversion)
     char *mod_path =
         ts_node_is_null(module_node) ? NULL : cbm_node_text(a, module_node, ctx->source);
-    // NOLINTEND(readability-implicit-bool-conversion)
 
     uint32_t nc = ts_node_child_count(node);
     for (uint32_t j = 0; j < nc; j++) {

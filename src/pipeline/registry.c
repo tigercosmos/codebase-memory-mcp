@@ -457,11 +457,9 @@ static int filter_import_reachable(const char **candidates, int count, const cha
     return n;
 }
 
-// NOLINTBEGIN(bugprone-easily-swappable-parameters) — public API, parameter order is intentional
 cbm_fuzzy_result_t cbm_registry_fuzzy_resolve(const cbm_registry_t *r, const char *callee_name,
                                               const char *module_qn, const char **import_map_keys,
                                               const char **import_map_vals, int import_map_count) {
-    // NOLINTEND(bugprone-easily-swappable-parameters)
     (void)import_map_keys;
     cbm_fuzzy_result_t no_match = {{0}, false};
     if (!r || !callee_name) {

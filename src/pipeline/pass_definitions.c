@@ -65,60 +65,53 @@ static const char *itoa_log(int val) {
 /* Append a JSON-escaped string value to buf at position *pos.
  * Writes: ,"key":"escaped_value"
  * Handles: \, ", \n, \r, \t */
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+static int def_json_escape_char(char *buf, size_t avail, char ch) {
+    char esc = 0;
+    switch (ch) {
+    case '"':
+        esc = '"';
+        break;
+    case '\\':
+        esc = '\\';
+        break;
+    case '\n':
+        esc = 'n';
+        break;
+    case '\r':
+        esc = 'r';
+        break;
+    case '\t':
+        esc = 't';
+        break;
+    default:
+        if (avail >= 1) {
+            buf[0] = ch;
+        }
+        return 1;
+    }
+    if (avail >= 2) {
+        buf[0] = '\\';
+        buf[1] = esc;
+    }
+    return 2;
+}
+
 static void append_json_string(char *buf, size_t bufsize, size_t *pos, const char *key,
                                const char *val) {
-    if (!val || !val[0]) {
+    if (!val || val[0] == '\0') {
         return;
     }
     if (*pos >= bufsize - 10) {
         return;
     }
-
     size_t p = *pos;
-    /* ,\"key\":\" */
     int w = snprintf(buf + p, bufsize - p, ",\"%s\":\"", key);
     if (w <= 0 || (size_t)w >= bufsize - p) {
         return;
     }
     p += (size_t)w;
-
     for (const char *s = val; *s && p < bufsize - 3; s++) {
-        switch (*s) {
-        case '"':
-            buf[p++] = '\\';
-            if (p < bufsize - 2) {
-                buf[p++] = '"';
-            }
-            break;
-        case '\\':
-            buf[p++] = '\\';
-            if (p < bufsize - 2) {
-                buf[p++] = '\\';
-            }
-            break;
-        case '\n':
-            buf[p++] = '\\';
-            if (p < bufsize - 2) {
-                buf[p++] = 'n';
-            }
-            break;
-        case '\r':
-            buf[p++] = '\\';
-            if (p < bufsize - 2) {
-                buf[p++] = 'r';
-            }
-            break;
-        case '\t':
-            buf[p++] = '\\';
-            if (p < bufsize - 2) {
-                buf[p++] = 't';
-            }
-            break;
-        default:
-            buf[p++] = *s;
-            break;
-        }
+        p += (size_t)def_json_escape_char(buf + p, bufsize - p - 2, *s);
     }
     if (p < bufsize - 1) {
         buf[p++] = '"';
@@ -196,7 +189,61 @@ static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def)
     }
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Process one definition: create node, register, DEFINES + DEFINES_METHOD edges. */
+static void process_def(cbm_pipeline_ctx_t *ctx, const CBMDefinition *def, const char *rel) {
+    if (!def->qualified_name || !def->name) {
+        return;
+    }
+    char props[2048];
+    build_def_props(props, sizeof(props), def);
+    int64_t node_id = cbm_gbuf_upsert_node(
+        ctx->gbuf, def->label ? def->label : "Function", def->name, def->qualified_name,
+        def->file_path ? def->file_path : rel, (int)def->start_line, (int)def->end_line, props);
+    if (node_id > 0 && def->label &&
+        (strcmp(def->label, "Function") == 0 || strcmp(def->label, "Method") == 0 ||
+         strcmp(def->label, "Class") == 0)) {
+        cbm_registry_add(ctx->registry, def->name, def->qualified_name, def->label);
+    }
+    char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
+    const cbm_gbuf_node_t *file_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
+    if (file_node && node_id > 0) {
+        cbm_gbuf_insert_edge(ctx->gbuf, file_node->id, node_id, "DEFINES", "{}");
+    }
+    free(file_qn);
+    if (def->parent_class && def->label && strcmp(def->label, "Method") == 0) {
+        const cbm_gbuf_node_t *parent = cbm_gbuf_find_by_qn(ctx->gbuf, def->parent_class);
+        if (parent && node_id > 0) {
+            cbm_gbuf_insert_edge(ctx->gbuf, parent->id, node_id, "DEFINES_METHOD", "{}");
+        }
+    }
+}
+
+/* Create IMPORTS edges for one file's imports. */
+static int create_import_edges_for_file(cbm_pipeline_ctx_t *ctx, const CBMFileResult *result,
+                                        const char *rel) {
+    int count = 0;
+    for (int j = 0; j < result->imports.count; j++) {
+        const CBMImport *imp = &result->imports.items[j];
+        if (!imp->module_path) {
+            continue;
+        }
+        char *target_qn = cbm_pipeline_fqn_module(ctx->project_name, imp->module_path);
+        const cbm_gbuf_node_t *target = cbm_gbuf_find_by_qn(ctx->gbuf, target_qn);
+        char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
+        const cbm_gbuf_node_t *source_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
+        if (source_node && target) {
+            char imp_props[256];
+            snprintf(imp_props, sizeof(imp_props), "{\"local_name\":\"%s\"}",
+                     imp->local_name ? imp->local_name : "");
+            cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, target->id, "IMPORTS", imp_props);
+            count++;
+        }
+        free(target_qn);
+        free(file_qn);
+    }
+    return count;
+}
+
 int cbm_pipeline_pass_definitions(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                                   int file_count) {
     cbm_log_info("pass.start", "pass", "definitions", "files", itoa_log(file_count));
@@ -240,75 +287,14 @@ int cbm_pipeline_pass_definitions(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t
 
         /* Create nodes for each definition */
         for (int d = 0; d < result->defs.count; d++) {
-            CBMDefinition *def = &result->defs.items[d];
-            if (!def->qualified_name || !def->name) {
-                continue;
-            }
-
-            char props[2048];
-            build_def_props(props, sizeof(props), def);
-
-            int64_t node_id =
-                cbm_gbuf_upsert_node(ctx->gbuf, def->label ? def->label : "Function", def->name,
-                                     def->qualified_name, def->file_path ? def->file_path : rel,
-                                     (int)def->start_line, (int)def->end_line, props);
-
-            /* Register callable symbols in the registry */
-            if (node_id > 0 && def->label &&
-                (strcmp(def->label, "Function") == 0 || strcmp(def->label, "Method") == 0 ||
-                 strcmp(def->label, "Class") == 0)) {
-                cbm_registry_add(ctx->registry, def->name, def->qualified_name, def->label);
-            }
-
-            /* DEFINES edge: File node → Definition node */
-            const char *file_qn_name = "__file__";
-            char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, file_qn_name);
-            const cbm_gbuf_node_t *file_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
-            if (file_node && node_id > 0) {
-                cbm_gbuf_insert_edge(ctx->gbuf, file_node->id, node_id, "DEFINES", "{}");
-            }
-            free(file_qn);
-
-            /* DEFINES_METHOD edge: Class → Method */
-            if (def->parent_class && def->label && strcmp(def->label, "Method") == 0) {
-                const cbm_gbuf_node_t *parent = cbm_gbuf_find_by_qn(ctx->gbuf, def->parent_class);
-                if (parent && node_id > 0) {
-                    cbm_gbuf_insert_edge(ctx->gbuf, parent->id, node_id, "DEFINES_METHOD", "{}");
-                }
-            }
-
+            process_def(ctx, &result->defs.items[d], rel);
             total_defs++;
         }
 
         /* Store calls for pass_calls (we save them in the extraction results
          * for now — a future optimization would batch these) */
         total_calls += result->calls.count;
-        total_imports += result->imports.count;
-
-        /* Store per-file import map for later use by pass_calls.
-         * For each import, create an IMPORTS edge: File → imported module. */
-        for (int j = 0; j < result->imports.count; j++) {
-            CBMImport *imp = &result->imports.items[j];
-            if (!imp->module_path) {
-                continue;
-            }
-
-            /* Find or create the target module node */
-            char *target_qn = cbm_pipeline_fqn_module(ctx->project_name, imp->module_path);
-            const cbm_gbuf_node_t *target = cbm_gbuf_find_by_qn(ctx->gbuf, target_qn);
-
-            char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
-            const cbm_gbuf_node_t *source_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
-
-            if (source_node && target) {
-                char imp_props[256];
-                snprintf(imp_props, sizeof(imp_props), "{\"local_name\":\"%s\"}",
-                         imp->local_name ? imp->local_name : "");
-                cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, target->id, "IMPORTS", imp_props);
-            }
-            free(target_qn);
-            free(file_qn);
-        }
+        total_imports += create_import_edges_for_file(ctx, result, rel);
 
         /* Cache or free the extraction result */
         if (ctx->result_cache) {

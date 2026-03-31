@@ -202,7 +202,45 @@ static bool fp_ends_with(const char *fp, const char *suffix) {
     return fplen >= sflen && strcmp(fp + fplen - sflen, suffix) == 0;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Info about one interface method (name + node ID). */
+typedef struct {
+    const char *name;
+    int64_t id;
+} go_imethod_t;
+
+/* Check if class has all interface methods and create IMPLEMENTS + OVERRIDE edges. */
+static int check_go_class_implements(cbm_pipeline_ctx_t *ctx, const cbm_gbuf_node_t *cls,
+                                     const cbm_gbuf_node_t *iface, const go_imethod_t *imethods,
+                                     int im_count) {
+    if (!cls->file_path || !cls->qualified_name) {
+        return 0;
+    }
+    if (!fp_ends_with(cls->file_path, ".go")) {
+        return 0;
+    }
+    char prefix[512];
+    snprintf(prefix, sizeof(prefix), "%s.", cls->qualified_name);
+    for (int m = 0; m < im_count; m++) {
+        char method_qn[512];
+        snprintf(method_qn, sizeof(method_qn), "%s%s", prefix, imethods[m].name);
+        if (!cbm_gbuf_find_by_qn(ctx->gbuf, method_qn)) {
+            return 0;
+        }
+    }
+    cbm_gbuf_insert_edge(ctx->gbuf, cls->id, iface->id, "IMPLEMENTS", "{}");
+    int edges = 1;
+    for (int m = 0; m < im_count; m++) {
+        char method_qn[512];
+        snprintf(method_qn, sizeof(method_qn), "%s%s", prefix, imethods[m].name);
+        const cbm_gbuf_node_t *cm = cbm_gbuf_find_by_qn(ctx->gbuf, method_qn);
+        if (cm) {
+            cbm_gbuf_insert_edge(ctx->gbuf, cm->id, imethods[m].id, "OVERRIDE", "{}");
+            edges++;
+        }
+    }
+    return edges;
+}
+
 int cbm_pipeline_implements_go(cbm_pipeline_ctx_t *ctx) {
     int edge_count = 0;
 
@@ -237,16 +275,12 @@ int cbm_pipeline_implements_go(cbm_pipeline_ctx_t *ctx) {
         }
 
         /* Collect interface method info */
-        typedef struct {
-            const char *name;
-            int64_t id;
-        } imethod_t;
-        imethod_t imethods[128];
+        go_imethod_t imethods[128];
         int im_count = 0;
         for (int j = 0; j < dm_count && im_count < 128; j++) {
             const cbm_gbuf_node_t *m = cbm_gbuf_find_by_id(ctx->gbuf, dm_edges[j]->target_id);
             if (m && m->name) {
-                imethods[im_count++] = (imethod_t){m->name, m->id};
+                imethods[im_count++] = (go_imethod_t){m->name, m->id};
             }
         }
         if (im_count == 0) {
@@ -255,52 +289,120 @@ int cbm_pipeline_implements_go(cbm_pipeline_ctx_t *ctx) {
 
         /* Check each Class node for method-set satisfaction */
         for (int c = 0; c < class_count; c++) {
-            const cbm_gbuf_node_t *cls = classes[c];
-            if (!cls->file_path || !cls->qualified_name) {
-                continue;
-            }
-            if (!fp_ends_with(cls->file_path, ".go")) {
-                continue;
-            }
-
-            /* Build QN prefix: "pkg.FileReader." */
-            char prefix[512];
-            snprintf(prefix, sizeof(prefix), "%s.", cls->qualified_name);
-
-            /* Check if ALL interface methods are present */
-            bool all_match = true;
-            for (int m = 0; m < im_count; m++) {
-                char method_qn[512];
-                snprintf(method_qn, sizeof(method_qn), "%s%s", prefix, imethods[m].name);
-                if (!cbm_gbuf_find_by_qn(ctx->gbuf, method_qn)) {
-                    all_match = false;
-                    break;
-                }
-            }
-            if (!all_match) {
-                continue;
-            }
-
-            /* IMPLEMENTS edge: Class → Interface */
-            cbm_gbuf_insert_edge(ctx->gbuf, cls->id, iface->id, "IMPLEMENTS", "{}");
-            edge_count++;
-
-            /* OVERRIDE edges: ClassMethod → InterfaceMethod */
-            for (int m = 0; m < im_count; m++) {
-                char method_qn[512];
-                snprintf(method_qn, sizeof(method_qn), "%s%s", prefix, imethods[m].name);
-                const cbm_gbuf_node_t *cm = cbm_gbuf_find_by_qn(ctx->gbuf, method_qn);
-                if (cm) {
-                    cbm_gbuf_insert_edge(ctx->gbuf, cm->id, imethods[m].id, "OVERRIDE", "{}");
-                    edge_count++;
-                }
-            }
+            edge_count += check_go_class_implements(ctx, classes[c], iface, imethods, im_count);
         }
     }
     return edge_count;
 }
 
-// NOLINTNEXTLINE(readability-function-cognitive-complexity)
+/* Process INHERITS + DECORATES edges for one definition. */
+/* Resolve one decorator and create DECORATES edge. */
+static void resolve_decorator(cbm_pipeline_ctx_t *ctx, const cbm_gbuf_node_t *node,
+                              const char *decorator, const char *module_qn, const char **imp_keys,
+                              const char **imp_vals, int imp_count, int *count) {
+    char func_name[256];
+    extract_decorator_func(decorator, func_name, sizeof(func_name));
+    if (func_name[0] == '\0') {
+        return;
+    }
+    cbm_resolution_t res =
+        cbm_registry_resolve(ctx->registry, func_name, module_qn, imp_keys, imp_vals, imp_count);
+    if (!res.qualified_name || res.qualified_name[0] == '\0') {
+        return;
+    }
+    const cbm_gbuf_node_t *dec = cbm_gbuf_find_by_qn(ctx->gbuf, res.qualified_name);
+    if (dec && node->id != dec->id) {
+        char props[256];
+        snprintf(props, sizeof(props), "{\"decorator\":\"%s\"}", decorator);
+        cbm_gbuf_insert_edge(ctx->gbuf, node->id, dec->id, "DECORATES", props);
+        (*count)++;
+    }
+}
+
+static void sem_process_def_edges(cbm_pipeline_ctx_t *ctx, const CBMDefinition *def,
+                                  const char *module_qn, const char **imp_keys,
+                                  const char **imp_vals, int imp_count, int *inherits_count,
+                                  int *decorates_count) {
+    if (!def->qualified_name) {
+        return;
+    }
+    const cbm_gbuf_node_t *node = cbm_gbuf_find_by_qn(ctx->gbuf, def->qualified_name);
+    if (!node) {
+        return;
+    }
+    if (def->base_classes) {
+        for (int b = 0; def->base_classes[b]; b++) {
+            const char *base_qn = resolve_as_class(ctx->registry, def->base_classes[b], module_qn,
+                                                   imp_keys, imp_vals, imp_count);
+            if (!base_qn) {
+                continue;
+            }
+            const cbm_gbuf_node_t *base_node = cbm_gbuf_find_by_qn(ctx->gbuf, base_qn);
+            if (base_node && node->id != base_node->id) {
+                cbm_gbuf_insert_edge(ctx->gbuf, node->id, base_node->id, "INHERITS", "{}");
+                (*inherits_count)++;
+            }
+        }
+    }
+    if (def->decorators) {
+        for (int dc = 0; def->decorators[dc]; dc++) {
+            resolve_decorator(ctx, node, def->decorators[dc], module_qn, imp_keys, imp_vals,
+                              imp_count, decorates_count);
+        }
+    }
+}
+
+/* Get extraction result from cache or re-extract. Sets *owned=true if caller must free. */
+static CBMFileResult *sem_get_or_extract(cbm_pipeline_ctx_t *ctx, int file_idx,
+                                         const cbm_file_info_t *fi, bool *owned) {
+    *owned = false;
+    if (ctx->result_cache && ctx->result_cache[file_idx]) {
+        return ctx->result_cache[file_idx];
+    }
+    int source_len = 0;
+    char *source = read_file(fi->path, &source_len);
+    if (!source) {
+        return NULL;
+    }
+    CBMFileResult *r = cbm_extract_file(source, source_len, fi->language, ctx->project_name,
+                                        fi->rel_path, CBM_EXTRACT_BUDGET, NULL, NULL);
+    free(source);
+    if (r) {
+        *owned = true;
+    }
+    return r;
+}
+
+/* Resolve Rust impl traits for one file's extraction results. */
+static int resolve_impl_traits(cbm_pipeline_ctx_t *ctx, const CBMFileResult *result,
+                               const char *module_qn, const char **imp_keys, const char **imp_vals,
+                               int imp_count) {
+    int count = 0;
+    for (int t = 0; t < result->impl_traits.count; t++) {
+        CBMImplTrait *it = &result->impl_traits.items[t];
+        if (!it->trait_name || !it->struct_name) {
+            continue;
+        }
+        const char *trait_qn = resolve_as_class(ctx->registry, it->trait_name, module_qn, imp_keys,
+                                                imp_vals, imp_count);
+        if (!trait_qn) {
+            continue;
+        }
+        const char *struct_qn = resolve_as_class(ctx->registry, it->struct_name, module_qn,
+                                                 imp_keys, imp_vals, imp_count);
+        if (!struct_qn) {
+            continue;
+        }
+        const cbm_gbuf_node_t *tn = cbm_gbuf_find_by_qn(ctx->gbuf, trait_qn);
+        const cbm_gbuf_node_t *sn = cbm_gbuf_find_by_qn(ctx->gbuf, struct_qn);
+        if (tn && sn && tn->id != sn->id) {
+            cbm_gbuf_insert_edge(ctx->gbuf, sn->id, tn->id, "IMPLEMENTS", "{}");
+            count++;
+        }
+    }
+    return count;
+}
+
 int cbm_pipeline_pass_semantic(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                                int file_count) {
     cbm_log_info("pass.start", "pass", "semantic", "files", itoa_log(file_count));
@@ -315,31 +417,13 @@ int cbm_pipeline_pass_semantic(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *f
             return -1;
         }
 
-        const char *path = files[i].path;
         const char *rel = files[i].rel_path;
 
-        /* Use cached extraction result or re-extract */
-        CBMFileResult *result = NULL;
         bool result_owned = false;
-        if (ctx->result_cache) {
-            result = ctx->result_cache[i];
-        }
+        CBMFileResult *result = sem_get_or_extract(ctx, i, &files[i], &result_owned);
         if (!result) {
-            CBMLanguage lang = files[i].language;
-            int source_len = 0;
-            char *source = read_file(path, &source_len);
-            if (!source) {
-                errors++;
-                continue;
-            }
-            result = cbm_extract_file(source, source_len, lang, ctx->project_name, rel,
-                                      CBM_EXTRACT_BUDGET, NULL, NULL);
-            free(source);
-            if (!result) {
-                errors++;
-                continue;
-            }
-            result_owned = true;
+            errors++;
+            continue;
         }
 
         /* Build import map for resolution */
@@ -352,96 +436,13 @@ int cbm_pipeline_pass_semantic(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *f
 
         /* ── INHERITS + DECORATES from definitions ──────────────── */
         for (int d = 0; d < result->defs.count; d++) {
-            CBMDefinition *def = &result->defs.items[d];
-            if (!def->qualified_name) {
-                continue;
-            }
-
-            const cbm_gbuf_node_t *node = cbm_gbuf_find_by_qn(ctx->gbuf, def->qualified_name);
-            if (!node) {
-                continue;
-            }
-
-            /* INHERITS: base_classes */
-            if (def->base_classes) {
-                for (int b = 0; def->base_classes[b]; b++) {
-                    const char *base_qn =
-                        resolve_as_class(ctx->registry, def->base_classes[b], module_qn, imp_keys,
-                                         imp_vals, imp_count);
-                    if (!base_qn) {
-                        continue;
-                    }
-
-                    const cbm_gbuf_node_t *base_node = cbm_gbuf_find_by_qn(ctx->gbuf, base_qn);
-                    if (!base_node || node->id == base_node->id) {
-                        continue;
-                    }
-
-                    cbm_gbuf_insert_edge(ctx->gbuf, node->id, base_node->id, "INHERITS", "{}");
-                    inherits_count++;
-                }
-            }
-
-            /* DECORATES: decorator → the decorated function/class */
-            if (def->decorators) {
-                for (int dc = 0; def->decorators[dc]; dc++) {
-                    char func_name[256];
-                    extract_decorator_func(def->decorators[dc], func_name, sizeof(func_name));
-                    if (func_name[0] == '\0') {
-                        continue;
-                    }
-
-                    cbm_resolution_t res = cbm_registry_resolve(ctx->registry, func_name, module_qn,
-                                                                imp_keys, imp_vals, imp_count);
-                    if (!res.qualified_name || res.qualified_name[0] == '\0') {
-                        continue;
-                    }
-
-                    const cbm_gbuf_node_t *dec_node =
-                        cbm_gbuf_find_by_qn(ctx->gbuf, res.qualified_name);
-                    if (!dec_node || node->id == dec_node->id) {
-                        continue;
-                    }
-
-                    char props[256];
-                    snprintf(props, sizeof(props), "{\"decorator\":\"%s\"}", def->decorators[dc]);
-                    cbm_gbuf_insert_edge(ctx->gbuf, node->id, dec_node->id, "DECORATES", props);
-                    decorates_count++;
-                }
-            }
+            sem_process_def_edges(ctx, &result->defs.items[d], module_qn, imp_keys, imp_vals,
+                                  imp_count, &inherits_count, &decorates_count);
         }
 
         /* ── IMPLEMENTS from impl_traits (Rust) ─────────────────── */
-        for (int t = 0; t < result->impl_traits.count; t++) {
-            CBMImplTrait *it = &result->impl_traits.items[t];
-            if (!it->trait_name || !it->struct_name) {
-                continue;
-            }
-
-            const char *trait_qn = resolve_as_class(ctx->registry, it->trait_name, module_qn,
-                                                    imp_keys, imp_vals, imp_count);
-            if (!trait_qn) {
-                continue;
-            }
-
-            const char *struct_qn = resolve_as_class(ctx->registry, it->struct_name, module_qn,
-                                                     imp_keys, imp_vals, imp_count);
-            if (!struct_qn) {
-                continue;
-            }
-
-            const cbm_gbuf_node_t *trait_node = cbm_gbuf_find_by_qn(ctx->gbuf, trait_qn);
-            const cbm_gbuf_node_t *struct_node = cbm_gbuf_find_by_qn(ctx->gbuf, struct_qn);
-            if (!trait_node || !struct_node) {
-                continue;
-            }
-            if (trait_node->id == struct_node->id) {
-                continue;
-            }
-
-            cbm_gbuf_insert_edge(ctx->gbuf, struct_node->id, trait_node->id, "IMPLEMENTS", "{}");
-            implements_count++;
-        }
+        implements_count +=
+            resolve_impl_traits(ctx, result, module_qn, imp_keys, imp_vals, imp_count);
 
         free(module_qn);
         free_import_map(imp_keys, imp_vals, imp_count);

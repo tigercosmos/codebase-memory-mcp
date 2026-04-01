@@ -955,6 +955,82 @@ static void emit_route_registration(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *sou
     }
 }
 
+/* Reject regex metacharacters, spaces, double-slashes in URL candidates. */
+static bool is_junk_url(const char *s) {
+    for (int i = 0; s[i]; i++) {
+        char ch = s[i];
+        if (ch == '\\' || ch == '^' || ch == '$' || ch == '*' || ch == '+' || ch == '(' ||
+            ch == ')' || ch == '[' || ch == ']' || ch == '|' || ch == ' ') {
+            return true;
+        }
+        if (ch == '/' && i > 0 && s[i - SKIP_ONE] == '/') {
+            return true;
+        }
+    }
+    return false;
+}
+
+/* Normalize a template literal URL and reject junk patterns.
+ * Returns true if norm contains a valid API path. */
+static bool normalize_url_arg(const char *url, char *norm, int norm_sz) {
+    int ni = 0;
+    const char *p = url;
+    if (*p == '`' || *p == '"' || *p == '\'') {
+        p++;
+    }
+    if (*p != '/') {
+        return false;
+    }
+    while (*p && ni < norm_sz - PAIR_LEN) {
+        if (*p == '$' && *(p + SKIP_ONE) == '{') {
+            norm[ni++] = ':';
+            p += PAIR_LEN;
+            while (*p && *p != '}' && ni < norm_sz - PAIR_LEN) {
+                norm[ni++] = *p++;
+            }
+            if (*p == '}') {
+                p++;
+            }
+        } else if (*p == '`' || *p == '"' || *p == '\'' || *p == '?') {
+            break;
+        } else {
+            norm[ni++] = *p++;
+        }
+    }
+    norm[ni] = '\0';
+    enum { MIN_URL_LEN = 4 };
+    if (ni < MIN_URL_LEN || !strchr(norm + SKIP_ONE, '/')) {
+        return false;
+    }
+    return !is_junk_url(norm);
+}
+
+/* Detect API paths in call arguments and create HTTP_CALLS edges. */
+static void detect_url_in_args(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
+                               const CBMCall *call) {
+    for (int ai = 0; ai < call->arg_count; ai++) {
+        const CBMCallArg *ca = &call->args[ai];
+        const char *url = ca->value ? ca->value : ca->expr;
+        if (!url || (url[0] != '/' && url[0] != '`')) {
+            continue;
+        }
+        char norm[CBM_SZ_256];
+        if (!normalize_url_arg(url, norm, (int)sizeof(norm))) {
+            continue;
+        }
+        char route_qn[CBM_ROUTE_QN_SIZE];
+        snprintf(route_qn, sizeof(route_qn), "__route__ANY__%s", norm);
+        int64_t route_id = cbm_gbuf_upsert_node(gbuf, "Route", norm, route_qn, "", 0, 0,
+                                                "{\"source\":\"arg_url\"}");
+        char eprops[CBM_SZ_512];
+        snprintf(eprops, sizeof(eprops),
+                 "{\"callee\":\"%s\",\"url_path\":\"%s\",\"via\":\"arg_url\"}", call->callee_name,
+                 norm);
+        cbm_gbuf_insert_edge(gbuf, source->id, route_id, "HTTP_CALLS", eprops);
+        break;
+    }
+}
+
 static void emit_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
                               const cbm_gbuf_node_t *target, const CBMCall *call,
                               const cbm_resolution_t *res, const char *module_qn,
@@ -991,75 +1067,7 @@ static void emit_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
         emit_normal_calls_edge(gbuf, source, target, call, res);
     }
 
-    /* URL-in-args detection: if any arg contains an API path, also create
-     * HTTP_CALLS → Route. Handles wrapper functions (apiFetch, apiClient)
-     * and any call that passes a URL as argument. */
-    for (int ai = 0; ai < call->arg_count; ai++) {
-        const CBMCallArg *ca = &call->args[ai];
-        const char *url = ca->value ? ca->value : ca->expr;
-        if (!url || (url[0] != '/' && url[0] != '`')) {
-            continue;
-        }
-        /* Normalize template literals: `/api/x/${id}` → /api/x/:id */
-        char norm[CBM_SZ_256];
-        int ni = 0;
-        const char *p = url;
-        if (*p == '`' || *p == '"' || *p == '\'') {
-            p++;
-        }
-        if (*p != '/') {
-            continue;
-        }
-        while (*p && ni < (int)sizeof(norm) - PAIR_LEN) {
-            if (*p == '$' && *(p + SKIP_ONE) == '{') {
-                norm[ni++] = ':';
-                p += PAIR_LEN;
-                while (*p && *p != '}' && ni < (int)sizeof(norm) - PAIR_LEN) {
-                    norm[ni++] = *p++;
-                }
-                if (*p == '}') {
-                    p++;
-                }
-            } else if (*p == '`' || *p == '"' || *p == '\'') {
-                break;
-            } else if (*p == '?') {
-                break;
-            } else {
-                norm[ni++] = *p++;
-            }
-        }
-        norm[ni] = '\0';
-        enum { MIN_URL_LEN = 4 };
-        if (ni < MIN_URL_LEN || !strchr(norm + SKIP_ONE, '/')) {
-            continue;
-        }
-        /* Reject regex, comments, prose */
-        bool is_junk = false;
-        for (int ri = 0; norm[ri] && !is_junk; ri++) {
-            char ch = norm[ri];
-            if (ch == '\\' || ch == '^' || ch == '$' || ch == '*' || ch == '+' || ch == '(' ||
-                ch == ')' || ch == '[' || ch == ']' || ch == '|' || ch == ' ') {
-                is_junk = true;
-            }
-            if (ch == '/' && ri > 0 && norm[ri - SKIP_ONE] == '/') {
-                is_junk = true;
-            }
-        }
-        if (is_junk) {
-            continue;
-        }
-
-        char route_qn[CBM_ROUTE_QN_SIZE];
-        snprintf(route_qn, sizeof(route_qn), "__route__ANY__%s", norm);
-        int64_t route_id = cbm_gbuf_upsert_node(gbuf, "Route", norm, route_qn, "", 0, 0,
-                                                "{\"source\":\"arg_url\"}");
-        char eprops[CBM_SZ_512];
-        snprintf(eprops, sizeof(eprops),
-                 "{\"callee\":\"%s\",\"url_path\":\"%s\",\"via\":\"arg_url\"}", call->callee_name,
-                 norm);
-        cbm_gbuf_insert_edge(gbuf, source->id, route_id, "HTTP_CALLS", eprops);
-        break; /* one URL per call is enough */
-    }
+    detect_url_in_args(gbuf, source, call);
 }
 
 /* Find the source node for an edge: enclosing function or file node. */

@@ -159,13 +159,13 @@ static int put_varint(uint8_t *buf, int64_t value) {
     int n = 0;
     while (v > VARINT_MASK) {
         tmp[n++] = (uint8_t)(v & VARINT_MASK);
-        v >>= 7;
+        v >>= VARINT_SHIFT;
     }
     tmp[n++] = (uint8_t)v;
     // Reverse into output with continuation bits
     for (int i = 0; i < n; i++) {
-        buf[i] = tmp[n - 1 - i];
-        if (i < n - 1) {
+        buf[i] = tmp[n - SKIP_ONE - i];
+        if (i < n - SKIP_ONE) {
             buf[i] |= VARINT_CONTINUE;
         }
     }
@@ -176,7 +176,7 @@ static int varint_len(int64_t value) {
     uint64_t v = (uint64_t)value;
     int n = VARINT_MIN_LEN;
     while (v > VARINT_MASK) {
-        v >>= 7;
+        v >>= VARINT_SHIFT;
         n++;
     }
     return n;
@@ -195,10 +195,10 @@ static int64_t int_serial_type(int64_t val) {
     if (val == SERIAL_INT8) {
         return SERIAL_CONST_ONE;
     }
-    if (val >= -INT8_MAX_VAL - 1 && val <= INT8_MAX_VAL) {
+    if (val >= -INT8_MAX_VAL - SKIP_ONE && val <= INT8_MAX_VAL) {
         return SERIAL_SIZE_INT8;
     }
-    if (val >= -INT16_MAX_VAL - 1 && val <= INT16_MAX_VAL) {
+    if (val >= -INT16_MAX_VAL - SKIP_ONE && val <= INT16_MAX_VAL) {
         return SERIAL_SIZE_INT16;
     }
     if (val >= INT24_MIN_VAL && val <= INT24_MAX_VAL) {
@@ -239,7 +239,7 @@ static int int_storage_bytes(int serial_type) {
 
 // Write integer in big-endian for given byte count
 static void put_int_be(uint8_t *buf, int64_t val, int nbytes) {
-    for (int i = nbytes - 1; i >= 0; i--) {
+    for (int i = nbytes - SKIP_ONE; i >= 0; i--) {
         buf[i] = (uint8_t)(val & BYTE_MASK);
         val >>= SHIFT_8;
     }
@@ -248,15 +248,15 @@ static void put_int_be(uint8_t *buf, int64_t val, int nbytes) {
 // Write a 2-byte big-endian value
 static void put_u16(uint8_t *buf, uint16_t val) {
     buf[0] = (uint8_t)(val >> SHIFT_8);
-    buf[1] = (uint8_t)(val & BYTE_MASK);
+    buf[SKIP_ONE] = (uint8_t)(val & BYTE_MASK);
 }
 
 // Write a 4-byte big-endian value
 static void put_u32(uint8_t *buf, uint32_t val) {
     buf[0] = (uint8_t)(val >> SHIFT_24);
     buf[SKIP_ONE] = (uint8_t)(val >> SHIFT_16);
-    buf[2] = (uint8_t)(val >> SHIFT_8);
-    buf[3] = (uint8_t)(val & BYTE_MASK);
+    buf[PAIR_LEN] = (uint8_t)(val >> SHIFT_8);
+    buf[SERIAL_SIZE_INT24] = (uint8_t)(val & BYTE_MASK);
 }
 
 // --- Dynamic buffer ---
@@ -331,8 +331,8 @@ static void rec_free(RecordBuilder *r) {
 }
 
 static void rec_add_null(RecordBuilder *r) {
-    uint8_t v[1] = {0};
-    dynbuf_append(&r->header, v, 1);
+    uint8_t v[SKIP_ONE] = {0};
+    dynbuf_append(&r->header, v, SKIP_ONE);
 }
 
 static void rec_add_int(RecordBuilder *r, int64_t val) {
@@ -981,14 +981,14 @@ static uint32_t write_table_btree(FILE *fp, uint32_t *next_page, const uint8_t *
     PageBuilder pb;
     pb_init(&pb, fp, *next_page, false);
     pb.page1_offset = first_is_page1 ? SQLITE_HEADER_SIZE : 0;
-    pb.ptr_offset = pb.page1_offset + 8;
+    pb.ptr_offset = pb.page1_offset + BTREE_HEADER_SIZE;
 
     for (int i = 0; i < count; i++) {
         pb_add_table_cell_with_flush(&pb, rowids[i], records[i], record_lens[i],
-                                     i > 0 ? rowids[i - 1] : 0);
+                                     i > 0 ? rowids[i - SKIP_ONE] : 0);
     }
 
-    return pb_finalize_table(&pb, next_page, rowids[count - 1]);
+    return pb_finalize_table(&pb, next_page, rowids[count - SKIP_ONE]);
 }
 
 // Promote the last cell from current page to separator, un-add it, and flush.
@@ -1037,7 +1037,7 @@ static uint32_t write_index_btree(FILE *fp, uint32_t *next_page, uint8_t **cells
 
     for (int i = 0; i < count; i++) {
         if (!pb_cell_fits(&pb, cell_lens[i]) && pb.cell_count > 0) {
-            if (!pb_promote_and_flush(&pb, cells, cell_lens, i - 1)) {
+            if (!pb_promote_and_flush(&pb, cells, cell_lens, i - SKIP_ONE)) {
                 return 0;
             }
         }
@@ -1049,7 +1049,7 @@ static uint32_t write_index_btree(FILE *fp, uint32_t *next_page, uint8_t **cells
             return 0;
         }
         pb.leaves[pb.leaf_count].max_key = 0;
-        int last = count - 1;
+        int last = count - SKIP_ONE;
         pb.leaves[pb.leaf_count].sep_cell = (uint8_t *)malloc(cell_lens[last]);
         memcpy(pb.leaves[pb.leaf_count].sep_cell, cells[last], cell_lens[last]);
         pb.leaves[pb.leaf_count].sep_cell_len = cell_lens[last];
@@ -1476,10 +1476,10 @@ static int write_data_tables(write_db_ctx_t *w, uint32_t *nodes_root, uint32_t *
                 return ERR_WRITE_FAILED;
             }
             pb_add_table_cell_with_flush(&pb, w->nodes[i].id, rec, rec_len,
-                                         i > 0 ? w->nodes[i - 1].id : 0);
+                                         i > 0 ? w->nodes[i - SKIP_ONE].id : 0);
             free(rec);
         }
-        *nodes_root = pb_finalize_table(&pb, &w->next_page, w->nodes[w->node_count - 1].id);
+        *nodes_root = pb_finalize_table(&pb, &w->next_page, w->nodes[w->node_count - SKIP_ONE].id);
     } else {
         *nodes_root = write_table_btree(w->fp, &w->next_page, NULL, NULL, NULL, 0, false);
     }
@@ -1494,10 +1494,10 @@ static int write_data_tables(write_db_ctx_t *w, uint32_t *nodes_root, uint32_t *
                 return ERR_WRITE_FAILED;
             }
             pb_add_table_cell_with_flush(&pb, w->edges[i].id, rec, rec_len,
-                                         i > 0 ? w->edges[i - 1].id : 0);
+                                         i > 0 ? w->edges[i - SKIP_ONE].id : 0);
             free(rec);
         }
-        *edges_root = pb_finalize_table(&pb, &w->next_page, w->edges[w->edge_count - 1].id);
+        *edges_root = pb_finalize_table(&pb, &w->next_page, w->edges[w->edge_count - SKIP_ONE].id);
     } else {
         *edges_root = write_table_btree(w->fp, &w->next_page, NULL, NULL, NULL, 0, false);
     }
@@ -1515,7 +1515,7 @@ static void write_metadata_tables(write_db_ctx_t *w, uint32_t *projects_root,
     int proj_lens[] = {proj_rec_len};
     int64_t proj_rowids[] = {FIRST_ROWID};
     *projects_root =
-        write_table_btree(w->fp, &w->next_page, proj_recs, proj_lens, proj_rowids, 1, false);
+        write_table_btree(w->fp, &w->next_page, proj_recs, proj_lens, proj_rowids, SKIP_ONE, false);
     free(proj_rec);
 
     *file_hashes_root = write_table_btree(w->fp, &w->next_page, NULL, NULL, NULL, 0, false);
@@ -1525,14 +1525,14 @@ static void write_metadata_tables(write_db_ctx_t *w, uint32_t *projects_root,
     RecordBuilder r2;
     rec_init(&r1);
     rec_add_text(&r1, "nodes");
-    rec_add_int(&r1, w->node_count > 0 ? w->nodes[w->node_count - 1].id : 0);
+    rec_add_int(&r1, w->node_count > 0 ? w->nodes[w->node_count - SKIP_ONE].id : 0);
     int seq1_len;
     uint8_t *seq1 = rec_finalize(&r1, &seq1_len);
     rec_free(&r1);
 
     rec_init(&r2);
     rec_add_text(&r2, "edges");
-    rec_add_int(&r2, w->edge_count > 0 ? w->edges[w->edge_count - 1].id : 0);
+    rec_add_int(&r2, w->edge_count > 0 ? w->edges[w->edge_count - SKIP_ONE].id : 0);
     int seq2_len;
     uint8_t *seq2 = rec_finalize(&r2, &seq2_len);
     rec_free(&r2);
@@ -1541,7 +1541,7 @@ static void write_metadata_tables(write_db_ctx_t *w, uint32_t *projects_root,
     int seq_lens[] = {seq1_len, seq2_len};
     int64_t seq_rowids[] = {FIRST_ROWID, FIRST_DATA_PAGE};
     *sqlite_seq_root =
-        write_table_btree(w->fp, &w->next_page, seq_recs, seq_lens, seq_rowids, 2, false);
+        write_table_btree(w->fp, &w->next_page, seq_recs, seq_lens, seq_rowids, PAIR_LEN, false);
     free(seq1);
     free(seq2);
 }
@@ -1685,7 +1685,7 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         free(payload);
         uint8_t *cells_arr[] = {cell};
         int lens_arr[] = {total};
-        autoindex_projects_root = write_index_btree(fp, &next_page, cells_arr, lens_arr, 1);
+        autoindex_projects_root = write_index_btree(fp, &next_page, cells_arr, lens_arr, SKIP_ONE);
         free(cell);
     }
 
@@ -1822,7 +1822,7 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         // Write the 100-byte SQLite file header
         memcpy(page1, "SQLite format 3\000", 16);
         /* Page size 65536 is encoded as 1 in the 2-byte header field */
-        put_u16(page1 + HDR_OFF_PAGE_SIZE, (uint16_t)1);
+        put_u16(page1 + HDR_OFF_PAGE_SIZE, (uint16_t)SKIP_ONE);
         page1[HDR_OFF_WRITE_VERSION] = FILE_FORMAT;             // file format write version
         page1[HDR_OFF_READ_VERSION] = FILE_FORMAT;              // file format read version
         page1[HDR_OFF_RESERVED] = 0;                            // reserved space per page
@@ -1833,19 +1833,19 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         put_u32(page1 + HDR_OFF_DB_SIZE, next_page - SKIP_ONE); // total pages
         put_u32(page1 + HDR_OFF_FREELIST_TRUNK, 0);             // first freelist trunk page
         put_u32(page1 + HDR_OFF_FREELIST_COUNT, 0);             // total freelist pages
-        put_u32(page1 + HDR_OFF_SCHEMA_COOKIE, 1);              // schema cookie
+        put_u32(page1 + HDR_OFF_SCHEMA_COOKIE, SKIP_ONE);       // schema cookie
         put_u32(page1 + HDR_OFF_SCHEMA_FORMAT, SCHEMA_FORMAT);  // schema format number
         put_u32(page1 + HDR_OFF_DEFAULT_CACHE, 0);              // default page cache size
         put_u32(page1 + HDR_OFF_AUTOVAC_TOP, 0);                // largest root page (auto-vacuum)
-        put_u32(page1 + HDR_OFF_TEXT_ENCODING, 1);              // text encoding: UTF-8
+        put_u32(page1 + HDR_OFF_TEXT_ENCODING, SKIP_ONE);       // text encoding: UTF-8
         put_u32(page1 + HDR_OFF_USER_VERSION, 0);               // user version
         put_u32(page1 + HDR_OFF_INCR_VACUUM, 0);                // incremental vacuum mode
         put_u32(page1 + HDR_OFF_APP_ID, 0);                     // application ID
         // Bytes 72-91: reserved for expansion (zeros)
-        put_u32(page1 + HDR_OFF_VERSION_VALID, 1); // version-valid-for (change counter)
+        put_u32(page1 + HDR_OFF_VERSION_VALID, SKIP_ONE); // version-valid-for (change counter)
         put_u32(page1 + HDR_OFF_SQLITE_VERSION, SQLITE_VERSION); // SQLite version number
         // Set file change counter = version-valid-for = 1
-        put_u32(page1 + HDR_OFF_FILE_CHANGE, 1);
+        put_u32(page1 + HDR_OFF_FILE_CHANGE, SKIP_ONE);
 
         (void)fseek(fp, 0, SEEK_SET);
         (void)fwrite(page1, SKIP_ONE, PAGE_SIZE, fp);

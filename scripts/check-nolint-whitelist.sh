@@ -13,9 +13,9 @@ if [ -z "$HITS" ]; then exit 0; fi
 FAIL=0
 while IFS= read -r line; do
     FILE=$(echo "$line" | cut -d: -f1)
-    LINENO=$(echo "$line" | cut -d: -f2)
+    LN=$(echo "$line" | cut -d: -f2)
     # Check current line AND 5 lines above for the function name
-    CONTEXT=$(sed -n "$((LINENO > 5 ? LINENO - 5 : 1)),${LINENO}p" "$FILE")
+    CONTEXT=$(sed -n "$((LN > 5 ? LN - 5 : 1)),${LN}p" "$FILE")
     FOUND=0
     for fn in $ALLOWED; do
         if echo "$CONTEXT" | grep -qw "$fn"; then

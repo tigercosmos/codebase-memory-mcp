@@ -1,0 +1,5 @@
+ 176 src/cypher/cypher.c
+  31 internal/cbm/sqlite_writer.c
+  30 src/pipeline/pass_configlink.c
+  13 src/discover/gitignore.c
+   2 src/pipeline/pass_parallel.c

@@ -152,7 +152,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install musl build deps
-        run: apk add --no-cache build-base linux-headers zlib-dev zlib-static nodejs npm
+        run: apk add --no-cache build-base linux-headers zlib-dev zlib-static nodejs npm bash
 
       - name: Build standard binary (static)
         run: scripts/build.sh ${{ inputs.version && format('--version {0}', inputs.version) || '' }} CC=gcc CXX=g++ STATIC=1

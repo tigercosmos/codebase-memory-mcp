@@ -56,7 +56,7 @@ jobs:
   # ── 5. Soak tests ─────────────────────────────────────────────
   soak:
     if: ${{ inputs.soak_level != 'none' }}
-    needs: [test]
+    needs: [build]
     uses: ./.github/workflows/_soak.yml
     with:
       duration_minutes: 10

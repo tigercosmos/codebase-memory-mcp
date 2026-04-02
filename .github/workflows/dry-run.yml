@@ -53,10 +53,10 @@ jobs:
     needs: [build]
     uses: ./.github/workflows/_smoke.yml
 
-  # ── Soak tests (optional) ───────────────────────────────────
+  # ── Soak tests (optional, parallel with smoke) ──────────────
   soak:
-    if: ${{ inputs.soak_level != 'none' && !cancelled() && (needs.test.result == 'success' || needs.test.result == 'skipped') }}
-    needs: [test]
+    if: ${{ inputs.soak_level != 'none' && !cancelled() && needs.build.result == 'success' }}
+    needs: [build]
     uses: ./.github/workflows/_soak.yml
     with:
       duration_minutes: 10

@@ -387,7 +387,7 @@ TRE_OBJ_TEST = $(BUILD_DIR)/tre.o
 TRE_OBJ_PROD = $(BUILD_DIR)/prod_tre.o
 
 $(BUILD_DIR)/tre.o: $(TRE_SRC) | $(BUILD_DIR)
-	$(CC) $(TRE_CFLAGS) $(SANITIZE) -c -o $@ $<
+	$(CC) $(TRE_CFLAGS) $(SANITIZE) -fno-sanitize=alignment -c -o $@ $<
 
 $(BUILD_DIR)/prod_tre.o: $(TRE_SRC) | $(BUILD_DIR)
 	$(CC) $(TRE_CFLAGS) -O2 -c -o $@ $<

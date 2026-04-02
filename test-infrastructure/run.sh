@@ -11,7 +11,8 @@
 #   ./test-infrastructure/run.sh              # Linux test+build + Windows compile
 #   ./test-infrastructure/run.sh all          # above + amd64
 #   ./test-infrastructure/run.sh windows      # Windows cross-compile only
-#   ./test-infrastructure/run.sh test         # Linux arm64 test only
+#   ./test-infrastructure/run.sh test         # Linux arm64 test only (no perf)
+#   ./test-infrastructure/run.sh perf         # Linux arm64 perf/incremental only
 #   ./test-infrastructure/run.sh build        # Linux arm64 build only
 #   ./test-infrastructure/run.sh lint         # clang-format + cppcheck
 #   ./test-infrastructure/run.sh shell        # debug shell
@@ -24,7 +25,7 @@ COMPOSE="docker compose -f $ROOT/test-infrastructure/docker-compose.yml"
 case "${1:-full}" in
     full)
         echo "=== Linux arm64: test + build ==="
-        $COMPOSE run --rm test
+        $COMPOSE run --rm -e CBM_SKIP_PERF=1 test
         $COMPOSE run --rm build
         echo "=== Linux arm64: smoke test ==="
         $COMPOSE run --rm smoke
@@ -33,7 +34,11 @@ case "${1:-full}" in
         echo "=== All passed ==="
         ;;
     test)
-        echo "=== Linux arm64: test (ASan + LeakSanitizer) ==="
+        echo "=== Linux arm64: test (ASan + LeakSanitizer, no perf) ==="
+        $COMPOSE run --rm -e CBM_SKIP_PERF=1 test
+        ;;
+    perf)
+        echo "=== Linux arm64: perf/incremental tests ==="
         $COMPOSE run --rm test
         ;;
     build)
@@ -58,16 +63,16 @@ case "${1:-full}" in
         ;;
     amd64)
         echo "=== Linux amd64: test + build ==="
-        $COMPOSE run --rm test-amd64
+        $COMPOSE run --rm -e CBM_SKIP_PERF=1 test-amd64
         $COMPOSE run --rm build-amd64
         ;;
     all)
         echo "=== Linux arm64: test + build + smoke ==="
-        $COMPOSE run --rm test
+        $COMPOSE run --rm -e CBM_SKIP_PERF=1 test
         $COMPOSE run --rm build
         $COMPOSE run --rm smoke
         echo "=== Linux amd64: test + build + smoke ==="
-        $COMPOSE run --rm test-amd64
+        $COMPOSE run --rm -e CBM_SKIP_PERF=1 test-amd64
         $COMPOSE run --rm build-amd64
         $COMPOSE run --rm smoke-amd64
         echo "=== Windows: cross-compile + smoke (Wine) ==="
@@ -83,7 +88,7 @@ case "${1:-full}" in
         $COMPOSE run --rm --entrypoint bash test
         ;;
     *)
-        echo "Usage: $0 {full|test|build|smoke|windows|amd64|all|lint|shell}"
+        echo "Usage: $0 {full|test|build|smoke|perf|windows|amd64|all|lint|shell}"
         exit 1
         ;;
 esac

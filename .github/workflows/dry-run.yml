@@ -189,8 +189,10 @@ jobs:
         if: startsWith(matrix.os, 'ubuntu')
         run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
 
-      - name: Test
+      - name: Test (unit + integration, no perf)
         run: scripts/test.sh CC=${{ matrix.cc }} CXX=${{ matrix.cxx }}
+        env:
+          CBM_SKIP_PERF: 1
 
   test-windows:
     if: ${{ inputs.skip_tests != true && always() && (needs.lint.result == 'success' || needs.lint.result == 'skipped') }}

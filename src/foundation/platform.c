@@ -249,7 +249,7 @@ char *cbm_normalize_path_sep(char *path) {
  * can be invalidated by setenv/putenv in another thread. We copy to a
  * caller-owned buffer immediately. */
 #ifdef _WIN32
-extern char **_environ;
+#include <stdlib.h>
 #define CBM_ENVIRON _environ
 #elif defined(__APPLE__)
 #include <crt_externs.h>

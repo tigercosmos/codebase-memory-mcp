@@ -1182,7 +1182,7 @@ int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
     /* Generate ISO 8601 timestamp */
     time_t now = time(NULL);
     struct tm tm_buf;
-    struct tm *tm_val = gmtime_r(&now, &tm_buf);
+    struct tm *tm_val = cbm_gmtime_r(&now, &tm_buf);
     char indexed_at[CBM_SZ_64];
     if (strftime(indexed_at, sizeof(indexed_at), "%Y-%m-%dT%H:%M:%SZ", tm_val) == 0) {
         snprintf(indexed_at, sizeof(indexed_at), "1970-01-01T00:00:00Z");

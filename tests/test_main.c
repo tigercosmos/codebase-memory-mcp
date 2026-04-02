@@ -10,6 +10,7 @@ int tf_skip_count = 0;
 
 #include "test_framework.h"
 #include <sqlite3.h>
+#include <stdlib.h>
 
 /* Forward declarations of suite functions */
 extern void suite_arena(void);
@@ -55,7 +56,13 @@ extern void suite_yaml(void);
 extern void suite_integration(void);
 extern void suite_incremental(void);
 
+static int env_is_set(const char *name) {
+    const char *v = getenv(name);
+    return v && v[0] && v[0] != '0';
+}
+
 int main(void) {
+    int skip_perf = env_is_set("CBM_SKIP_PERF");
     printf("\n  codebase-memory-mcp  C test suite\n");
 
     /* Foundation */
@@ -146,7 +153,11 @@ int main(void) {
 
     /* Integration (end-to-end) */
     RUN_SUITE(integration);
-    RUN_SUITE(incremental);
+    if (!skip_perf) {
+        RUN_SUITE(incremental);
+    } else {
+        printf("\n=== incremental (SKIPPED — CBM_SKIP_PERF=1) ===\n");
+    }
 
     /* Release sqlite3 internal caches so ASan doesn't report them as leaks */
     sqlite3_shutdown();

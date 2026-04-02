@@ -197,11 +197,7 @@ static sqlite3_stmt *prepare_cached(cbm_store_t *s, sqlite3_stmt **slot, const c
 static void iso_now(char *buf, size_t sz) {
     time_t t = time(NULL);
     struct tm tm;
-#ifdef _WIN32
-    gmtime_s(&tm, &t); /* Windows: reversed arg order */
-#else
-    gmtime_r(&t, &tm);
-#endif
+    cbm_gmtime_r(&t, &tm);
     (void)strftime(buf, sz, "%Y-%m-%dT%H:%M:%SZ",
                    &tm); // cert-err33-c: strftime only fails if buffer is too small — 21-byte ISO
                          // timestamp always fits in caller-provided buffers

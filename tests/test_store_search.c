@@ -439,9 +439,6 @@ TEST(store_dump_to_file) {
     char *td = th_mktempdir("cbm_dump");
     char path[256];
     snprintf(path, sizeof(path), "%s/test.db", td);
-    int fd = cbm_mkstemp(path);
-    ASSERT_TRUE(fd >= 0);
-    close(fd);
 
     int rc = cbm_store_dump_to_file(s, path);
     ASSERT_EQ(rc, CBM_STORE_OK);

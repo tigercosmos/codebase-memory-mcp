@@ -58,8 +58,6 @@ enum {
 #include <process.h> /* _getpid */
 #else
 #include <unistd.h>
-#include <sys/unistd.h>
-#include <sys/poll.h>
 #include <poll.h>
 #include <fcntl.h>
 #endif

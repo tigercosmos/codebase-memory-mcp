@@ -1,0 +1,26 @@
+# Mirrors the Alpine CI environment for portable (musl static) builds.
+#   - Alpine 3.21 with musl libc
+#   - GCC + static zlib for fully static binaries
+#   - Produces portable Linux binaries that run on any distro
+#
+# Build:  docker build -f test-infrastructure/Dockerfile.alpine -t cbm-alpine test-infrastructure/
+# Run:    docker run --rm -v $(pwd):/src cbm-alpine
+
+FROM alpine:3.21
+
+RUN apk add --no-cache \
+    build-base \
+    linux-headers \
+    zlib-dev \
+    zlib-static \
+    bash \
+    git \
+    python3 \
+    nodejs \
+    npm \
+    ca-certificates
+
+WORKDIR /src
+
+ENTRYPOINT ["bash", "scripts/build.sh"]
+CMD ["CC=gcc", "CXX=g++", "STATIC=1"]

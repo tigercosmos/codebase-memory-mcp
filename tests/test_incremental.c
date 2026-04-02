@@ -284,11 +284,13 @@ TEST(incr_full_index) {
     g_full_imports = get_edge_count_by_type("IMPORTS");
     g_full_index_ms = ms;
 
-    /* FastAPI: ~1100 .py files → expect substantial graph */
-    ASSERT_GT(g_full_nodes, 5000);
-    ASSERT_GT(g_full_edges, 1000);
-    ASSERT_GT(g_full_calls, 500);
-    ASSERT_GT(g_full_imports, 100);
+    /* FastAPI: expect substantial graph.
+     * CI uses sparse checkout (~7K files), local has full repo (~18K files).
+     * Thresholds set for sparse checkout (smaller graph). */
+    ASSERT_GT(g_full_nodes, 2000);
+    ASSERT_GT(g_full_edges, 500);
+    ASSERT_GT(g_full_calls, 200);
+    ASSERT_GT(g_full_imports, 50);
 
     /* Performance: full index — warn if slow, don't block */
     if ((int)ms > 30000) {
@@ -378,11 +380,11 @@ TEST(incr_modify_file) {
     snprintf(path, sizeof(path), "%s/fastapi/applications.py", g_repodir);
     FILE *f = fopen(path, "a");
     ASSERT(f != NULL);
-    fprintf(f, "\n\ndef incr_test_injected(x: int) -> int:\n"
-               "    return x * 42\n"
+    fprintf(f, "\n\ndef incr_modify_extra_a(x: int) -> int:\n"
+               "    return x + 1\n"
                "\n"
-               "def incr_test_helper(y: str) -> str:\n"
-               "    return y.upper()\n");
+               "def incr_modify_extra_b(y: str) -> str:\n"
+               "    return y.strip()\n");
     fclose(f);
 
     double ms = 0;
@@ -392,8 +394,8 @@ TEST(incr_modify_file) {
     ASSERT(strstr(resp, "indexed") != NULL);
     free(resp);
 
-    ASSERT(has_function("incr_test_injected"));
-    ASSERT(has_function("incr_test_helper"));
+    ASSERT(has_function("incr_modify_extra_a"));
+    ASSERT(has_function("incr_modify_extra_b"));
     ASSERT_GT(get_node_count(), nodes_before);
 
     /* Single-file incremental should be faster than full */
@@ -2779,6 +2781,28 @@ SUITE(incremental) {
     RUN_TEST(incr_full_index);
     RUN_TEST(incr_full_has_functions);
     RUN_TEST(incr_full_edge_types);
+
+    /* Inject test functions so tool tests (trace_path etc.) always have data,
+     * even when perf phases are skipped on CI. Update baseline counts. */
+    {
+        char path[512];
+        snprintf(path, sizeof(path), "%s/fastapi/applications.py", g_repodir);
+        FILE *f = fopen(path, "a");
+        if (f) {
+            fprintf(f, "\n\ndef incr_test_injected(x: int) -> int:\n"
+                       "    return x * 42\n"
+                       "\n"
+                       "def incr_test_helper(y: str) -> str:\n"
+                       "    return y.upper()\n");
+            fclose(f);
+        }
+        char *resp = index_repo();
+        free(resp);
+        g_full_nodes = get_node_count();
+        g_full_edges = get_edge_count();
+        g_full_calls = get_edge_count_by_type("CALLS");
+        g_full_imports = get_edge_count_by_type("IMPORTS");
+    }
 
     if (!skip_perf) {
         /* Phase 2: Noop */

@@ -25,7 +25,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 
-#define PAGE_SIZE 65536
+#define CBM_PAGE_SIZE 65536
 #define SCHEMA_FORMAT 4
 #define FILE_FORMAT 1
 #define SQLITE_VERSION 3046000 // 3.46.0
@@ -124,7 +124,7 @@ enum {
 #define BTREE_INTERIOR_INDEX 0x02
 
 // SQLite 100-byte database header field offsets.
-#define HDR_OFF_PAGE_SIZE 16
+#define HDR_OFF_CBM_PAGE_SIZE 16
 #define HDR_OFF_WRITE_VERSION 18
 #define HDR_OFF_READ_VERSION 19
 #define HDR_OFF_RESERVED 20
@@ -405,7 +405,7 @@ typedef struct {
     bool is_index;      // true for index B-trees
 
     // Current leaf page being built
-    uint8_t page[PAGE_SIZE];
+    uint8_t page[CBM_PAGE_SIZE];
     int cell_count;
     int content_offset; // where cell content starts (grows down from page end)
     int ptr_offset;     // where cell pointers are written (grows up from header)
@@ -421,11 +421,11 @@ static void pb_init(PageBuilder *pb, FILE *fp, uint32_t start_page, bool is_inde
     pb->next_page = start_page;
     pb->is_index = is_index;
     pb->cell_count = 0;
-    pb->content_offset = PAGE_SIZE;
+    pb->content_offset = CBM_PAGE_SIZE;
     pb->page1_offset = (start_page == SKIP_ONE) ? SQLITE_HEADER_SIZE : 0;
     // Header: flag(1) + freeblock(2) + cell_count(2) + content_start(2) + fragmented(1) = 8
     pb->ptr_offset = pb->page1_offset + BTREE_HEADER_SIZE;
-    memset(pb->page, 0, PAGE_SIZE);
+    memset(pb->page, 0, CBM_PAGE_SIZE);
     pb->leaves = NULL;
     pb->leaf_count = 0;
     pb->leaf_cap = 0;
@@ -456,9 +456,9 @@ static void pb_flush_leaf(PageBuilder *pb) {
 
     // Write page to file
     uint32_t page_num = pb->next_page;
-    long offset = (long)(page_num - SKIP_ONE) * PAGE_SIZE;
+    long offset = (long)(page_num - SKIP_ONE) * CBM_PAGE_SIZE;
     (void)fseek(pb->fp, offset, SEEK_SET);
-    (void)fwrite(pb->page, SKIP_ONE, PAGE_SIZE, pb->fp);
+    (void)fwrite(pb->page, SKIP_ONE, CBM_PAGE_SIZE, pb->fp);
 
     // Record this leaf for interior page building
     if (pb->leaf_count >= pb->leaf_cap) {
@@ -481,10 +481,10 @@ static void pb_flush_leaf(PageBuilder *pb) {
     // Reset for next page
     pb->next_page++;
     pb->cell_count = 0;
-    pb->content_offset = PAGE_SIZE;
+    pb->content_offset = CBM_PAGE_SIZE;
     pb->page1_offset = 0;               // only page 1 has the 100-byte header
     pb->ptr_offset = BTREE_HEADER_SIZE; // standard B-tree header size for non-page-1
-    memset(pb->page, 0, PAGE_SIZE);
+    memset(pb->page, 0, CBM_PAGE_SIZE);
 }
 
 // Check if a cell of given size fits in the current page
@@ -554,8 +554,8 @@ static int write_interior_page(PageBuilder *pb, uint8_t *page, int cell_count, i
     page[HDR_FRAGBYTES_OFF] = 0;
     put_u32(page + HDR_RIGHTCHILD_OFF, right_child_page);
 
-    (void)fseek(pb->fp, (long)(pnum - SKIP_ONE) * PAGE_SIZE, SEEK_SET);
-    (void)fwrite(page, SKIP_ONE, PAGE_SIZE, pb->fp);
+    (void)fseek(pb->fp, (long)(pnum - SKIP_ONE) * CBM_PAGE_SIZE, SEEK_SET);
+    (void)fwrite(page, SKIP_ONE, CBM_PAGE_SIZE, pb->fp);
 
     if (parent_count >= *parent_cap) {
         int old_pcap = *parent_cap;
@@ -639,10 +639,10 @@ static uint32_t pb_build_interior(PageBuilder *pb, bool is_index) {
 
         int i = 0;
         while (i < child_count) {
-            uint8_t page[PAGE_SIZE];
-            memset(page, 0, PAGE_SIZE);
+            uint8_t page[CBM_PAGE_SIZE];
+            memset(page, 0, CBM_PAGE_SIZE);
             int cell_count = 0;
-            int content_offset = PAGE_SIZE;
+            int content_offset = CBM_PAGE_SIZE;
             int ptr_offset = BTREE_INTERIOR_HDR;
 
             fill_interior_page(page, children, child_count, is_index, &i, &cell_count,
@@ -965,16 +965,16 @@ static uint32_t write_table_btree(FILE *fp, uint32_t *next_page, const uint8_t *
     if (count == 0) {
         // Empty table: write a single empty leaf page
         uint32_t pnum = (*next_page)++;
-        uint8_t page[PAGE_SIZE];
-        memset(page, 0, PAGE_SIZE);
+        uint8_t page[CBM_PAGE_SIZE];
+        memset(page, 0, CBM_PAGE_SIZE);
         int hdr = first_is_page1 ? SQLITE_HEADER_SIZE : 0;
-        page[hdr] = BTREE_LEAF_TABLE;                               // leaf table
-        put_u16(page + hdr + HDR_FREEBLOCK_OFF, 0);                 // no freeblocks
-        put_u16(page + hdr + HDR_CELLCOUNT_OFF, 0);                 // 0 cells
-        put_u16(page + hdr + HDR_CONTENT_OFF, (uint16_t)PAGE_SIZE); // content at end of page
-        page[hdr + HDR_FRAGBYTES_OFF] = 0;                          // 0 fragmented bytes
-        (void)fseek(fp, (long)(pnum - SKIP_ONE) * PAGE_SIZE, SEEK_SET);
-        (void)fwrite(page, SKIP_ONE, PAGE_SIZE, fp);
+        page[hdr] = BTREE_LEAF_TABLE;                                   // leaf table
+        put_u16(page + hdr + HDR_FREEBLOCK_OFF, 0);                     // no freeblocks
+        put_u16(page + hdr + HDR_CELLCOUNT_OFF, 0);                     // 0 cells
+        put_u16(page + hdr + HDR_CONTENT_OFF, (uint16_t)CBM_PAGE_SIZE); // content at end of page
+        page[hdr + HDR_FRAGBYTES_OFF] = 0;                              // 0 fragmented bytes
+        (void)fseek(fp, (long)(pnum - SKIP_ONE) * CBM_PAGE_SIZE, SEEK_SET);
+        (void)fwrite(page, SKIP_ONE, CBM_PAGE_SIZE, fp);
         return pnum;
     }
 
@@ -1013,15 +1013,15 @@ static bool pb_promote_and_flush(PageBuilder *pb, uint8_t **cells, int *cell_len
 // Write an empty index leaf page.
 static uint32_t write_empty_index_leaf(FILE *fp, uint32_t *next_page) {
     uint32_t pnum = (*next_page)++;
-    uint8_t page[PAGE_SIZE];
-    memset(page, 0, PAGE_SIZE);
+    uint8_t page[CBM_PAGE_SIZE];
+    memset(page, 0, CBM_PAGE_SIZE);
     page[0] = NEWLINE_BYTE;
     put_u16(page + HDR_FREEBLOCK_OFF, 0);
     put_u16(page + HDR_CELLCOUNT_OFF, 0);
-    put_u16(page + HDR_CONTENT_OFF, (uint16_t)PAGE_SIZE);
+    put_u16(page + HDR_CONTENT_OFF, (uint16_t)CBM_PAGE_SIZE);
     page[HDR_FRAGBYTES_OFF] = 0;
-    (void)fseek(fp, (long)(pnum - SKIP_ONE) * PAGE_SIZE, SEEK_SET);
-    (void)fwrite(page, SKIP_ONE, PAGE_SIZE, fp);
+    (void)fseek(fp, (long)(pnum - SKIP_ONE) * CBM_PAGE_SIZE, SEEK_SET);
+    (void)fwrite(page, SKIP_ONE, CBM_PAGE_SIZE, fp);
     return pnum;
 }
 
@@ -1775,13 +1775,13 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
 
     // Write master B-tree starting at page 1
     {
-        uint8_t page1[PAGE_SIZE];
-        memset(page1, 0, PAGE_SIZE);
+        uint8_t page1[CBM_PAGE_SIZE];
+        memset(page1, 0, CBM_PAGE_SIZE);
 
         // B-tree header starts at offset 100 on page 1
         int hdr = SQLITE_HEADER_SIZE;
         page1[hdr] = BTREE_LEAF_TABLE; // leaf table
-        int content_off = PAGE_SIZE;
+        int content_off = CBM_PAGE_SIZE;
         int ptr_off = hdr + BTREE_HEADER_SIZE;
         int mcell_count = 0;
 
@@ -1822,7 +1822,7 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         // Write the 100-byte SQLite file header
         memcpy(page1, "SQLite format 3\000", 16);
         /* Page size 65536 is encoded as 1 in the 2-byte header field */
-        put_u16(page1 + HDR_OFF_PAGE_SIZE, (uint16_t)SKIP_ONE);
+        put_u16(page1 + HDR_OFF_CBM_PAGE_SIZE, (uint16_t)SKIP_ONE);
         page1[HDR_OFF_WRITE_VERSION] = FILE_FORMAT;             // file format write version
         page1[HDR_OFF_READ_VERSION] = FILE_FORMAT;              // file format read version
         page1[HDR_OFF_RESERVED] = 0;                            // reserved space per page
@@ -1848,7 +1848,7 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         put_u32(page1 + HDR_OFF_FILE_CHANGE, SKIP_ONE);
 
         (void)fseek(fp, 0, SEEK_SET);
-        (void)fwrite(page1, SKIP_ONE, PAGE_SIZE, fp);
+        (void)fwrite(page1, SKIP_ONE, CBM_PAGE_SIZE, fp);
     }
 
     for (int i = 0; i < master_count; i++) {
@@ -1858,11 +1858,11 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
     free(master_lens);
     free(master_rowids);
 
-    // Ensure file size is exactly next_page * PAGE_SIZE
+    // Ensure file size is exactly next_page * CBM_PAGE_SIZE
     // (pad any remaining space)
     (void)fseek(fp, 0, SEEK_END);
     long file_size = ftell(fp);
-    long expected_size = (long)(next_page - SKIP_ONE) * PAGE_SIZE;
+    long expected_size = (long)(next_page - SKIP_ONE) * CBM_PAGE_SIZE;
     if (file_size < expected_size) {
         // Pad with zeros
         uint8_t zero = 0;

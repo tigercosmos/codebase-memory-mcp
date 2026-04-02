@@ -466,9 +466,10 @@ TEST(discover_cbmignore_stacks) {
 
 TEST(discover_symlink_skipped) {
 #ifdef _WIN32
-    /* Symlinks require elevated privileges on Windows — skip */
+    /* Symlinks require elevated privileges on Windows — skip.
+     * Guard the entire body: symlink() doesn't exist on Windows. */
     SKIP("symlinks need admin on Windows");
-#endif
+#else
     char *base = th_mktempdir("cbm_disc_sym");
     ASSERT(base != NULL);
 
@@ -499,6 +500,7 @@ TEST(discover_symlink_skipped) {
     cbm_discover_free(files, count);
     th_cleanup(base);
     PASS();
+#endif
 }
 
 TEST(discover_new_ignore_patterns) {

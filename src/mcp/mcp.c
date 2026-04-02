@@ -296,6 +296,9 @@ static const tool_def_t TOOLS[] = {
      "scope trace to a specific parameter name\"},\"edge_types\":{\"type\":\"array\",\"items\":{"
      "\"type\":\"string\"}},\"risk_labels\":{\"type\":\"boolean\",\"default\":false,"
      "\"description\":\"Add risk classification (CRITICAL/HIGH/MEDIUM/LOW) based on hop distance"
+     "\"},\"include_tests\":{\"type\":\"boolean\",\"default\":false,"
+     "\"description\":\"Include test files in results. When false (default), test files are "
+     "filtered out. When true, test nodes are included with is_test=true marker."
      "\"}},\"required\":[\"function_name\",\"project\"]}"},
 
     {"get_code_snippet",
@@ -1313,11 +1316,26 @@ static yyjson_doc *resolve_trace_edge_types(const char *args, const char *mode,
     return NULL;
 }
 
-/* Convert BFS traversal results into a yyjson_mut array of {name, qualified_name, hop}. */
+/* Check if a file path looks like a test file. */
+static bool is_test_file(const char *path) {
+    if (!path) {
+        return false;
+    }
+    return strstr(path, "/test") != NULL || strstr(path, "test_") != NULL ||
+           strstr(path, "_test.") != NULL || strstr(path, "/tests/") != NULL ||
+           strstr(path, "/spec/") != NULL || strstr(path, ".test.") != NULL;
+}
+
+/* Convert BFS traversal results into a yyjson_mut array. */
 static yyjson_mut_val *bfs_to_json_array(yyjson_mut_doc *doc, cbm_traverse_result_t *tr,
-                                         bool risk_labels) {
+                                         bool risk_labels, bool include_tests) {
     yyjson_mut_val *arr = yyjson_mut_arr(doc);
     for (int i = 0; i < tr->visited_count; i++) {
+        const char *fp = tr->visited[i].node.file_path;
+        bool test = is_test_file(fp);
+        if (!include_tests && test) {
+            continue;
+        }
         yyjson_mut_val *item = yyjson_mut_obj(doc);
         yyjson_mut_obj_add_str(doc, item, "name",
                                tr->visited[i].node.name ? tr->visited[i].node.name : "");
@@ -1328,6 +1346,9 @@ static yyjson_mut_val *bfs_to_json_array(yyjson_mut_doc *doc, cbm_traverse_resul
         if (risk_labels) {
             yyjson_mut_obj_add_str(doc, item, "risk",
                                    cbm_risk_label(cbm_hop_to_risk(tr->visited[i].hop)));
+        }
+        if (test) {
+            yyjson_mut_obj_add_bool(doc, item, "is_test", true);
         }
         yyjson_mut_arr_add_val(arr, item);
     }
@@ -1343,6 +1364,7 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     char *param_name = cbm_mcp_get_string_arg(args, "parameter_name");
     int depth = cbm_mcp_get_int_arg(args, "depth", MCP_DEFAULT_DEPTH);
     bool risk_labels = cbm_mcp_get_bool_arg(args, "risk_labels");
+    bool include_tests = cbm_mcp_get_bool_arg(args, "include_tests");
 
     if (!func_name) {
         free(project);
@@ -1419,13 +1441,15 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     if (do_outbound) {
         cbm_store_bfs(store, nodes[0].id, "outbound", edge_types, edge_type_count, depth,
                       MCP_BFS_LIMIT, &tr_out);
-        yyjson_mut_obj_add_val(doc, root, "callees", bfs_to_json_array(doc, &tr_out, risk_labels));
+        yyjson_mut_obj_add_val(doc, root, "callees",
+                               bfs_to_json_array(doc, &tr_out, risk_labels, include_tests));
     }
 
     if (do_inbound) {
         cbm_store_bfs(store, nodes[0].id, "inbound", edge_types, edge_type_count, depth,
                       MCP_BFS_LIMIT, &tr_in);
-        yyjson_mut_obj_add_val(doc, root, "callers", bfs_to_json_array(doc, &tr_in, risk_labels));
+        yyjson_mut_obj_add_val(doc, root, "callers",
+                               bfs_to_json_array(doc, &tr_in, risk_labels, include_tests));
     }
 
     /* Serialize BEFORE freeing traversal results (yyjson borrows strings) */

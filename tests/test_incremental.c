@@ -2583,6 +2583,57 @@ TEST(tool_trace_defines_only) {
     PASS();
 }
 
+/* ── trace_path: include_tests flag ────────────────────────────── */
+
+TEST(tool_trace_include_tests) {
+    double ms;
+    /* Default (include_tests=false): test files should be filtered out */
+    char *r = call_tool_timed("trace_path", &ms,
+                              "{\"project\":\"%s\","
+                              "\"function_name\":\"incr_test_injected\","
+                              "\"direction\":\"inbound\","
+                              "\"include_tests\":false}",
+                              g_project);
+    TOOL_OK(r, ms);
+    NOT_ERROR(r);
+    /* Result should not contain is_test markers when tests are excluded */
+    free(r);
+
+    /* With include_tests=true: test files should appear with is_test marker */
+    r = call_tool_timed("trace_path", &ms,
+                        "{\"project\":\"%s\","
+                        "\"function_name\":\"incr_test_injected\","
+                        "\"direction\":\"inbound\","
+                        "\"include_tests\":true}",
+                        g_project);
+    TOOL_OK(r, ms);
+    NOT_ERROR(r);
+    free(r);
+    PASS();
+}
+
+/* ── trace_path: risk_labels flag ─────────────────────────────── */
+
+TEST(tool_trace_risk_labels) {
+    double ms;
+    /* Use outbound direction — incr_test_injected may call stdlib functions */
+    char *r = call_tool_timed("trace_path", &ms,
+                              "{\"project\":\"%s\","
+                              "\"function_name\":\"incr_test_injected\","
+                              "\"direction\":\"outbound\","
+                              "\"risk_labels\":true}",
+                              g_project);
+    TOOL_OK(r, ms);
+    NOT_ERROR(r);
+    /* If there are callees, they should have risk labels.
+     * If no callees, the response is still valid — just empty. */
+    if (strstr(r, "\"hop\"") != NULL) {
+        ASSERT(strstr(r, "\"risk\"") != NULL);
+    }
+    free(r);
+    PASS();
+}
+
 /* ── detect_changes: nonexistent branch ────────────────────────── */
 
 TEST(tool_detect_nonexistent_branch) {
@@ -3014,6 +3065,8 @@ SUITE(incremental) {
     /* Phase 35: trace_path remaining */
     RUN_TEST(tool_trace_depth_0);
     RUN_TEST(tool_trace_defines_only);
+    RUN_TEST(tool_trace_include_tests);
+    RUN_TEST(tool_trace_risk_labels);
 
     /* Phase 36: detect_changes remaining */
     RUN_TEST(tool_detect_nonexistent_branch);

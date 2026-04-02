@@ -331,6 +331,10 @@ TEST(cli_find_cli_on_path) {
     write_test_file(fakecli, "#!/bin/sh\n");
     th_make_executable(fakecli);
 
+#ifdef _WIN32
+    rmdir(tmpdir);
+    SKIP("PATH-based CLI lookup uses POSIX semantics");
+#endif
     const char *raw = getenv("PATH");
     char *old_path = raw ? strdup(raw) : NULL;
     cbm_setenv("PATH", tmpdir, 1);
@@ -355,6 +359,10 @@ TEST(cli_find_cli_fallback_paths) {
     if (!cbm_mkdtemp(tmpdir))
         SKIP("cbm_mkdtemp failed");
 
+#ifdef _WIN32
+    rmdir(tmpdir);
+    SKIP("fallback path lookup uses POSIX semantics");
+#endif
     char localbin[512];
     snprintf(localbin, sizeof(localbin), "%s/.local/bin", tmpdir);
     test_mkdirp(localbin);

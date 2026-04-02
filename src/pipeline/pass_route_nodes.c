@@ -28,6 +28,7 @@ enum {
 
 #define SLEN(s) (sizeof(s) - 1)
 #include "pipeline/pipeline_internal.h"
+#include <stdint.h>
 #include "graph_buffer/graph_buffer.h"
 #include "foundation/log.h"
 

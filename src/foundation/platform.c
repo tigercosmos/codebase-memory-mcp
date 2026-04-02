@@ -4,10 +4,12 @@
  * macOS, Linux, and Windows. Platform-specific code behind #ifdef guards.
  */
 #include "platform.h"
-#include "compat.h"
 
 #include "foundation/constants.h"
-#include <stdint.h> // uint64_t, int64_t
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
 
 #ifdef _WIN32
 
@@ -113,7 +115,6 @@ char *cbm_normalize_path_sep(char *path) {
 
 /* ── POSIX implementation ─────────────────────────────────────── */
 
-#include <fcntl.h> // open, O_RDONLY
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
@@ -178,7 +179,7 @@ uint64_t cbm_now_ns(void) {
 #else
 uint64_t cbm_now_ns(void) {
     struct timespec ts;
-    cbm_clock_gettime(CLOCK_MONOTONIC, &ts);
+    clock_gettime(CLOCK_MONOTONIC, &ts);
     return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
 }
 #endif
@@ -243,41 +244,54 @@ char *cbm_normalize_path_sep(char *path) {
 
 /* ── Environment variables ────────────────────────────────────── */
 
+/* Thread-safe getenv: iterates environ directly instead of calling getenv().
+ * getenv() is flagged by concurrency-mt-unsafe because the returned pointer
+ * can be invalidated by setenv/putenv in another thread. We copy to a
+ * caller-owned buffer immediately. */
+#ifdef _WIN32
+extern char **_environ;
+#define CBM_ENVIRON _environ
+#elif defined(__APPLE__)
+#include <crt_externs.h>
+#define CBM_ENVIRON (*_NSGetEnviron())
+#else
+extern char **environ;
+#define CBM_ENVIRON environ
+#endif
+
 const char *cbm_safe_getenv(const char *name, char *buf, size_t buf_sz, const char *fallback) {
-    const char *val = getenv(name);
-    if (!val) {
-        if (fallback) {
-            snprintf(buf, buf_sz, "%s", fallback);
-            return buf;
+    char **env = CBM_ENVIRON;
+    if (env) {
+        size_t nlen = strlen(name);
+        for (; *env; env++) {
+            if (strncmp(*env, name, nlen) == 0 && (*env)[nlen] == '=') {
+                snprintf(buf, buf_sz, "%s", *env + nlen + SKIP_ONE);
+                return buf;
+            }
         }
-        buf[0] = '\0';
-        return NULL;
     }
-    snprintf(buf, buf_sz, "%s", val);
-    return buf;
+    if (fallback) {
+        snprintf(buf, buf_sz, "%s", fallback);
+        return buf;
+    }
+    buf[0] = '\0';
+    return NULL;
 }
 
 /* ── Home directory (cross-platform) ──────────────────────────── */
 
 const char *cbm_get_home_dir(void) {
     static char buf[CBM_SZ_1K];
-    const char *raw;
     char tmp[CBM_SZ_256] = "";
 
-    raw = getenv("HOME");
-    if (raw) {
-        snprintf(tmp, sizeof(tmp), "%s", raw);
-    }
+    cbm_safe_getenv("HOME", tmp, sizeof(tmp), NULL);
     if (tmp[0]) {
         snprintf(buf, sizeof(buf), "%s", tmp);
         cbm_normalize_path_sep(buf);
         return buf;
     }
 
-    raw = getenv("USERPROFILE");
-    if (raw) {
-        snprintf(tmp, sizeof(tmp), "%s", raw);
-    }
+    cbm_safe_getenv("USERPROFILE", tmp, sizeof(tmp), NULL);
     if (tmp[0]) {
         snprintf(buf, sizeof(buf), "%s", tmp);
         cbm_normalize_path_sep(buf);

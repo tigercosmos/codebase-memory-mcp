@@ -39,7 +39,6 @@ enum {
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <strings.h> // strcasecmp
 
 /* ── Helpers ────────────────────────────────────────────────────── */
 
@@ -1388,8 +1387,8 @@ static int parse_match_chain(parser_t *p, cbm_query_t *q, int *pat_cap) {
 }
 
 /* Parse post-WHERE clauses: additional MATCH, WITH, RETURN, UNION */
-static int parse_post_where(parser_t *p, cbm_query_t *q,
-                            int *pat_cap) { // NOLINT(misc-no-recursion)
+static int parse_post_where(parser_t *p, cbm_query_t *q, // NOLINT(misc-no-recursion)
+                            int *pat_cap) {
     /* More MATCH / OPTIONAL MATCH after WHERE */
     if (parse_match_chain(p, q, pat_cap) < 0) {
         return CBM_NOT_FOUND;
@@ -1433,8 +1432,8 @@ static int parse_post_where(parser_t *p, cbm_query_t *q,
     return 0;
 }
 
-int cbm_parse(const cbm_token_t *tokens, int token_count,
-              cbm_parse_result_t *out) { // NOLINT(misc-no-recursion)
+int cbm_parse(const cbm_token_t *tokens, int token_count, // NOLINT(misc-no-recursion)
+              cbm_parse_result_t *out) {
     memset(out, 0, sizeof(*out));
     parser_t p = {.tokens = tokens, .count = token_count, .pos = 0};
 

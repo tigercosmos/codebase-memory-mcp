@@ -42,8 +42,8 @@ struct cbm_gitignore {
 static bool glob_match(const char *pat, const char *str); // NOLINT(misc-no-recursion)
 
 /* Match a ** (doublestar-slash) pattern: try rest at every / boundary. */
-static bool glob_match_doublestar_slash(const char *pat,
-                                        const char *str) { // NOLINT(misc-no-recursion)
+static bool glob_match_doublestar_slash(const char *pat, // NOLINT(misc-no-recursion)
+                                        const char *str) {
     if (glob_match(pat, str)) {
         return true;
     }
@@ -56,8 +56,8 @@ static bool glob_match_doublestar_slash(const char *pat,
 }
 
 /* Match a ** (doublestar) followed by non-slash: try at every position. */
-static bool glob_match_doublestar_any(const char *pat,
-                                      const char *str) { // NOLINT(misc-no-recursion)
+static bool glob_match_doublestar_any(const char *pat, // NOLINT(misc-no-recursion)
+                                      const char *str) {
     for (const char *s = str;; s++) {
         if (glob_match(pat, s)) {
             return true;

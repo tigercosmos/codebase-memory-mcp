@@ -10,7 +10,9 @@
  * skipped (fail-open). Missing files are silently ignored.
  */
 #include "discover/userconfig.h"
+#include "cbm.h" /* CBMLanguage, CBM_LANG_* */
 #include "foundation/constants.h"
+#include "foundation/platform.h" /* cbm_safe_getenv */
 
 enum { MAX_CONFIG_SIZE = 65536 };
 #include "foundation/log.h"
@@ -157,18 +159,12 @@ static CBMLanguage lang_from_string(const char *s) {
  */
 static void cbm_app_config_dir(char *buf, size_t bufsz) {
     char xdg[CBM_SZ_512] = {0};
-    char home[CBM_SZ_512] = {0};
-    const char *env_val = getenv("XDG_CONFIG_HOME");
-    if (env_val && env_val[0]) {
-        snprintf(xdg, sizeof(xdg), "%s", env_val);
-    }
+    cbm_safe_getenv("XDG_CONFIG_HOME", xdg, sizeof(xdg), NULL);
     if (xdg[0]) {
         snprintf(buf, bufsz, "%s/codebase-memory-mcp", xdg);
     } else {
-        env_val = getenv("HOME");
-        if (env_val && env_val[0]) {
-            snprintf(home, sizeof(home), "%s", env_val);
-        }
+        char home[CBM_SZ_512] = {0};
+        cbm_safe_getenv("HOME", home, sizeof(home), NULL);
         if (!home[0]) {
             snprintf(home, sizeof(home), "/tmp");
         }

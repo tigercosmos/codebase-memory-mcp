@@ -6,6 +6,7 @@
  */
 #include "foundation/constants.h"
 #include "foundation/diagnostics.h"
+#include <stdatomic.h>
 #include "foundation/mem.h"
 #include "foundation/compat.h"
 #include "foundation/compat_thread.h"
@@ -167,11 +168,8 @@ static void *diag_thread_fn(void *arg) {
 /* ── Public API ──────────────────────────────────────────────────── */
 
 bool cbm_diag_start(void) {
-    const char *raw_env = getenv("CBM_DIAGNOSTICS");
     char env_buf[CBM_SZ_32] = "";
-    if (raw_env) {
-        snprintf(env_buf, sizeof(env_buf), "%s", raw_env);
-    }
+    cbm_safe_getenv("CBM_DIAGNOSTICS", env_buf, sizeof(env_buf), NULL);
     if (env_buf[0] == '\0' || (strcmp(env_buf, "1") != 0 && strcmp(env_buf, "true") != 0)) {
         return false;
     }

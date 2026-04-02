@@ -13,6 +13,8 @@
 
 enum { INCR_RING_BUF = 4, INCR_RING_MASK = 3, INCR_TS_BUF = 24, INCR_WAL_BUF = 1040 };
 #include "pipeline/pipeline.h"
+#include <stdio.h>
+#include <time.h>
 #include "pipeline/pipeline_internal.h"
 #include "store/store.h"
 #include "graph_buffer/graph_buffer.h"

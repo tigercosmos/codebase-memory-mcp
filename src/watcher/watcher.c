@@ -13,6 +13,7 @@
  * Adaptive interval: 5s base + 1s per 500 files, capped at 60s.
  * Matches the Go watcher's `pollInterval()` logic.
  */
+#include <stdint.h>
 #include "watcher/watcher.h"
 #include "store/store.h"
 #include "foundation/constants.h"

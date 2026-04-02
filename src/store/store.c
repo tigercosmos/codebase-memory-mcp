@@ -8,6 +8,7 @@
 
 // for ISO timestamp
 
+#include <stdint.h>
 #include "foundation/constants.h"
 
 enum {

@@ -660,17 +660,10 @@ static int run_githistory(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx) {
         cbm_log_info("pass.skip", "pass", "githistory", "reason", "fast_mode");
     }
 
-    int rc = 0;
-
     if (gh_threaded) {
         cbm_thread_join(&gh_thread);
         cbm_log_info("pass.timing", "pass", "githistory_compute", "elapsed_ms",
                      itoa_buf((int)elapsed_ms(t_gh)));
-    }
-
-    if (rc != 0) {
-        free(gh_result.couplings);
-        return rc;
     }
 
     int gh_edges = 0;

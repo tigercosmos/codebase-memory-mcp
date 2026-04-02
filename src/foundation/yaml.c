@@ -19,8 +19,7 @@ enum { YAML_INIT_CAP = 8, YAML_LIST_PREFIX = 2, YAML_ROOT_INDENT = -1 };
 #include <stddef.h> // NULL
 #include <stdio.h>
 #include <stdlib.h>
-#include <string.h>  // strdup
-#include <strings.h> // strcasecmp
+#include <string.h>
 
 /* ── Node types ───────────────────────────────────────────────── */
 

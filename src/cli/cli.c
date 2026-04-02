@@ -560,10 +560,13 @@ static int rmdir_recursive(const char *path) {
         rmdir_scan_dir(cur, stack, &top);
     }
     /* Remove dirs in reverse (deepest first). */
+    int rc = 0;
     for (int i = dir_count - CLI_SKIP_ONE; i >= 0; i--) {
-        cbm_rmdir(dirs[i]);
+        if (cbm_rmdir(dirs[i]) != 0) {
+            rc = CBM_NOT_FOUND;
+        }
     }
-    return 0;
+    return rc;
 }
 
 /* ── Skill management ─────────────────────────────────────────── */
@@ -2917,10 +2920,9 @@ typedef struct {
 static void uninstall_agent_mcp_instr(mcp_uninstall_args_t paths, bool dry_run,
                                       int (*remove_fn)(const char *)) {
     const char *name = paths.name;
-    const char *config_path = paths.config_path;
     const char *instr_path = paths.instr_path;
     if (!dry_run) {
-        remove_fn(config_path);
+        remove_fn(paths.config_path);
     }
     printf("%s: removed MCP config entry\n", name);
     if (instr_path) {

@@ -1,6 +1,7 @@
 /*
  * traces.c — OTLP trace processing helpers.
  */
+#include <stdint.h>
 #include "traces/traces.h"
 #include "foundation/constants.h"
 

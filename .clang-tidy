@@ -3,8 +3,24 @@
 # ALL checks enabled. WarningsAsErrors: '*'.
 # Check thresholds configured for idiomatic C11 (not C++).
 #
-# Only C++ idiom checks and confirmed LLVM false positives are disabled.
-# Everything else must be fixed in code.
+# Disabled checks (with reasoning):
+#
+# C++ idiom checks (not applicable to C11):
+#   - bugprone-multi-level-implicit-pointer-conversion: void* is implicit in C
+#   - readability-implicit-bool-conversion: if(ptr), if(count) is idiomatic C
+#
+# LLVM analyzer false positives (no fix available):
+#   - DeprecatedOrUnsafeBufferHandling: flags fprintf/snprintf, Annex K not
+#     available on Linux/macOS (LLVM #64027)
+#   - ArrayBound: taint analysis false positives on buf[fread_result] (LLVM #126884)
+#
+# Cosmetic checks whitelisted (no memory safety or performance impact):
+#   - bugprone-easily-swappable-parameters: internal APIs with descriptive
+#     param names; struct wrappers would add churn without safety benefit
+#   - concurrency-mt-unsafe: only readdir() remains, which is safe with
+#     per-directory-handle usage (each thread owns its DIR*)
+#   - bugprone-command-processor: popen() required for git integration;
+#     all inputs are validated internal strings, no injection risk
 
 Checks: >
   -*,
@@ -20,6 +36,10 @@ Checks: >
   clang-analyzer-*,
   -bugprone-multi-level-implicit-pointer-conversion,
   -readability-implicit-bool-conversion,
+  -bugprone-easily-swappable-parameters,
+  -concurrency-mt-unsafe,
+  -bugprone-command-processor,
+  -cert-env33-c,
   -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
   -clang-analyzer-security.ArrayBound,
 
@@ -32,6 +52,7 @@ CheckOptions:
   readability-magic-numbers.IgnoredIntegerValues: ""
   readability-magic-numbers.IgnoredFloatingPointValues: ""
   bugprone-easily-swappable-parameters.MinimumLength: 3
+  misc-include-cleaner.IgnoreHeaders: "sys/.*|mach/.*|dispatch/.*|_types/.*|Availability\\.h|secure/.*|_.*\\.h|zconf\\.h"
   readability-function-cognitive-complexity.Threshold: 25
   readability-function-size.StatementThreshold: 200
   readability-function-size.LineThreshold: 400

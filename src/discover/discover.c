@@ -360,7 +360,7 @@ static void walk_dir_process_entry(cbm_dirent_t *entry, const walk_frame_t *fram
 static void walk_dir(const char *dir_path, const char *rel_prefix, const cbm_discover_opts_t *opts,
                      const cbm_gitignore_t *gitignore, const cbm_gitignore_t *cbmignore,
                      file_list_t *out) {
-    walk_frame_t *stack = malloc(WALK_STACK_CAP * sizeof(walk_frame_t));
+    walk_frame_t *stack = calloc(WALK_STACK_CAP, sizeof(walk_frame_t));
     if (!stack) {
         return;
     }

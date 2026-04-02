@@ -13,6 +13,7 @@
  */
 #include "foundation/constants.h"
 #include "pipeline/pipeline.h"
+#include <stdint.h>
 #include "pipeline/pipeline_internal.h"
 #include "graph_buffer/graph_buffer.h"
 #include "foundation/log.h"

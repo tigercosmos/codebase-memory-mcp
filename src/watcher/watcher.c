@@ -122,7 +122,9 @@ static int git_head(const char *root_path, char *out, size_t out_size) {
     return CBM_NOT_FOUND;
 }
 
-/* Returns true if working tree has changes (modified, untracked, etc.) */
+/* Returns true if working tree has changes (modified, untracked, etc.).
+ * Also checks submodules via `git submodule foreach` to detect uncommitted
+ * changes inside submodules that `git status` alone would not report. */
 static bool git_is_dirty(const char *root_path) {
     char cmd[CBM_SZ_1K];
     snprintf(cmd, sizeof(cmd),
@@ -137,7 +139,33 @@ static bool git_is_dirty(const char *root_path) {
     char line[CBM_SZ_256];
     bool dirty = false;
     if (fgets(line, sizeof(line), fp)) {
-        /* Any output means changes */
+        size_t len = strlen(line);
+        while (len > 0 && (line[len - SKIP_ONE] == '\n' || line[len - SKIP_ONE] == '\r')) {
+            line[--len] = '\0';
+        }
+        if (len > 0) {
+            dirty = true;
+        }
+    }
+    cbm_pclose(fp);
+
+    if (dirty) {
+        return true;
+    }
+
+    /* Check submodules: uncommitted changes inside a submodule are invisible
+     * to the parent's git status. Use `git submodule foreach` as a portable
+     * fallback (Apple Git lacks --recurse-submodules). */
+    snprintf(cmd, sizeof(cmd),
+             "git --no-optional-locks -C '%s' submodule foreach --quiet --recursive "
+             "'git status --porcelain --untracked-files=normal 2>/dev/null' "
+             "2>/dev/null",
+             root_path);
+    fp = cbm_popen(cmd, "r");
+    if (!fp) {
+        return false;
+    }
+    if (fgets(line, sizeof(line), fp)) {
         size_t len = strlen(line);
         while (len > 0 && (line[len - SKIP_ONE] == '\n' || line[len - SKIP_ONE] == '\r')) {
             line[--len] = '\0';

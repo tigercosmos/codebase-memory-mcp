@@ -230,6 +230,24 @@ const char *cbm_detect_shell_rc(const char *home_dir) {
 
 /* ── CLI binary detection ─────────────────────────────────────── */
 
+/* PATH delimiter: `;` on Windows, `:` on POSIX. */
+#ifdef _WIN32
+#define PATH_DELIM ";"
+#else
+#define PATH_DELIM ":"
+#endif
+
+/* Check if a path exists and is executable.
+ * On Windows, stat() doesn't set S_IXUSR — just check existence. */
+static bool is_executable(const char *path) {
+    struct stat st;
+#ifdef _WIN32
+    return stat(path, &st) == 0;
+#else
+    return stat(path, &st) == 0 && (st.st_mode & S_IXUSR);
+#endif
+}
+
 /* Search for an executable named `name` in the PATH environment variable.
  * Returns the full path in `out` (max out_sz) if found, else empty string. */
 static bool find_in_path(const char *name, char *out, size_t out_sz) {
@@ -238,22 +256,15 @@ static bool find_in_path(const char *name, char *out, size_t out_sz) {
         return false;
     }
     char *saveptr;
-    char *dir = strtok_r(path_copy, ":", &saveptr);
+    char *dir = strtok_r(path_copy, PATH_DELIM, &saveptr);
     while (dir) {
         snprintf(out, out_sz, "%s/%s", dir, name);
-        struct stat st;
-        if (stat(out, &st) == 0 && (st.st_mode & S_IXUSR)) {
+        if (is_executable(out)) {
             return true;
         }
-        dir = strtok_r(NULL, ":", &saveptr);
+        dir = strtok_r(NULL, PATH_DELIM, &saveptr);
     }
     return false;
-}
-
-/* Check if a path exists and is executable. */
-static bool is_executable(const char *path) {
-    struct stat st;
-    return stat(path, &st) == 0 && (st.st_mode & S_IXUSR);
 }
 
 const char *cbm_find_cli(const char *name, const char *home_dir) {

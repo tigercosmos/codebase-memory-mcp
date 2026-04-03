@@ -2023,45 +2023,90 @@ static void search_build_exclude_labels(const char **labels, search_bind_t *bind
     snprintf(clause + elen, clause_sz - elen, ")");
 }
 
+/* Append a regex WHERE clause for a column (case-sensitive or insensitive). */
+static void where_add_regex(char *where, int where_sz, int *wlen, int *nparams,
+                            search_bind_t *binds, int *bind_idx, const char *column,
+                            const char *pattern, bool case_sensitive) {
+    char buf[CBM_SZ_128];
+    if (case_sensitive) {
+        snprintf(buf, sizeof(buf), "%s REGEXP ?%d", column, *bind_idx + SKIP_ONE);
+    } else {
+        snprintf(buf, sizeof(buf), "iregexp(?%d, %s)", *bind_idx + SKIP_ONE, column);
+    }
+    *wlen = where_append(where, where_sz, *wlen, nparams, buf);
+    where_bind_text(binds, bind_idx, pattern);
+}
+
+/* Build basic WHERE clauses: project, label, name, file, qn patterns. */
+static int search_where_basic(const cbm_search_params_t *params, char *where, int where_sz,
+                              int *wlen, int *nparams, search_bind_t *binds, int *bind_idx,
+                              char **like_pattern_out) {
+    char bind_buf[CBM_SZ_64];
+
+    if (params->project) {
+        snprintf(bind_buf, sizeof(bind_buf), "n.project = ?%d", *bind_idx + SKIP_ONE);
+        *wlen = where_append(where, where_sz, *wlen, nparams, bind_buf);
+        where_bind_text(binds, bind_idx, params->project);
+    }
+    if (params->label) {
+        snprintf(bind_buf, sizeof(bind_buf), "n.label = ?%d", *bind_idx + SKIP_ONE);
+        *wlen = where_append(where, where_sz, *wlen, nparams, bind_buf);
+        where_bind_text(binds, bind_idx, params->label);
+    }
+    if (params->name_pattern) {
+        where_add_regex(where, where_sz, wlen, nparams, binds, bind_idx, "n.name",
+                        params->name_pattern, params->case_sensitive);
+    }
+    if (params->qn_pattern) {
+        where_add_regex(where, where_sz, wlen, nparams, binds, bind_idx, "n.qualified_name",
+                        params->qn_pattern, params->case_sensitive);
+    }
+    if (params->file_pattern) {
+        *like_pattern_out = cbm_glob_to_like(params->file_pattern);
+        snprintf(bind_buf, sizeof(bind_buf), "n.file_path LIKE ?%d", *bind_idx + SKIP_ONE);
+        *wlen = where_append(where, where_sz, *wlen, nparams, bind_buf);
+        where_bind_text(binds, bind_idx, *like_pattern_out);
+    }
+    return *nparams;
+}
+
+/* Build advanced WHERE clauses: relationship, entry points, exclude labels. */
+static void search_where_advanced(const cbm_search_params_t *params, char *where, int where_sz,
+                                  int *wlen, int *nparams, search_bind_t *binds, int *bind_idx) {
+    if (params->relationship) {
+        char rel_clause[CBM_SZ_256];
+        snprintf(rel_clause, sizeof(rel_clause),
+                 "EXISTS(SELECT 1 FROM edges e WHERE "
+                 "(e.source_id = n.id OR e.target_id = n.id) AND e.type = ?%d)",
+                 *bind_idx + SKIP_ONE);
+        *wlen = where_append(where, where_sz, *wlen, nparams, rel_clause);
+        where_bind_text(binds, bind_idx, params->relationship);
+    }
+    if (params->exclude_entry_points) {
+        /* Exclude nodes with no inbound CALLS but at least one outbound CALLS.
+         * Dead code (degree=0) is NOT excluded — only true entry points. */
+        *wlen = where_append(where, where_sz, *wlen, nparams,
+                             "NOT (NOT EXISTS(SELECT 1 FROM edges e WHERE e.target_id = n.id "
+                             "AND e.type = 'CALLS') "
+                             "AND EXISTS(SELECT 1 FROM edges e2 WHERE e2.source_id = n.id "
+                             "AND e2.type = 'CALLS'))");
+    }
+    if (params->exclude_labels) {
+        char excl_clause[CBM_SZ_512];
+        search_build_exclude_labels(params->exclude_labels, binds, bind_idx, excl_clause,
+                                    (int)sizeof(excl_clause));
+        (void)where_append(where, where_sz, *wlen, nparams, excl_clause);
+    }
+}
+
 static int search_build_where(const cbm_search_params_t *params, char *where, int where_sz,
                               search_bind_t *binds, int *bind_idx, char **like_pattern_out) {
     int wlen = 0;
     int nparams = 0;
     *like_pattern_out = NULL;
 
-    char bind_buf[CBM_SZ_64];
-
-    if (params->project) {
-        snprintf(bind_buf, sizeof(bind_buf), "n.project = ?%d", *bind_idx + SKIP_ONE);
-        wlen = where_append(where, where_sz, wlen, &nparams, bind_buf);
-        where_bind_text(binds, bind_idx, params->project);
-    }
-    if (params->label) {
-        snprintf(bind_buf, sizeof(bind_buf), "n.label = ?%d", *bind_idx + SKIP_ONE);
-        wlen = where_append(where, where_sz, wlen, &nparams, bind_buf);
-        where_bind_text(binds, bind_idx, params->label);
-    }
-    if (params->name_pattern) {
-        if (params->case_sensitive) {
-            snprintf(bind_buf, sizeof(bind_buf), "n.name REGEXP ?%d", *bind_idx + SKIP_ONE);
-        } else {
-            snprintf(bind_buf, sizeof(bind_buf), "iregexp(?%d, n.name)", *bind_idx + SKIP_ONE);
-        }
-        wlen = where_append(where, where_sz, wlen, &nparams, bind_buf);
-        where_bind_text(binds, bind_idx, params->name_pattern);
-    }
-    if (params->file_pattern) {
-        *like_pattern_out = cbm_glob_to_like(params->file_pattern);
-        snprintf(bind_buf, sizeof(bind_buf), "n.file_path LIKE ?%d", *bind_idx + SKIP_ONE);
-        wlen = where_append(where, where_sz, wlen, &nparams, bind_buf);
-        where_bind_text(binds, bind_idx, *like_pattern_out);
-    }
-    if (params->exclude_labels) {
-        char excl_clause[CBM_SZ_512];
-        search_build_exclude_labels(params->exclude_labels, binds, bind_idx, excl_clause,
-                                    (int)sizeof(excl_clause));
-        (void)where_append(where, where_sz, wlen, &nparams, excl_clause);
-    }
+    search_where_basic(params, where, where_sz, &wlen, &nparams, binds, bind_idx, like_pattern_out);
+    search_where_advanced(params, where, where_sz, &wlen, &nparams, binds, bind_idx);
 
     return nparams;
 }

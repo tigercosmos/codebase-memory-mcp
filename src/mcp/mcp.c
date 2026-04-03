@@ -976,6 +976,37 @@ static char *handle_get_graph_schema(cbm_mcp_server_t *srv, const char *args) {
     return result;
 }
 
+/* Validate edge type: uppercase letters + underscore only, max 64 chars. */
+static bool validate_edge_type(const char *s) {
+    if (!s || strlen(s) > CBM_SZ_64) {
+        return false;
+    }
+    for (const char *c = s; *c; c++) {
+        if (!(*c >= 'A' && *c <= 'Z') && *c != '_') {
+            return false;
+        }
+    }
+    return true;
+}
+
+/* Enrich search result with 1-hop connected node names. */
+static void enrich_connected(yyjson_mut_doc *doc, yyjson_mut_val *item, cbm_store_t *store,
+                             int64_t node_id, const char *relationship) {
+    cbm_traverse_result_t tr = {0};
+    const char *et[] = {relationship ? relationship : "CALLS"};
+    cbm_store_bfs(store, node_id, "both", et, SKIP_ONE, SKIP_ONE, MCP_DEFAULT_LIMIT, &tr);
+    if (tr.visited_count > 0) {
+        yyjson_mut_val *conn = yyjson_mut_arr(doc);
+        for (int j = 0; j < tr.visited_count; j++) {
+            if (tr.visited[j].node.name) {
+                yyjson_mut_arr_add_str(doc, conn, tr.visited[j].node.name);
+            }
+        }
+        yyjson_mut_obj_add_val(doc, item, "connected_names", conn);
+    }
+    cbm_store_traverse_free(&tr);
+}
+
 static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
     char *project = cbm_mcp_get_string_arg(args, "project");
     cbm_store_t *store = resolve_store(srv, project);
@@ -989,17 +1020,35 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
 
     char *label = cbm_mcp_get_string_arg(args, "label");
     char *name_pattern = cbm_mcp_get_string_arg(args, "name_pattern");
+    char *qn_pattern = cbm_mcp_get_string_arg(args, "qn_pattern");
     char *file_pattern = cbm_mcp_get_string_arg(args, "file_pattern");
+    char *relationship = cbm_mcp_get_string_arg(args, "relationship");
+    bool exclude_entry_points = cbm_mcp_get_bool_arg(args, "exclude_entry_points");
+    bool include_connected = cbm_mcp_get_bool_arg(args, "include_connected");
     int limit = cbm_mcp_get_int_arg(args, "limit", MCP_HALF_SEC_US);
     int offset = cbm_mcp_get_int_arg(args, "offset", 0);
     int min_degree = cbm_mcp_get_int_arg(args, "min_degree", CBM_NOT_FOUND);
     int max_degree = cbm_mcp_get_int_arg(args, "max_degree", CBM_NOT_FOUND);
 
+    if (relationship && !validate_edge_type(relationship)) {
+        free(project);
+        free(label);
+        free(name_pattern);
+        free(qn_pattern);
+        free(file_pattern);
+        free(relationship);
+        return cbm_mcp_text_result("relationship must be uppercase letters and underscores", true);
+    }
+
     cbm_search_params_t params = {
         .project = project,
         .label = label,
         .name_pattern = name_pattern,
+        .qn_pattern = qn_pattern,
         .file_pattern = file_pattern,
+        .relationship = relationship,
+        .exclude_entry_points = exclude_entry_points,
+        .include_connected = include_connected,
         .limit = limit,
         .offset = offset,
         .min_degree = min_degree,
@@ -1027,6 +1076,11 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
                                sr->node.file_path ? sr->node.file_path : "");
         yyjson_mut_obj_add_int(doc, item, "in_degree", sr->in_degree);
         yyjson_mut_obj_add_int(doc, item, "out_degree", sr->out_degree);
+
+        if (include_connected && sr->node.id > 0) {
+            enrich_connected(doc, item, store, sr->node.id, relationship);
+        }
+
         yyjson_mut_arr_add_val(results, item);
     }
     yyjson_mut_obj_add_val(doc, root, "results", results);
@@ -1039,7 +1093,9 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
     free(project);
     free(label);
     free(name_pattern);
+    free(qn_pattern);
     free(file_pattern);
+    free(relationship);
 
     char *result = cbm_mcp_text_result(json, false);
     free(json);
@@ -1202,6 +1258,24 @@ static char *handle_delete_project(cbm_mcp_server_t *srv, const char *args) {
     return result;
 }
 
+/* Check if an aspect is requested (NULL aspects = all, or array contains "all" or the name). */
+static bool aspect_wanted(yyjson_doc *aspects_doc, yyjson_val *aspects_arr, const char *name) {
+    if (!aspects_arr) {
+        return true; /* no filter = all */
+    }
+    yyjson_arr_iter iter;
+    yyjson_arr_iter_init(aspects_arr, &iter);
+    yyjson_val *val;
+    while ((val = yyjson_arr_iter_next(&iter)) != NULL) {
+        const char *s = yyjson_get_str(val);
+        if (s && (strcmp(s, "all") == 0 || strcmp(s, name) == 0)) {
+            return true;
+        }
+    }
+    (void)aspects_doc;
+    return false;
+}
+
 static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
     char *project = cbm_mcp_get_string_arg(args, "project");
     cbm_store_t *store = resolve_store(srv, project);
@@ -1211,6 +1285,22 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
     if (not_indexed) {
         free(project);
         return not_indexed;
+    }
+
+    /* Parse aspects array from args */
+    yyjson_doc *aspects_doc = NULL;
+    yyjson_val *aspects_arr = NULL;
+    {
+        yyjson_doc *args_doc = yyjson_read(args, strlen(args), 0);
+        if (args_doc) {
+            yyjson_val *aval = yyjson_obj_get(yyjson_doc_get_root(args_doc), "aspects");
+            if (yyjson_is_arr(aval)) {
+                aspects_doc = args_doc; /* keep alive */
+                aspects_arr = aval;
+            } else {
+                yyjson_doc_free(args_doc);
+            }
+        }
     }
 
     cbm_schema_info_t schema = {0};
@@ -1230,27 +1320,31 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
     yyjson_mut_obj_add_int(doc, root, "total_edges", edge_count);
 
     /* Node label summary */
-    yyjson_mut_val *labels = yyjson_mut_arr(doc);
-    for (int i = 0; i < schema.node_label_count; i++) {
-        yyjson_mut_val *item = yyjson_mut_obj(doc);
-        yyjson_mut_obj_add_str(doc, item, "label", schema.node_labels[i].label);
-        yyjson_mut_obj_add_int(doc, item, "count", schema.node_labels[i].count);
-        yyjson_mut_arr_add_val(labels, item);
+    if (aspect_wanted(aspects_doc, aspects_arr, "structure")) {
+        yyjson_mut_val *labels = yyjson_mut_arr(doc);
+        for (int i = 0; i < schema.node_label_count; i++) {
+            yyjson_mut_val *item = yyjson_mut_obj(doc);
+            yyjson_mut_obj_add_str(doc, item, "label", schema.node_labels[i].label);
+            yyjson_mut_obj_add_int(doc, item, "count", schema.node_labels[i].count);
+            yyjson_mut_arr_add_val(labels, item);
+        }
+        yyjson_mut_obj_add_val(doc, root, "node_labels", labels);
     }
-    yyjson_mut_obj_add_val(doc, root, "node_labels", labels);
 
     /* Edge type summary */
-    yyjson_mut_val *types = yyjson_mut_arr(doc);
-    for (int i = 0; i < schema.edge_type_count; i++) {
-        yyjson_mut_val *item = yyjson_mut_obj(doc);
-        yyjson_mut_obj_add_str(doc, item, "type", schema.edge_types[i].type);
-        yyjson_mut_obj_add_int(doc, item, "count", schema.edge_types[i].count);
-        yyjson_mut_arr_add_val(types, item);
+    if (aspect_wanted(aspects_doc, aspects_arr, "dependencies")) {
+        yyjson_mut_val *types = yyjson_mut_arr(doc);
+        for (int i = 0; i < schema.edge_type_count; i++) {
+            yyjson_mut_val *item = yyjson_mut_obj(doc);
+            yyjson_mut_obj_add_str(doc, item, "type", schema.edge_types[i].type);
+            yyjson_mut_obj_add_int(doc, item, "count", schema.edge_types[i].count);
+            yyjson_mut_arr_add_val(types, item);
+        }
+        yyjson_mut_obj_add_val(doc, root, "edge_types", types);
     }
-    yyjson_mut_obj_add_val(doc, root, "edge_types", types);
 
     /* Relationship patterns */
-    if (schema.rel_pattern_count > 0) {
+    if (aspect_wanted(aspects_doc, aspects_arr, "routes") && schema.rel_pattern_count > 0) {
         yyjson_mut_val *pats = yyjson_mut_arr(doc);
         for (int i = 0; i < schema.rel_pattern_count; i++) {
             yyjson_mut_arr_add_str(doc, pats, schema.rel_patterns[i]);
@@ -1261,6 +1355,9 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
     char *json = yy_doc_to_str(doc);
     yyjson_mut_doc_free(doc);
     cbm_store_schema_free(&schema);
+    if (aspects_doc) {
+        yyjson_doc_free(aspects_doc);
+    }
     free(project);
 
     char *result = cbm_mcp_text_result(json, false);
@@ -2648,10 +2745,33 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
 
 /* ── detect_changes ───────────────────────────────────────────── */
 
+/* Find symbols defined in a file and add them to the impacted array. */
+static void detect_add_impacted_symbols(cbm_store_t *store, const char *project, const char *file,
+                                        yyjson_mut_doc *doc, yyjson_mut_val *impacted) {
+    cbm_node_t *nodes = NULL;
+    int ncount = 0;
+    cbm_store_find_nodes_by_file(store, project, file, &nodes, &ncount);
+    for (int i = 0; i < ncount; i++) {
+        if (nodes[i].label && strcmp(nodes[i].label, "File") != 0 &&
+            strcmp(nodes[i].label, "Folder") != 0 && strcmp(nodes[i].label, "Project") != 0) {
+            yyjson_mut_val *item = yyjson_mut_obj(doc);
+            yyjson_mut_obj_add_strcpy(doc, item, "name", nodes[i].name ? nodes[i].name : "");
+            yyjson_mut_obj_add_strcpy(doc, item, "label", nodes[i].label);
+            yyjson_mut_obj_add_strcpy(doc, item, "file", file);
+            yyjson_mut_arr_add_val(impacted, item);
+        }
+    }
+    cbm_store_free_nodes(nodes, ncount);
+}
+
 static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
     char *project = cbm_mcp_get_string_arg(args, "project");
     char *base_branch = cbm_mcp_get_string_arg(args, "base_branch");
+    char *scope = cbm_mcp_get_string_arg(args, "scope");
     int depth = cbm_mcp_get_int_arg(args, "depth", MCP_DEFAULT_BFS_DEPTH);
+
+    /* scope: "files" = just changed files, "symbols" = files + symbols (default) */
+    bool want_symbols = !scope || strcmp(scope, "symbols") == 0 || strcmp(scope, "impact") == 0;
 
     if (!base_branch) {
         base_branch = heap_strdup("main");
@@ -2661,6 +2781,7 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
     if (!cbm_validate_shell_arg(base_branch)) {
         free(project);
         free(base_branch);
+        free(scope);
         return cbm_mcp_text_result("base_branch contains invalid characters", true);
     }
 
@@ -2668,6 +2789,7 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
     if (!root_path) {
         free(project);
         free(base_branch);
+        free(scope);
         return cbm_mcp_text_result("project not found", true);
     }
 
@@ -2675,6 +2797,7 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
         free(root_path);
         free(project);
         free(base_branch);
+        free(scope);
         return cbm_mcp_text_result("project path contains invalid characters", true);
     }
 
@@ -2697,6 +2820,7 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
         free(root_path);
         free(project);
         free(base_branch);
+        free(scope);
         return cbm_mcp_text_result("git diff failed", true);
     }
 
@@ -2725,22 +2849,9 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
         yyjson_mut_arr_add_strcpy(doc, changed, line);
         file_count++;
 
-        /* Find symbols defined in this file */
-        cbm_node_t *nodes = NULL;
-        int ncount = 0;
-        cbm_store_find_nodes_by_file(store, project, line, &nodes, &ncount);
-
-        for (int i = 0; i < ncount; i++) {
-            if (nodes[i].label && strcmp(nodes[i].label, "File") != 0 &&
-                strcmp(nodes[i].label, "Folder") != 0 && strcmp(nodes[i].label, "Project") != 0) {
-                yyjson_mut_val *item = yyjson_mut_obj(doc);
-                yyjson_mut_obj_add_strcpy(doc, item, "name", nodes[i].name ? nodes[i].name : "");
-                yyjson_mut_obj_add_strcpy(doc, item, "label", nodes[i].label);
-                yyjson_mut_obj_add_strcpy(doc, item, "file", line);
-                yyjson_mut_arr_add_val(impacted, item);
-            }
+        if (want_symbols) {
+            detect_add_impacted_symbols(store, project, line, doc, impacted);
         }
-        cbm_store_free_nodes(nodes, ncount);
     }
     cbm_pclose(fp);
 
@@ -2754,6 +2865,7 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
     free(root_path);
     free(project);
     free(base_branch);
+    free(scope);
 
     char *result = cbm_mcp_text_result(json, false);
     free(json);

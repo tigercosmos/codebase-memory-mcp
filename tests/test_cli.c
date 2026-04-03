@@ -1475,7 +1475,12 @@ TEST(cli_detect_agents_finds_kilocode) {
         SKIP("cbm_mkdtemp failed");
 
     char dir[512];
+#ifdef __APPLE__
+    snprintf(dir, sizeof(dir),
+             "%s/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code", tmpdir);
+#else
     snprintf(dir, sizeof(dir), "%s/.config/Code/User/globalStorage/kilocode.kilo-code", tmpdir);
+#endif
     test_mkdirp(dir);
 
     cbm_detected_agents_t agents = cbm_detect_agents(tmpdir);

@@ -1002,7 +1002,17 @@ cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
 
     agents.aider = cbm_find_cli("aider", home_dir)[0] != '\0';
 
-    snprintf(path, sizeof(path), "%s/.config/Code/User/globalStorage/kilocode.kilo-code", home_dir);
+#ifdef __APPLE__
+    snprintf(path, sizeof(path),
+             "%s/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code", home_dir);
+#else
+    {
+        const char *kc_cfg = cbm_app_config_dir();
+        if (kc_cfg) {
+            snprintf(path, sizeof(path), "%s/Code/User/globalStorage/kilocode.kilo-code", kc_cfg);
+        }
+    }
+#endif
     agents.kilocode = dir_exists(path);
 
 #ifdef __APPLE__
@@ -2738,9 +2748,16 @@ static void install_editor_agent_configs(const cbm_detected_agents_t *agents, co
     if (agents->kilocode) {
         char cp[CLI_BUF_1K];
         char ip[CLI_BUF_1K];
+#ifdef __APPLE__
         snprintf(cp, sizeof(cp),
-                 "%s/.config/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json",
+                 "%s/Library/Application Support/Code/User/globalStorage/"
+                 "kilocode.kilo-code/settings/mcp_settings.json",
                  home);
+#else
+        snprintf(cp, sizeof(cp),
+                 "%s/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json",
+                 cbm_app_config_dir());
+#endif
         snprintf(ip, sizeof(ip), "%s/.kilocode/rules/codebase-memory-mcp.md", home);
         install_generic_agent_config("KiloCode", binary_path, cp, ip, dry_run,
                                      cbm_install_editor_mcp);
@@ -3013,9 +3030,16 @@ static void uninstall_editor_agents(const cbm_detected_agents_t *agents, const c
     if (agents->kilocode) {
         char cp[CLI_BUF_1K];
         char ip[CLI_BUF_1K];
+#ifdef __APPLE__
         snprintf(cp, sizeof(cp),
-                 "%s/.config/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json",
+                 "%s/Library/Application Support/Code/User/globalStorage/"
+                 "kilocode.kilo-code/settings/mcp_settings.json",
                  home);
+#else
+        snprintf(cp, sizeof(cp),
+                 "%s/Code/User/globalStorage/kilocode.kilo-code/settings/mcp_settings.json",
+                 cbm_app_config_dir());
+#endif
         snprintf(ip, sizeof(ip), "%s/.kilocode/rules/codebase-memory-mcp.md", home);
         uninstall_agent_mcp_instr((mcp_uninstall_args_t){"KiloCode", cp, ip}, dry_run,
                                   cbm_remove_editor_mcp);

@@ -152,25 +152,7 @@ static CBMLanguage lang_from_string(const char *s) {
 
 /* ── Config directory helper ─────────────────────────────────────── */
 
-/*
- * Get the XDG config dir for codebase-memory-mcp.
- * Writes "<dir>/codebase-memory-mcp" into buf (up to bufsz bytes).
- * Uses $XDG_CONFIG_HOME if set, else ~/.config.
- */
-static void cbm_app_config_dir(char *buf, size_t bufsz) {
-    char xdg[CBM_SZ_512] = {0};
-    cbm_safe_getenv("XDG_CONFIG_HOME", xdg, sizeof(xdg), NULL);
-    if (xdg[0]) {
-        snprintf(buf, bufsz, "%s/codebase-memory-mcp", xdg);
-    } else {
-        char home[CBM_SZ_512] = {0};
-        cbm_safe_getenv("HOME", home, sizeof(home), NULL);
-        if (!home[0]) {
-            snprintf(home, sizeof(home), "/tmp");
-        }
-        snprintf(buf, bufsz, "%s/.config/codebase-memory-mcp", home);
-    }
-}
+/* cbm_app_config_dir() is now in platform.c (cross-platform). */
 
 /* ── JSON parsing ────────────────────────────────────────────────── */
 
@@ -312,11 +294,10 @@ cbm_userconfig_t *cbm_userconfig_load(const char *repo_path) {
 
     /* ── Step 1: Load global config ── */
     enum { PATH_BUF_SZ = 1280 };
-    char global_dir[CBM_SZ_1K];
-    cbm_app_config_dir(global_dir, sizeof(global_dir));
-
+    const char *cfg_base = cbm_app_config_dir();
+    const char *cfg_fallback = cfg_base ? cfg_base : "/tmp";
     char global_path[PATH_BUF_SZ];
-    snprintf(global_path, sizeof(global_path), "%s/config.json", global_dir);
+    snprintf(global_path, sizeof(global_path), "%s/codebase-memory-mcp/config.json", cfg_fallback);
 
     if (load_config_file(global_path, &entries, &count) != 0) {
         for (int i = 0; i < count; i++) {

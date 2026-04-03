@@ -81,6 +81,18 @@ const char *cbm_safe_getenv(const char *name, char *buf, size_t buf_sz, const ch
  * Returns NULL when neither is set. */
 const char *cbm_get_home_dir(void);
 
+/* ── App config directories ────────────────────────────────────── */
+
+/* Cross-platform app config directory (static buffer, not thread-safe).
+ * Windows: %APPDATA% (e.g. C:/Users/.../AppData/Roaming)
+ * macOS:   $HOME (callers append Library/Application Support/...)
+ * Linux:   $XDG_CONFIG_HOME or ~/.config */
+const char *cbm_app_config_dir(void);
+
+/* Windows: %LOCALAPPDATA% (e.g. C:/Users/.../AppData/Local)
+ * macOS/Linux: same as cbm_app_config_dir(). */
+const char *cbm_app_local_dir(void);
+
 /* ── File system ───────────────────────────────────────────────── */
 
 /* Check if a path exists. */

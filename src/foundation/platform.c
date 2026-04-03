@@ -299,3 +299,58 @@ const char *cbm_get_home_dir(void) {
     }
     return NULL;
 }
+
+/* ── App config directories (cross-platform) ─────────────────── */
+
+const char *cbm_app_config_dir(void) {
+    static char buf[CBM_SZ_1K];
+    char tmp[CBM_SZ_256] = "";
+#ifdef _WIN32
+    cbm_safe_getenv("APPDATA", tmp, sizeof(tmp), NULL);
+    if (tmp[0]) {
+        snprintf(buf, sizeof(buf), "%s", tmp);
+        cbm_normalize_path_sep(buf);
+        return buf;
+    }
+    const char *home = cbm_get_home_dir();
+    if (home) {
+        snprintf(buf, sizeof(buf), "%s/AppData/Roaming", home);
+        return buf;
+    }
+    return NULL;
+#else
+    /* Linux: XDG_CONFIG_HOME or ~/.config */
+    cbm_safe_getenv("XDG_CONFIG_HOME", tmp, sizeof(tmp), NULL);
+    if (tmp[0]) {
+        snprintf(buf, sizeof(buf), "%s", tmp);
+        return buf;
+    }
+    const char *home = cbm_get_home_dir();
+    if (home) {
+        snprintf(buf, sizeof(buf), "%s/.config", home);
+        return buf;
+    }
+    return NULL;
+#endif /* _WIN32 */
+}
+
+const char *cbm_app_local_dir(void) {
+#ifdef _WIN32
+    static char buf[CBM_SZ_1K];
+    char tmp[CBM_SZ_256] = "";
+    cbm_safe_getenv("LOCALAPPDATA", tmp, sizeof(tmp), NULL);
+    if (tmp[0]) {
+        snprintf(buf, sizeof(buf), "%s", tmp);
+        cbm_normalize_path_sep(buf);
+        return buf;
+    }
+    const char *home = cbm_get_home_dir();
+    if (home) {
+        snprintf(buf, sizeof(buf), "%s/AppData/Local", home);
+        return buf;
+    }
+    return NULL;
+#else
+    return cbm_app_config_dir();
+#endif
+}

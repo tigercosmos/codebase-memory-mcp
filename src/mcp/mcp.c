@@ -990,21 +990,35 @@ static bool validate_edge_type(const char *s) {
 }
 
 /* Enrich search result with 1-hop connected node names. */
+/* Add BFS results to a yyjson array (deduped by name). */
+static void enrich_add_bfs(yyjson_mut_doc *doc, yyjson_mut_val *arr, cbm_traverse_result_t *tr) {
+    for (int j = 0; j < tr->visited_count; j++) {
+        if (tr->visited[j].node.name) {
+            yyjson_mut_arr_add_strcpy(doc, arr, tr->visited[j].node.name);
+        }
+    }
+}
+
+/* Enrich search result with 1-hop connected node names (inbound + outbound). */
 static void enrich_connected(yyjson_mut_doc *doc, yyjson_mut_val *item, cbm_store_t *store,
                              int64_t node_id, const char *relationship) {
-    cbm_traverse_result_t tr = {0};
     const char *et[] = {relationship ? relationship : "CALLS"};
-    cbm_store_bfs(store, node_id, "both", et, SKIP_ONE, SKIP_ONE, MCP_DEFAULT_LIMIT, &tr);
-    if (tr.visited_count > 0) {
-        yyjson_mut_val *conn = yyjson_mut_arr(doc);
-        for (int j = 0; j < tr.visited_count; j++) {
-            if (tr.visited[j].node.name) {
-                yyjson_mut_arr_add_str(doc, conn, tr.visited[j].node.name);
-            }
-        }
+    yyjson_mut_val *conn = yyjson_mut_arr(doc);
+
+    /* BFS doesn't support "both" — run inbound + outbound separately. */
+    cbm_traverse_result_t tr_in = {0};
+    cbm_store_bfs(store, node_id, "inbound", et, SKIP_ONE, SKIP_ONE, MCP_DEFAULT_LIMIT, &tr_in);
+    enrich_add_bfs(doc, conn, &tr_in);
+    cbm_store_traverse_free(&tr_in);
+
+    cbm_traverse_result_t tr_out = {0};
+    cbm_store_bfs(store, node_id, "outbound", et, SKIP_ONE, SKIP_ONE, MCP_DEFAULT_LIMIT, &tr_out);
+    enrich_add_bfs(doc, conn, &tr_out);
+    cbm_store_traverse_free(&tr_out);
+
+    if (yyjson_mut_arr_size(conn) > 0) {
         yyjson_mut_obj_add_val(doc, item, "connected_names", conn);
     }
-    cbm_store_traverse_free(&tr);
 }
 
 static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {

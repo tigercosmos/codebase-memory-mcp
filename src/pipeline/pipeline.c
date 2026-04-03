@@ -425,6 +425,12 @@ static void run_predump_passes(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx) {
         cbm_log_info("pass.timing", "pass", "route_match", "elapsed_ms",
                      itoa_buf((int)elapsed_ms(t)));
     }
+    if (!check_cancel(p)) {
+        cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+        cbm_pipeline_pass_similarity(ctx);
+        cbm_log_info("pass.timing", "pass", "similarity", "elapsed_ms",
+                     itoa_buf((int)elapsed_ms(t)));
+    }
 }
 
 /* Run the sequential pipeline path: definitions, k8s, calls, usages, semantic. */

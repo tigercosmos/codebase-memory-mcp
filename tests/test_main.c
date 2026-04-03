@@ -54,6 +54,7 @@ extern void suite_security(void);
 extern void suite_yaml(void);
 extern void suite_integration(void);
 extern void suite_incremental(void);
+extern void suite_simhash(void);
 
 int main(void) {
     printf("\n  codebase-memory-mcp  C test suite\n");
@@ -143,6 +144,9 @@ int main(void) {
 
     /* YAML parser */
     RUN_SUITE(yaml);
+
+    /* SimHash / SIMILAR_TO */
+    RUN_SUITE(simhash);
 
     /* Integration (end-to-end) */
     RUN_SUITE(integration);

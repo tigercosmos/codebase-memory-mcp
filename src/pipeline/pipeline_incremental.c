@@ -242,6 +242,11 @@ static void run_postpasses(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *changed_fil
     cbm_pipeline_pass_configlink(ctx);
     cbm_log_info("pass.timing", "pass", "incr_configlink", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(t)));
+
+    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+    cbm_pipeline_pass_similarity(ctx);
+    cbm_log_info("pass.timing", "pass", "incr_similarity", "elapsed_ms",
+                 itoa_buf((int)elapsed_ms(t)));
 }
 /* Delete old DB and dump merged graph + hashes to disk. */
 static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *project,

@@ -103,6 +103,8 @@ typedef struct {
     const char *route_method;  // HTTP method from decorator (e.g., "POST") or NULL
     int complexity;            // cyclomatic complexity
     int lines;                 // body line count
+    uint32_t *fingerprint;     // MinHash fingerprint (arena-allocated, K values) or NULL
+    int fingerprint_k;         // number of hash values (CBM_MINHASH_K or 0)
     bool is_exported;
     bool is_abstract;
     bool is_test;

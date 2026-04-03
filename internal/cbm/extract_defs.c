@@ -3,6 +3,7 @@
 #include "helpers.h"
 #include "lang_specs.h"
 #include "foundation/constants.h"
+#include "simhash/minhash.h"
 #include "tree_sitter/api.h" // TSNode, ts_node_*
 #include <stdint.h>          // uint32_t
 #include <string.h>
@@ -27,6 +28,30 @@ enum {
     VAR_RECURSION_LIMIT = 8,
     NESTED_CLASS_STACK_CAP = 128,
 };
+
+/* Compute MinHash fingerprint for a function body node and store in def.
+ * Sets def->fingerprint (arena-allocated) and def->fingerprint_k on success,
+ * leaves them NULL/0 if the body is too short. */
+static void compute_fingerprint(CBMExtractCtx *ctx, CBMDefinition *def, TSNode func_node) {
+    /* Find the function body child */
+    TSNode body = ts_node_child_by_field_name(func_node, TS_FIELD("body"));
+    if (ts_node_is_null(body)) {
+        /* Some languages use "block" or the function itself as the body */
+        body = func_node;
+    }
+    cbm_minhash_t result;
+    if (!cbm_minhash_compute(body, ctx->source, (int)ctx->language, &result)) {
+        return; /* Too short or empty — no fingerprint */
+    }
+    /* Arena-allocate the fingerprint array */
+    uint32_t *fp = cbm_arena_alloc(ctx->arena, CBM_MINHASH_K * sizeof(uint32_t));
+    if (!fp) {
+        return;
+    }
+    memcpy(fp, result.values, CBM_MINHASH_K * sizeof(uint32_t));
+    def->fingerprint = fp;
+    def->fingerprint_k = CBM_MINHASH_K;
+}
 
 // Tree-sitter row is 0-based; lines are 1-based.
 
@@ -1421,6 +1446,9 @@ static void extract_func_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec 
         def.complexity = cbm_count_branching(node, spec->branching_node_types);
     }
 
+    // MinHash fingerprint
+    compute_fingerprint(ctx, &def, func_node);
+
     // JS/TS export detection
     if (ctx->language == CBM_LANG_JAVASCRIPT || ctx->language == CBM_LANG_TYPESCRIPT ||
         ctx->language == CBM_LANG_TSX) {
@@ -1855,6 +1883,9 @@ static void push_method_def(CBMExtractCtx *ctx, TSNode child, const char *class_
         def.complexity = cbm_count_branching(child, spec->branching_node_types);
     }
 
+    // MinHash fingerprint
+    compute_fingerprint(ctx, &def, child);
+
     cbm_defs_push(&ctx->result->defs, a, def);
 }
 
@@ -1987,6 +2018,9 @@ static void extract_rust_impl(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
         if (spec->branching_node_types && spec->branching_node_types[0]) {
             def.complexity = cbm_count_branching(child, spec->branching_node_types);
         }
+
+        // MinHash fingerprint
+        compute_fingerprint(ctx, &def, child);
 
         cbm_defs_push(&ctx->result->defs, a, def);
     }

@@ -66,34 +66,138 @@ static int count_similar_to_edges(const cbm_gbuf_t *gb) {
     return count;
 }
 
+/* Large Go function template for fingerprint tests.  Must have enough
+ * structural diversity (>= 32 unique structural trigrams) after leaf-only
+ * tokenisation and normalisation. */
+#define GO_VALIDATE_USER_SRC \
+    "package main\n" \
+    "import \"errors\"\n" \
+    "import \"strings\"\n" \
+    "func ValidateUser(u User) error {\n" \
+    "    if u.Name == \"\" {\n" \
+    "        return errors.New(\"name required\")\n" \
+    "    }\n" \
+    "    if len(u.Name) > 100 {\n" \
+    "        return errors.New(\"name too long\")\n" \
+    "    }\n" \
+    "    if u.Age < 0 {\n" \
+    "        return errors.New(\"invalid age\")\n" \
+    "    }\n" \
+    "    if u.Age > 200 {\n" \
+    "        return errors.New(\"age too high\")\n" \
+    "    }\n" \
+    "    if u.Email == \"\" {\n" \
+    "        return errors.New(\"email required\")\n" \
+    "    }\n" \
+    "    if !strings.Contains(u.Email, \"@\") {\n" \
+    "        return errors.New(\"invalid email\")\n" \
+    "    }\n" \
+    "    if u.Phone == \"\" {\n" \
+    "        return errors.New(\"phone required\")\n" \
+    "    }\n" \
+    "    if len(u.Phone) < 7 {\n" \
+    "        return errors.New(\"phone too short\")\n" \
+    "    }\n" \
+    "    if u.Country == \"\" {\n" \
+    "        return errors.New(\"country required\")\n" \
+    "    }\n" \
+    "    for _, c := range u.Tags {\n" \
+    "        if c == \"\" {\n" \
+    "            return errors.New(\"empty tag\")\n" \
+    "        }\n" \
+    "    }\n" \
+    "    return nil\n" \
+    "}\n"
+
+/* Same structure, different names/types — near-clone */
+#define GO_VALIDATE_ORDER_SRC \
+    "package main\n" \
+    "import \"errors\"\n" \
+    "import \"strings\"\n" \
+    "func ValidateOrder(o Order) error {\n" \
+    "    if o.Title == \"\" {\n" \
+    "        return errors.New(\"title required\")\n" \
+    "    }\n" \
+    "    if len(o.Title) > 100 {\n" \
+    "        return errors.New(\"title too long\")\n" \
+    "    }\n" \
+    "    if o.Amount < 0 {\n" \
+    "        return errors.New(\"invalid amount\")\n" \
+    "    }\n" \
+    "    if o.Amount > 200 {\n" \
+    "        return errors.New(\"amount too high\")\n" \
+    "    }\n" \
+    "    if o.Status == \"\" {\n" \
+    "        return errors.New(\"status required\")\n" \
+    "    }\n" \
+    "    if !strings.Contains(o.Status, \"@\") {\n" \
+    "        return errors.New(\"invalid status\")\n" \
+    "    }\n" \
+    "    if o.Region == \"\" {\n" \
+    "        return errors.New(\"region required\")\n" \
+    "    }\n" \
+    "    if len(o.Region) < 7 {\n" \
+    "        return errors.New(\"region too short\")\n" \
+    "    }\n" \
+    "    if o.Vendor == \"\" {\n" \
+    "        return errors.New(\"vendor required\")\n" \
+    "    }\n" \
+    "    for _, c := range o.Items {\n" \
+    "        if c == \"\" {\n" \
+    "            return errors.New(\"empty item\")\n" \
+    "        }\n" \
+    "    }\n" \
+    "    return nil\n" \
+    "}\n"
+
+/* Completely different structure */
+#define GO_HANDLE_REQUEST_SRC \
+    "package main\n" \
+    "import \"net/http\"\n" \
+    "import \"encoding/json\"\n" \
+    "import \"io\"\n" \
+    "func HandleRequest(w http.ResponseWriter, r *http.Request) {\n" \
+    "    body, err := io.ReadAll(r.Body)\n" \
+    "    if err != nil {\n" \
+    "        http.Error(w, err.Error(), 400)\n" \
+    "        return\n" \
+    "    }\n" \
+    "    defer r.Body.Close()\n" \
+    "    var data map[string]interface{}\n" \
+    "    if err := json.Unmarshal(body, &data); err != nil {\n" \
+    "        http.Error(w, err.Error(), 400)\n" \
+    "        return\n" \
+    "    }\n" \
+    "    result := make(map[string]interface{})\n" \
+    "    for k, v := range data {\n" \
+    "        switch val := v.(type) {\n" \
+    "        case string:\n" \
+    "            result[k] = strings.ToUpper(val)\n" \
+    "        case float64:\n" \
+    "            result[k] = val * 2\n" \
+    "        default:\n" \
+    "            result[k] = v\n" \
+    "        }\n" \
+    "    }\n" \
+    "    w.Header().Set(\"Content-Type\", \"application/json\")\n" \
+    "    json.NewEncoder(w).Encode(result)\n" \
+    "}\n"
+
 /* ═══════════════════════════════════════════════════════════════════
  * Suite 1: MinHash Core
  * ═══════════════════════════════════════════════════════════════════ */
 
 /* Two identical Go functions must produce identical MinHash signatures. */
 TEST(minhash_identical_source_same_fingerprint) {
-    const char *src =
-        "package main\n"
-        "func Validate(u User) error {\n"
-        "    if u.Name == \"\" {\n"
-        "        return errors.New(\"name required\")\n"
-        "    }\n"
-        "    if u.Age < 0 {\n"
-        "        return errors.New(\"invalid age\")\n"
-        "    }\n"
-        "    if u.Email == \"\" {\n"
-        "        return errors.New(\"email required\")\n"
-        "    }\n"
-        "    return nil\n"
-        "}\n";
+    const char *src = GO_VALIDATE_USER_SRC;
 
     CBMFileResult *r1 = extract_one(src, CBM_LANG_GO, "test", "a.go");
     CBMFileResult *r2 = extract_one(src, CBM_LANG_GO, "test", "b.go");
     ASSERT_NOT_NULL(r1);
     ASSERT_NOT_NULL(r2);
 
-    const CBMDefinition *d1 = find_def(r1, "Validate");
-    const CBMDefinition *d2 = find_def(r2, "Validate");
+    const CBMDefinition *d1 = find_def(r1, "ValidateUser");
+    const CBMDefinition *d2 = find_def(r2, "ValidateUser");
     ASSERT_NOT_NULL(d1);
     ASSERT_NOT_NULL(d2);
     ASSERT_NOT_NULL(d1->fingerprint);
@@ -111,35 +215,8 @@ TEST(minhash_identical_source_same_fingerprint) {
 
 /* Renamed variables should produce the same fingerprint (identifiers normalised). */
 TEST(minhash_renamed_vars_same_fingerprint) {
-    const char *src_a =
-        "package main\n"
-        "func ValidateUser(u User) error {\n"
-        "    if u.Name == \"\" {\n"
-        "        return errors.New(\"name required\")\n"
-        "    }\n"
-        "    if u.Age < 0 {\n"
-        "        return errors.New(\"invalid age\")\n"
-        "    }\n"
-        "    if u.Email == \"\" {\n"
-        "        return errors.New(\"email required\")\n"
-        "    }\n"
-        "    return nil\n"
-        "}\n";
-
-    const char *src_b =
-        "package main\n"
-        "func ValidateOrder(o Order) error {\n"
-        "    if o.Title == \"\" {\n"
-        "        return errors.New(\"title required\")\n"
-        "    }\n"
-        "    if o.Amount < 0 {\n"
-        "        return errors.New(\"invalid amount\")\n"
-        "    }\n"
-        "    if o.Status == \"\" {\n"
-        "        return errors.New(\"status required\")\n"
-        "    }\n"
-        "    return nil\n"
-        "}\n";
+    const char *src_a = GO_VALIDATE_USER_SRC;
+    const char *src_b = GO_VALIDATE_ORDER_SRC;
 
     CBMFileResult *ra = extract_one(src_a, CBM_LANG_GO, "test", "a.go");
     CBMFileResult *rb = extract_one(src_b, CBM_LANG_GO, "test", "b.go");
@@ -166,38 +243,15 @@ TEST(minhash_renamed_vars_same_fingerprint) {
 
 /* Completely different function bodies → low Jaccard. */
 TEST(minhash_different_code_different_fingerprint) {
-    const char *src_a =
-        "package main\n"
-        "func Validate(u User) error {\n"
-        "    if u.Name == \"\" {\n"
-        "        return errors.New(\"name required\")\n"
-        "    }\n"
-        "    if u.Age < 0 {\n"
-        "        return errors.New(\"invalid age\")\n"
-        "    }\n"
-        "    if u.Email == \"\" {\n"
-        "        return errors.New(\"email required\")\n"
-        "    }\n"
-        "    return nil\n"
-        "}\n";
-
-    const char *src_b =
-        "package main\n"
-        "import \"net/http\"\n"
-        "func HandleRequest(w http.ResponseWriter, r *http.Request) {\n"
-        "    data := make(map[string]interface{})\n"
-        "    for k, v := range r.URL.Query() {\n"
-        "        data[k] = v[0]\n"
-        "    }\n"
-        "    json.NewEncoder(w).Encode(data)\n"
-        "}\n";
+    const char *src_a = GO_VALIDATE_USER_SRC;
+    const char *src_b = GO_HANDLE_REQUEST_SRC;
 
     CBMFileResult *ra = extract_one(src_a, CBM_LANG_GO, "test", "a.go");
     CBMFileResult *rb = extract_one(src_b, CBM_LANG_GO, "test", "b.go");
     ASSERT_NOT_NULL(ra);
     ASSERT_NOT_NULL(rb);
 
-    const CBMDefinition *da = find_def(ra, "Validate");
+    const CBMDefinition *da = find_def(ra, "ValidateUser");
     const CBMDefinition *db = find_def(rb, "HandleRequest");
     ASSERT_NOT_NULL(da);
     ASSERT_NOT_NULL(db);
@@ -215,33 +269,52 @@ TEST(minhash_different_code_different_fingerprint) {
     PASS();
 }
 
-/* Same function with one added statement → high but not perfect Jaccard. */
+/* Same function with one added check → high but not perfect Jaccard. */
 TEST(minhash_minor_edit_high_jaccard) {
-    const char *src_a =
-        "package main\n"
-        "func Process(x int) int {\n"
-        "    if x < 0 {\n"
-        "        return -1\n"
-        "    }\n"
-        "    if x > 100 {\n"
-        "        return 100\n"
-        "    }\n"
-        "    result := x * 2\n"
-        "    return result\n"
-        "}\n";
+    const char *src_a = GO_VALIDATE_USER_SRC;
 
+    /* ValidateUser with one extra check added at the end */
     const char *src_b =
         "package main\n"
-        "func Process(x int) int {\n"
-        "    if x < 0 {\n"
-        "        return -1\n"
+        "import \"errors\"\n"
+        "import \"strings\"\n"
+        "func ValidateUser(u User) error {\n"
+        "    if u.Name == \"\" {\n"
+        "        return errors.New(\"name required\")\n"
         "    }\n"
-        "    if x > 100 {\n"
-        "        return 100\n"
+        "    if len(u.Name) > 100 {\n"
+        "        return errors.New(\"name too long\")\n"
         "    }\n"
-        "    result := x * 2\n"
-        "    result = result + 1\n"
-        "    return result\n"
+        "    if u.Age < 0 {\n"
+        "        return errors.New(\"invalid age\")\n"
+        "    }\n"
+        "    if u.Age > 200 {\n"
+        "        return errors.New(\"age too high\")\n"
+        "    }\n"
+        "    if u.Email == \"\" {\n"
+        "        return errors.New(\"email required\")\n"
+        "    }\n"
+        "    if !strings.Contains(u.Email, \"@\") {\n"
+        "        return errors.New(\"invalid email\")\n"
+        "    }\n"
+        "    if u.Phone == \"\" {\n"
+        "        return errors.New(\"phone required\")\n"
+        "    }\n"
+        "    if len(u.Phone) < 7 {\n"
+        "        return errors.New(\"phone too short\")\n"
+        "    }\n"
+        "    if u.Country == \"\" {\n"
+        "        return errors.New(\"country required\")\n"
+        "    }\n"
+        "    for _, c := range u.Tags {\n"
+        "        if c == \"\" {\n"
+        "            return errors.New(\"empty tag\")\n"
+        "        }\n"
+        "    }\n"
+        "    if u.Active == false {\n"
+        "        return errors.New(\"user inactive\")\n"
+        "    }\n"
+        "    return nil\n"
         "}\n";
 
     CBMFileResult *ra = extract_one(src_a, CBM_LANG_GO, "test", "a.go");
@@ -249,8 +322,8 @@ TEST(minhash_minor_edit_high_jaccard) {
     ASSERT_NOT_NULL(ra);
     ASSERT_NOT_NULL(rb);
 
-    const CBMDefinition *da = find_def(ra, "Process");
-    const CBMDefinition *db = find_def(rb, "Process");
+    const CBMDefinition *da = find_def(ra, "ValidateUser");
+    const CBMDefinition *db = find_def(rb, "ValidateUser");
     ASSERT_NOT_NULL(da);
     ASSERT_NOT_NULL(db);
     ASSERT_NOT_NULL(da->fingerprint);
@@ -291,41 +364,21 @@ TEST(minhash_empty_body_skipped) {
     PASS();
 }
 
-/* Type annotations normalised: int vs long → same fingerprint. */
+/* Type names normalised: User vs Order → same fingerprint (identifiers → "I"). */
 TEST(minhash_type_annotation_normalized) {
-    const char *src_a =
-        "package main\n"
-        "func Compute(x int, y int) int {\n"
-        "    if x > y {\n"
-        "        return x - y\n"
-        "    }\n"
-        "    if x < 0 {\n"
-        "        return -x\n"
-        "    }\n"
-        "    result := x + y\n"
-        "    return result\n"
-        "}\n";
+    /* ValidateUser uses "User" type, ValidateOrder uses "Order" type.
+     * Both should normalise identifiers to "I" and produce high Jaccard. */
+    const char *src_a = GO_VALIDATE_USER_SRC;
 
-    const char *src_b =
-        "package main\n"
-        "func Compute(x int64, y int64) int64 {\n"
-        "    if x > y {\n"
-        "        return x - y\n"
-        "    }\n"
-        "    if x < 0 {\n"
-        "        return -x\n"
-        "    }\n"
-        "    result := x + y\n"
-        "    return result\n"
-        "}\n";
+    const char *src_b = GO_VALIDATE_ORDER_SRC;
 
     CBMFileResult *ra = extract_one(src_a, CBM_LANG_GO, "test", "a.go");
     CBMFileResult *rb = extract_one(src_b, CBM_LANG_GO, "test", "b.go");
     ASSERT_NOT_NULL(ra);
     ASSERT_NOT_NULL(rb);
 
-    const CBMDefinition *da = find_def(ra, "Compute");
-    const CBMDefinition *db = find_def(rb, "Compute");
+    const CBMDefinition *da = find_def(ra, "ValidateUser");
+    const CBMDefinition *db = find_def(rb, "ValidateOrder");
     ASSERT_NOT_NULL(da);
     ASSERT_NOT_NULL(db);
     ASSERT_NOT_NULL(da->fingerprint);
@@ -759,72 +812,51 @@ static int setup_sim_test_repo(void) {
         return -1;
     }
 
-    /* Near-clone: ValidateUser and ValidateOrder have same structure, different names */
+    /* Near-clone: ValidateUser and ValidateOrder have same structure, different names.
+     * Must be large enough (>= 30 leaf tokens, >= 32 unique structural trigrams). */
     th_write_file(TH_PATH(g_sim_tmpdir, "pkg/validation/user_validator.go"),
         "package validation\n"
-        "\n"
         "import \"errors\"\n"
-        "\n"
-        "type User struct {\n"
-        "    Name  string\n"
-        "    Age   int\n"
-        "    Email string\n"
-        "}\n"
-        "\n"
+        "import \"strings\"\n"
         "func ValidateUser(u User) error {\n"
-        "    if u.Name == \"\" {\n"
-        "        return errors.New(\"name required\")\n"
-        "    }\n"
-        "    if u.Age < 0 {\n"
-        "        return errors.New(\"invalid age\")\n"
-        "    }\n"
-        "    if u.Email == \"\" {\n"
-        "        return errors.New(\"email required\")\n"
+        "    if u.Name == \"\" { return errors.New(\"name required\") }\n"
+        "    if len(u.Name) > 100 { return errors.New(\"name too long\") }\n"
+        "    if u.Age < 0 { return errors.New(\"invalid age\") }\n"
+        "    if u.Age > 200 { return errors.New(\"age too high\") }\n"
+        "    if u.Email == \"\" { return errors.New(\"email required\") }\n"
+        "    if !strings.Contains(u.Email, \"@\") { return errors.New(\"invalid email\") }\n"
+        "    if u.Phone == \"\" { return errors.New(\"phone required\") }\n"
+        "    if len(u.Phone) < 7 { return errors.New(\"phone too short\") }\n"
+        "    if u.Country == \"\" { return errors.New(\"country required\") }\n"
+        "    for _, c := range u.Tags {\n"
+        "        if c == \"\" { return errors.New(\"empty tag\") }\n"
         "    }\n"
         "    return nil\n"
         "}\n");
 
     th_write_file(TH_PATH(g_sim_tmpdir, "pkg/validation/order_validator.go"),
         "package validation\n"
-        "\n"
         "import \"errors\"\n"
-        "\n"
-        "type Order struct {\n"
-        "    Title  string\n"
-        "    Amount int\n"
-        "    Status string\n"
-        "}\n"
-        "\n"
+        "import \"strings\"\n"
         "func ValidateOrder(o Order) error {\n"
-        "    if o.Title == \"\" {\n"
-        "        return errors.New(\"title required\")\n"
-        "    }\n"
-        "    if o.Amount < 0 {\n"
-        "        return errors.New(\"invalid amount\")\n"
-        "    }\n"
-        "    if o.Status == \"\" {\n"
-        "        return errors.New(\"status required\")\n"
+        "    if o.Title == \"\" { return errors.New(\"title required\") }\n"
+        "    if len(o.Title) > 100 { return errors.New(\"title too long\") }\n"
+        "    if o.Amount < 0 { return errors.New(\"invalid amount\") }\n"
+        "    if o.Amount > 200 { return errors.New(\"amount too high\") }\n"
+        "    if o.Status == \"\" { return errors.New(\"status required\") }\n"
+        "    if !strings.Contains(o.Status, \"@\") { return errors.New(\"invalid status\") }\n"
+        "    if o.Region == \"\" { return errors.New(\"region required\") }\n"
+        "    if len(o.Region) < 7 { return errors.New(\"region too short\") }\n"
+        "    if o.Vendor == \"\" { return errors.New(\"vendor required\") }\n"
+        "    for _, c := range o.Items {\n"
+        "        if c == \"\" { return errors.New(\"empty item\") }\n"
         "    }\n"
         "    return nil\n"
         "}\n");
 
-    /* Completely different function */
+    /* Completely different function — also large enough for fingerprinting */
     th_write_file(TH_PATH(g_sim_tmpdir, "pkg/handler/user_handler.go"),
-        "package handler\n"
-        "\n"
-        "import (\n"
-        "    \"encoding/json\"\n"
-        "    \"net/http\"\n"
-        ")\n"
-        "\n"
-        "func HandleUser(w http.ResponseWriter, r *http.Request) {\n"
-        "    data := make(map[string]interface{})\n"
-        "    for k, v := range r.URL.Query() {\n"
-        "        data[k] = v[0]\n"
-        "    }\n"
-        "    w.Header().Set(\"Content-Type\", \"application/json\")\n"
-        "    json.NewEncoder(w).Encode(data)\n"
-        "}\n");
+        GO_HANDLE_REQUEST_SRC);
 
     /* Tiny function — should be skipped */
     th_write_file(TH_PATH(g_sim_tmpdir, "pkg/util/tiny_helper.go"),
@@ -1060,24 +1092,20 @@ TEST(pipeline_minhash_incremental_new_clone) {
     /* Step 2: Add a new near-clone of ValidateUser */
     th_write_file(TH_PATH(g_sim_tmpdir, "pkg/validation/address_validator.go"),
         "package validation\n"
-        "\n"
         "import \"errors\"\n"
-        "\n"
-        "type Address struct {\n"
-        "    Street string\n"
-        "    Zip    int\n"
-        "    City   string\n"
-        "}\n"
-        "\n"
+        "import \"strings\"\n"
         "func ValidateAddress(a Address) error {\n"
-        "    if a.Street == \"\" {\n"
-        "        return errors.New(\"street required\")\n"
-        "    }\n"
-        "    if a.Zip < 0 {\n"
-        "        return errors.New(\"invalid zip\")\n"
-        "    }\n"
-        "    if a.City == \"\" {\n"
-        "        return errors.New(\"city required\")\n"
+        "    if a.Street == \"\" { return errors.New(\"street required\") }\n"
+        "    if len(a.Street) > 100 { return errors.New(\"street too long\") }\n"
+        "    if a.Zip < 0 { return errors.New(\"invalid zip\") }\n"
+        "    if a.Zip > 99999 { return errors.New(\"zip too high\") }\n"
+        "    if a.City == \"\" { return errors.New(\"city required\") }\n"
+        "    if !strings.Contains(a.City, \" \") { return errors.New(\"invalid city\") }\n"
+        "    if a.State == \"\" { return errors.New(\"state required\") }\n"
+        "    if len(a.State) < 2 { return errors.New(\"state too short\") }\n"
+        "    if a.Country == \"\" { return errors.New(\"country required\") }\n"
+        "    for _, c := range a.Lines {\n"
+        "        if c == \"\" { return errors.New(\"empty line\") }\n"
         "    }\n"
         "    return nil\n"
         "}\n");

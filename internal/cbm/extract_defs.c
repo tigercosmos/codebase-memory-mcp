@@ -36,7 +36,6 @@ static void compute_fingerprint(CBMExtractCtx *ctx, CBMDefinition *def, TSNode f
     /* Find the function body child */
     TSNode body = ts_node_child_by_field_name(func_node, TS_FIELD("body"));
     if (ts_node_is_null(body)) {
-        /* Some languages use "block" or the function itself as the body */
         body = func_node;
     }
     cbm_minhash_t result;

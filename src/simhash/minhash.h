@@ -22,10 +22,12 @@
  * error on Jaccard — sufficient for a 0.95 threshold. */
 #define CBM_MINHASH_K 64
 
-/* Minimum number of normalized AST body nodes required to compute a
- * fingerprint.  Functions shorter than this are skipped to prevent
- * trivial getter/setter fingerprint explosion. */
-#define CBM_MINHASH_MIN_NODES 10
+/* Minimum number of leaf AST tokens required to compute a fingerprint.
+ * Leaf-only counting is language-agnostic: leaf nodes correspond to
+ * actual source tokens (identifiers, literals, keywords, operators),
+ * not grammar-internal structure that varies across parsers.
+ * 30 leaf tokens ≈ BigCloneBench standard of 50 raw source tokens. */
+#define CBM_MINHASH_MIN_NODES 30
 
 /* Default Jaccard threshold for SIMILAR_TO edge emission. */
 #define CBM_MINHASH_JACCARD_THRESHOLD 0.95

@@ -33,14 +33,30 @@ enum { AST_WALK_CAP = 2048 };
 /* Hex encoding constants */
 enum { HEX_CHARS_PER_U32 = 8, HEX_BASE = 16 };
 
-/* Trigram window and minimum threshold */
-enum { TRIGRAM_WINDOW = 2, MIN_TRIGRAM_COUNT = 3 };
+/* Trigram constants */
+enum { TRIGRAM_WINDOW = 2 };
+
+/* Minimum unique structural trigrams for a meaningful fingerprint.
+ * K/2 = 32 ensures most MinHash slots get populated from distinct features. */
+enum { MIN_UNIQUE_TRIGRAMS = 32 };
+
+/* Maximum structural weight per trigram (3 tokens × 1 each). */
+enum { MAX_STRUCTURAL_WEIGHT = 3 };
 
 /* Hash truncation mask (uint64 → uint32) */
 enum { U32_MASK = 0xFFFFFFFF };
 
 /* Dynamic array growth constants */
 enum { BUCKET_INIT_CAP = 8, GROW_FACTOR = 2, ENTRY_INIT_CAP = 64, RESULT_INIT_CAP = 64 };
+
+/* Maximum bucket size — skip oversized buckets (noise from trivially similar functions). */
+enum { MAX_BUCKET_SIZE = 200 };
+
+/* Seen-set for O(1) dedup during query (simple open-addressing hash table). */
+enum { SEEN_SET_BITS = 14, SEEN_SET_SIZE = 16384, SEEN_SET_MASK = 16383 };
+
+/* Knuth multiplicative hash constant for node_id → seen-set slot. */
+enum { KNUTH_MULT = 2654435761ULL };
 
 /* Maximum normalised tokens per function body. */
 enum { MAX_TOKENS = 4096 };
@@ -97,7 +113,32 @@ static const char *normalise_node_type(const char *kind) {
 
 /* ── MinHash computation ─────────────────────────────────────────── */
 
-/* Phase 1: Walk AST iteratively and collect normalised token types. */
+/* Check if a normalised token is one of the generic types (I/S/N/T).
+ * These carry no structural info — used to compute trigram weight. */
+static bool is_normalised_token(const char *tok) {
+    return tok[0] != '\0' && tok[SKIP_ONE] == '\0' &&
+           (tok[0] == 'I' || tok[0] == 'S' || tok[0] == 'N' || tok[0] == 'T');
+}
+
+/* Compute structural weight of a trigram: count of non-normalised tokens (0-3).
+ * Weight 0 = pure data manipulation (noise), weight 3 = rich control flow (signal). */
+static int trigram_structural_weight(const char *a, const char *b, const char *c) {
+    int w = 0;
+    if (!is_normalised_token(a)) {
+        w++;
+    }
+    if (!is_normalised_token(b)) {
+        w++;
+    }
+    if (!is_normalised_token(c)) {
+        w++;
+    }
+    return w;
+}
+
+/* Phase 1: Walk AST iteratively and collect normalised LEAF token types.
+ * Leaf-only counting is language-agnostic: leaf nodes correspond to actual
+ * source tokens, not grammar-internal structure that varies across parsers. */
 static int collect_ast_tokens(TSNode root, const char **tokens, int max_tokens) {
     int token_count = 0;
     TSNode stack[AST_WALK_CAP];
@@ -107,16 +148,16 @@ static int collect_ast_tokens(TSNode root, const char **tokens, int max_tokens) 
     while (top > 0 && token_count < max_tokens) {
         TSNode node = stack[--top];
         uint32_t child_count = ts_node_child_count(node);
-        const char *kind = ts_node_type(node);
 
         if (child_count == 0) {
+            /* Leaf node — actual source token.  Normalise and record. */
+            const char *kind = ts_node_type(node);
             if (kind[0] != '\0') {
                 tokens[token_count++] = normalise_node_type(kind);
             }
         } else {
-            if (kind[0] != '\0' && ts_node_is_named(node)) {
-                tokens[token_count++] = normalise_node_type(kind);
-            }
+            /* Internal node — push children only (skip the node itself).
+             * Structural info comes from leaf token patterns, not grammar nodes. */
             for (int i = (int)child_count - SKIP_ONE; i >= 0 && top < AST_WALK_CAP; i--) {
                 stack[top++] = ts_node_child(node, (uint32_t)i);
             }
@@ -125,31 +166,84 @@ static int collect_ast_tokens(TSNode root, const char **tokens, int max_tokens) 
     return token_count;
 }
 
-/* Phase 2: Hash trigrams from token sequence into MinHash signature. */
-static int hash_trigrams(const char **tokens, int token_count, cbm_minhash_t *out) {
-    for (int k = 0; k < CBM_MINHASH_K; k++) {
-        out->values[k] = UINT32_MAX;
-    }
+/* Phase 2: Hash trigrams into MinHash signature with structural weighting.
+ *
+ * - Skip weight-0 trigrams (all tokens are I/S/N/T — pure noise)
+ * - Use repetition-based weighted MinHash: hash w times per seed for weight w
+ * - Track unique trigrams via hash set; reject if < MIN_UNIQUE_TRIGRAMS
+ *
+ * Returns the number of unique structural trigrams processed. */
+/* Unique-trigram set: open addressing on 64-bit hashes. */
+enum { UNIQ_SET_SIZE = 4096, UNIQ_SET_MASK = 4095 };
 
-    char trigram_buf[TRIGRAM_BUF_LEN];
-    int trigram_count = 0;
+typedef struct {
+    uint64_t slots[UNIQ_SET_SIZE];
+    int count;
+} uniq_trig_set_t;
 
-    for (int i = 0; i + TRIGRAM_WINDOW < token_count; i++) {
-        int len = snprintf(trigram_buf, sizeof(trigram_buf), "%s|%s|%s", tokens[i], tokens[i + 1],
-                           tokens[i + 2]);
-        if (len <= 0 || (size_t)len >= sizeof(trigram_buf)) {
-            continue;
+static void uniq_trig_init(uniq_trig_set_t *s) {
+    memset(s->slots, 0, sizeof(s->slots));
+    s->count = 0;
+}
+
+/* Insert a trigram hash.  Returns true if newly inserted. */
+static bool uniq_trig_insert(uniq_trig_set_t *s, uint64_t trig_hash) {
+    uint64_t val = trig_hash | SKIP_ONE; /* ensure non-zero */
+    uint32_t slot = (uint32_t)(trig_hash & UNIQ_SET_MASK);
+    for (int probe = 0; probe < UNIQ_SET_SIZE; probe++) {
+        uint32_t idx = (slot + (uint32_t)probe) & UNIQ_SET_MASK;
+        if (s->slots[idx] == 0) {
+            s->slots[idx] = val;
+            s->count++;
+            return true;
         }
-        trigram_count++;
-        for (int k = 0; k < CBM_MINHASH_K; k++) {
-            uint64_t h = XXH3_64bits_withSeed(trigram_buf, (size_t)len, (uint64_t)k);
+        if (s->slots[idx] == val) {
+            return false;
+        }
+    }
+    return false;
+}
+
+/* Apply weighted MinHash for one trigram: hash w times per seed. */
+static void weighted_minhash_update(cbm_minhash_t *out, const char *trigram, int len, int w) {
+    for (int k = 0; k < CBM_MINHASH_K; k++) {
+        for (int rep = 0; rep < w; rep++) {
+            uint64_t seed = ((uint64_t)k * MAX_STRUCTURAL_WEIGHT) + (uint64_t)rep;
+            uint64_t h = XXH3_64bits_withSeed(trigram, (size_t)len, seed);
             uint32_t h32 = (uint32_t)(h & U32_MASK);
             if (h32 < out->values[k]) {
                 out->values[k] = h32;
             }
         }
     }
-    return trigram_count;
+}
+
+static int hash_trigrams(const char **tokens, int token_count, cbm_minhash_t *out) {
+    for (int k = 0; k < CBM_MINHASH_K; k++) {
+        out->values[k] = UINT32_MAX;
+    }
+
+    uniq_trig_set_t uniq;
+    uniq_trig_init(&uniq);
+    char trigram_buf[TRIGRAM_BUF_LEN];
+
+    for (int i = 0; i + TRIGRAM_WINDOW < token_count; i++) {
+        int w =
+            trigram_structural_weight(tokens[i], tokens[i + SKIP_ONE], tokens[i + TRIGRAM_WINDOW]);
+        if (w == 0) {
+            continue;
+        }
+
+        int len = snprintf(trigram_buf, sizeof(trigram_buf), "%s|%s|%s", tokens[i],
+                           tokens[i + SKIP_ONE], tokens[i + TRIGRAM_WINDOW]);
+        if (len <= 0 || (size_t)len >= sizeof(trigram_buf)) {
+            continue;
+        }
+
+        uniq_trig_insert(&uniq, XXH3_64bits(trigram_buf, (size_t)len));
+        weighted_minhash_update(out, trigram_buf, len, w);
+    }
+    return uniq.count;
 }
 
 bool cbm_minhash_compute(TSNode func_body, const char *source, int language, cbm_minhash_t *out) {
@@ -166,8 +260,8 @@ bool cbm_minhash_compute(TSNode func_body, const char *source, int language, cbm
         return false;
     }
 
-    int trigram_count = hash_trigrams(tokens, token_count, out);
-    return trigram_count >= MIN_TRIGRAM_COUNT;
+    int unique_structural = hash_trigrams(tokens, token_count, out);
+    return unique_structural >= MIN_UNIQUE_TRIGRAMS;
 }
 
 /* ── Jaccard similarity ──────────────────────────────────────────── */
@@ -304,17 +398,42 @@ void cbm_lsh_insert(cbm_lsh_index_t *idx, const cbm_lsh_entry_t *entry) {
     }
 }
 
-/* Check if a node_id is already in the result buffer. */
-static bool result_contains(const cbm_lsh_index_t *idx, int64_t node_id) {
-    for (int j = 0; j < idx->result_count; j++) {
-        if (idx->result_buf[j]->node_id == node_id) {
-            return true;
-        }
-    }
-    return false;
+/* O(1) seen-set: open-addressing hash table on node_id for dedup. */
+typedef struct {
+    int64_t *slots;
+    int cap;
+} seen_set_t;
+
+static void seen_set_init(seen_set_t *s) {
+    s->slots = calloc(SEEN_SET_SIZE, sizeof(int64_t));
+    s->cap = SEEN_SET_SIZE;
+    /* 0 means empty — node_ids are always > 0 */
 }
 
-/* Append a candidate to the result buffer, growing if needed.  Returns false on OOM. */
+static bool seen_set_insert(seen_set_t *s, int64_t node_id) {
+    if (!s->slots) {
+        return false;
+    }
+    uint32_t idx = (uint32_t)(node_id * KNUTH_MULT) & SEEN_SET_MASK;
+    for (int probe = 0; probe < SEEN_SET_SIZE; probe++) {
+        uint32_t slot = (idx + (uint32_t)probe) & SEEN_SET_MASK;
+        if (s->slots[slot] == 0) {
+            s->slots[slot] = node_id;
+            return true; /* inserted (was not present) */
+        }
+        if (s->slots[slot] == node_id) {
+            return false; /* already present */
+        }
+    }
+    return false; /* table full */
+}
+
+static void seen_set_free(seen_set_t *s) {
+    free(s->slots);
+    s->slots = NULL;
+}
+
+/* Append a candidate to the result buffer, growing if needed. */
 static bool result_push(cbm_lsh_index_t *idx, const cbm_lsh_entry_t *candidate) {
     if (idx->result_count >= idx->result_cap) {
         int new_cap =
@@ -340,17 +459,24 @@ void cbm_lsh_query(const cbm_lsh_index_t *idx, const cbm_minhash_t *fp,
         return;
     }
 
-    /* Cast away const for result buffer management — query is logically const */
     cbm_lsh_index_t *mut_idx = (cbm_lsh_index_t *)idx;
     mut_idx->result_count = 0;
+
+    /* O(1) dedup via open-addressing hash set */
+    seen_set_t seen;
+    seen_set_init(&seen);
 
     for (int b = 0; b < CBM_LSH_BANDS; b++) {
         uint32_t h = band_hash(fp, b);
         const lsh_bucket_t *bucket = &idx->bands[b][h];
+        /* Skip oversized buckets — noise from trivially similar utility functions */
+        if (bucket->count > MAX_BUCKET_SIZE) {
+            continue;
+        }
         for (int i = 0; i < bucket->count; i++) {
             const cbm_lsh_entry_t *candidate = &idx->entries[bucket->items[i]];
-            if (result_contains(idx, candidate->node_id)) {
-                continue;
+            if (!seen_set_insert(&seen, candidate->node_id)) {
+                continue; /* already seen */
             }
             if (!result_push(mut_idx, candidate)) {
                 break;
@@ -358,6 +484,7 @@ void cbm_lsh_query(const cbm_lsh_index_t *idx, const cbm_minhash_t *fp,
         }
     }
 
+    seen_set_free(&seen);
     *out = mut_idx->result_buf;
     *count = mut_idx->result_count;
 }

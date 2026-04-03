@@ -354,3 +354,22 @@ const char *cbm_app_local_dir(void) {
     return cbm_app_config_dir();
 #endif
 }
+
+/* ── Cache directory ─────────────────────────────────────────── */
+
+const char *cbm_resolve_cache_dir(void) {
+    static char buf[CBM_SZ_1K];
+    char tmp[CBM_SZ_256] = "";
+    cbm_safe_getenv("CBM_CACHE_DIR", tmp, sizeof(tmp), NULL);
+    if (tmp[0]) {
+        snprintf(buf, sizeof(buf), "%s", tmp);
+        cbm_normalize_path_sep(buf);
+        return buf;
+    }
+    const char *home = cbm_get_home_dir();
+    if (!home) {
+        return NULL;
+    }
+    snprintf(buf, sizeof(buf), "%s/.cache/codebase-memory-mcp", home);
+    return buf;
+}

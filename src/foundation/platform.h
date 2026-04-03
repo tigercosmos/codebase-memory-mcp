@@ -93,6 +93,13 @@ const char *cbm_app_config_dir(void);
  * macOS/Linux: same as cbm_app_config_dir(). */
 const char *cbm_app_local_dir(void);
 
+/* ── Cache directory ────────────────────────────────────────────── */
+
+/* Resolve the database cache directory. All project indexes are stored here.
+ * Priority: CBM_CACHE_DIR env var > ~/.cache/codebase-memory-mcp (default).
+ * Returns static buffer or NULL if home is unavailable. */
+const char *cbm_resolve_cache_dir(void);
+
 /* ── File system ───────────────────────────────────────────────── */
 
 /* Check if a path exists. */

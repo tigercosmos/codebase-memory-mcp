@@ -508,13 +508,12 @@ cbm_store_t *cbm_store_open(const char *project) {
     if (!project) {
         return NULL;
     }
-    /* Build path: ~/.cache/codebase-memory-mcp/<project>.db */
-    const char *home = cbm_get_home_dir();
-    if (!home) {
-        home = cbm_tmpdir();
+    const char *cdir = cbm_resolve_cache_dir();
+    if (!cdir) {
+        cdir = cbm_tmpdir();
     }
     char path[CBM_SZ_1K];
-    snprintf(path, sizeof(path), "%s/.cache/codebase-memory-mcp/%s.db", home, project);
+    snprintf(path, sizeof(path), "%s/%s.db", cdir, project);
     return store_open_internal(path, false);
 }
 
@@ -2121,11 +2120,12 @@ int cbm_store_search(cbm_store_t *s, const cbm_search_params_t *params, cbm_sear
     char count_sql[CBM_SZ_4K];
     int bind_idx = 0;
 
-    const char *select_cols =
-        "SELECT n.id, n.project, n.label, n.name, n.qualified_name, "
-        "n.file_path, n.start_line, n.end_line, n.properties, "
-        "(SELECT COUNT(*) FROM edges e WHERE e.target_id = n.id AND e.type = 'CALLS') AS in_deg, "
-        "(SELECT COUNT(*) FROM edges e WHERE e.source_id = n.id AND e.type = 'CALLS') AS out_deg ";
+    const char *select_cols = "SELECT n.id, n.project, n.label, n.name, n.qualified_name, "
+                              "n.file_path, n.start_line, n.end_line, n.properties, "
+                              "(SELECT COUNT(*) FROM edges e WHERE e.target_id = n.id AND "
+                              "e.type = 'CALLS') AS in_deg, "
+                              "(SELECT COUNT(*) FROM edges e WHERE e.source_id = n.id AND "
+                              "e.type = 'CALLS') AS out_deg ";
 
     char where[CBM_SZ_2K] = "";
     search_bind_t binds[ST_SEARCH_MAX_BINDS];
@@ -4324,8 +4324,8 @@ int cbm_store_adr_store(cbm_store_t *s, const char *project, const char *content
 }
 
 int cbm_store_adr_get(cbm_store_t *s, const char *project, cbm_adr_t *out) {
-    const char *sql =
-        "SELECT project, summary, created_at, updated_at FROM project_summaries WHERE project=?1";
+    const char *sql = "SELECT project, summary, created_at, updated_at FROM project_summaries "
+                      "WHERE project=?1";
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(s->db, sql, CBM_NOT_FOUND, &stmt, NULL) != SQLITE_OK) {
         store_set_error_sqlite(s, "adr_get");

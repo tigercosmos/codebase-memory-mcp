@@ -2094,7 +2094,7 @@ static const char *get_cache_dir(const char *home_dir) {
     if (!home_dir) {
         return NULL;
     }
-    snprintf(buf, sizeof(buf), "%s/.cache/codebase-memory-mcp", home_dir);
+    snprintf(buf, sizeof(buf), "%s", cbm_resolve_cache_dir());
     return buf;
 }
 
@@ -2320,7 +2320,7 @@ int cbm_cmd_config(int argc, char **argv) {
     }
 
     char cache_dir[CLI_BUF_1K];
-    snprintf(cache_dir, sizeof(cache_dir), "%s/.cache/codebase-memory-mcp", home);
+    snprintf(cache_dir, sizeof(cache_dir), "%s", cbm_resolve_cache_dir());
 
     cbm_config_t *cfg = cbm_config_open(cache_dir);
     if (!cfg) {

@@ -294,7 +294,7 @@ int main(int argc, char **argv) {
     const char *cfg_home = cbm_get_home_dir();
     cbm_config_t *runtime_config = NULL;
     if (cfg_home) {
-        snprintf(config_dir, sizeof(config_dir), "%s/.cache/codebase-memory-mcp", cfg_home);
+        snprintf(config_dir, sizeof(config_dir), "%s", cbm_resolve_cache_dir());
         runtime_config = cbm_config_open(config_dir);
     }
 

@@ -116,8 +116,8 @@ void cbm_mem_init(double ram_fraction) {
         ram_fraction = DEFAULT_RAM_FRACTION;
     }
 
-    /* Reduce upfront memory: don't eagerly commit segments */
-    mi_option_set(mi_option_eager_commit, 0);
+    /* Reduce upfront memory: don't eagerly commit arenas */
+    mi_option_set(mi_option_arena_eager_commit, 0);
 
     cbm_system_info_t info = cbm_system_info();
     g_budget = (size_t)((double)info.total_ram * ram_fraction);

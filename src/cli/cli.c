@@ -69,6 +69,9 @@ enum {
 #include <signal.h>
 #include <unistd.h>
 #endif
+#ifdef __APPLE__
+#include <mach-o/dyld.h>
+#endif
 #include "foundation/compat_fs.h"
 
 #ifndef CBM_VERSION
@@ -2816,6 +2819,32 @@ static int count_db_indexes(const char *home) {
 
 /* ── Subcommand: install ──────────────────────────────────────── */
 
+/* Detect the running binary's path at runtime. Falls back to ~/.local/bin/. */
+static void cbm_detect_self_path(char *buf, size_t buf_sz, const char *home) {
+    buf[0] = '\0';
+#ifdef _WIN32
+    GetModuleFileNameA(NULL, buf, (DWORD)buf_sz);
+    cbm_normalize_path_sep(buf);
+#elif defined(__APPLE__)
+    uint32_t sp_sz = (uint32_t)buf_sz;
+    if (_NSGetExecutablePath(buf, &sp_sz) != 0) {
+        buf[0] = '\0';
+    }
+#else
+    ssize_t sp_len = readlink("/proc/self/exe", buf, buf_sz - SKIP_ONE);
+    if (sp_len > 0) {
+        buf[sp_len] = '\0';
+    }
+#endif
+    if (!buf[0]) {
+#ifdef _WIN32
+        snprintf(buf, buf_sz, "%s/.local/bin/codebase-memory-mcp.exe", home);
+#else
+        snprintf(buf, buf_sz, "%s/.local/bin/codebase-memory-mcp", home);
+#endif
+    }
+}
+
 int cbm_cmd_install(int argc, char **argv) {
     parse_auto_answer(argc, argv);
     bool dry_run = false;
@@ -2872,13 +2901,9 @@ int cbm_cmd_install(int argc, char **argv) {
     }
 #endif
 
-    /* Step 2: Binary path */
-    char self_path[CLI_BUF_1K];
-#ifdef _WIN32
-    snprintf(self_path, sizeof(self_path), "%s/.local/bin/codebase-memory-mcp.exe", home);
-#else
-    snprintf(self_path, sizeof(self_path), "%s/.local/bin/codebase-memory-mcp", home);
-#endif
+    /* Step 2: Binary path — detect actual location at runtime. */
+    char self_path[CLI_BUF_1K] = {0};
+    cbm_detect_self_path(self_path, sizeof(self_path), home);
 
     /* Step 3: Install/refresh all agent configs */
     cbm_install_agent_configs(home, self_path, force, dry_run);

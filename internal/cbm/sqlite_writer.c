@@ -746,6 +746,23 @@ static uint8_t *build_vector_record(const CBMDumpVector *v, int *out_len) {
     return data;
 }
 
+// Build a token_vectors table record: (id, project, token, vector, idf)
+static uint8_t *build_token_vec_record(const CBMDumpTokenVec *tv, int *out_len) {
+    RecordBuilder r;
+    rec_init(&r);
+
+    rec_add_int(&r, tv->id);
+    rec_add_text(&r, tv->project);
+    rec_add_text(&r, tv->token);
+    rec_add_blob(&r, tv->vector, tv->vector_len);
+    /* Store IDF as integer × 1000 for fixed-point (avoid float in record) */
+    rec_add_int(&r, (int64_t)(tv->idf * 1000.0f));
+
+    uint8_t *data = rec_finalize(&r, out_len);
+    rec_free(&r);
+    return data;
+}
+
 // Build a projects table record: (name, indexed_at, root_path)
 static uint8_t *build_project_record(const char *name, const char *indexed_at,
                                      const char *root_path, int *out_len) {
@@ -1492,11 +1509,13 @@ typedef struct {
     int edge_count;
     CBMDumpVector *vectors;
     int vector_count;
+    CBMDumpTokenVec *token_vecs;
+    int token_vec_count;
 } write_db_ctx_t;
 
 /* Phase 1: Write node + edge + vector data tables (streaming). */
 static int write_data_tables(write_db_ctx_t *w, uint32_t *nodes_root, uint32_t *edges_root,
-                             uint32_t *vectors_root) {
+                             uint32_t *vectors_root, uint32_t *token_vecs_root) {
     if (w->node_count > 0) {
         PageBuilder pb;
         pb_init(&pb, w->fp, w->next_page, false);
@@ -1552,6 +1571,26 @@ static int write_data_tables(write_db_ctx_t *w, uint32_t *nodes_root, uint32_t *
     } else {
         *vectors_root = write_table_btree(w->fp, &w->next_page, NULL, NULL, NULL, 0, false);
     }
+
+    /* token_vectors table — enriched RI vectors for query-time lookup */
+    if (w->token_vec_count > 0 && w->token_vecs) {
+        PageBuilder pb;
+        pb_init(&pb, w->fp, w->next_page, false);
+        for (int i = 0; i < w->token_vec_count; i++) {
+            int rec_len;
+            uint8_t *rec = build_token_vec_record(&w->token_vecs[i], &rec_len);
+            if (!rec) {
+                return ERR_WRITE_FAILED;
+            }
+            pb_add_table_cell_with_flush(&pb, w->token_vecs[i].id, rec, rec_len,
+                                         i > 0 ? w->token_vecs[i - SKIP_ONE].id : 0);
+            free(rec);
+        }
+        *token_vecs_root = pb_finalize_table(&pb, &w->next_page,
+                                              w->token_vecs[w->token_vec_count - SKIP_ONE].id);
+    } else {
+        *token_vecs_root = write_table_btree(w->fp, &w->next_page, NULL, NULL, NULL, 0, false);
+    }
     return 0;
 }
 
@@ -1599,7 +1638,8 @@ static void write_metadata_tables(write_db_ctx_t *w, uint32_t *projects_root,
 
 int cbm_write_db(const char *path, const char *project, const char *root_path,
                  const char *indexed_at, CBMDumpNode *nodes, int node_count, CBMDumpEdge *edges,
-                 int edge_count, CBMDumpVector *vectors, int vector_count) {
+                 int edge_count, CBMDumpVector *vectors, int vector_count,
+                 CBMDumpTokenVec *token_vecs, int token_vec_count) {
     FILE *fp = fopen(path, "wb");
     if (!fp) {
         return CBM_NOT_FOUND;
@@ -1615,13 +1655,16 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
                         .edges = edges,
                         .edge_count = edge_count,
                         .vectors = vectors,
-                        .vector_count = vector_count};
+                        .vector_count = vector_count,
+                        .token_vecs = token_vecs,
+                        .token_vec_count = token_vec_count};
 
-    // Phase 1: Data tables (streaming node + edge + vector records)
+    // Phase 1: Data tables (streaming node + edge + vector + token_vector records)
     uint32_t nodes_root;
     uint32_t edges_root;
     uint32_t vectors_root;
-    int rc = write_data_tables(&w, &nodes_root, &edges_root, &vectors_root);
+    uint32_t token_vecs_root;
+    int rc = write_data_tables(&w, &nodes_root, &edges_root, &vectors_root, &token_vecs_root);
     if (rc != 0) {
         (void)fclose(fp);
         return rc;
@@ -1810,6 +1853,10 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         {"table", "node_vectors", "node_vectors", vectors_root,
          "CREATE TABLE node_vectors (\n\t\tnode_id INTEGER PRIMARY KEY,\n\t\tproject TEXT NOT "
          "NULL,\n\t\tvector BLOB NOT NULL\n\t)"},
+        {"table", "token_vectors", "token_vectors", token_vecs_root,
+         "CREATE TABLE token_vectors (\n\t\tid INTEGER PRIMARY KEY,\n\t\tproject "
+         "TEXT NOT NULL,\n\t\ttoken TEXT NOT NULL,\n\t\tvector BLOB NOT NULL,\n\t\tidf INTEGER "
+         "NOT NULL\n\t)"},
         {"table", "sqlite_sequence", "sqlite_sequence", sqlite_seq_root,
          "CREATE TABLE sqlite_sequence(name,seq)"},
     };

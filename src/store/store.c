@@ -4606,10 +4606,10 @@ int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **ke
         return CBM_STORE_ERR;
     }
 
-    /* Build merged query vector: sum of base RI vectors for each keyword.
-     * Base RI = sparse random vector from xxHash(keyword) — same construction
-     * as in semantic.c, so it projects into the same space as stored vectors. */
-    enum { VEC_DIM = 256, SPARSE_NNZE = 8, RI_SEED = 0x52494E44 };
+    /* Build merged query vector from enriched token vectors stored in
+     * token_vectors table.  Falls back to base RI vectors if no enriched
+     * vectors are available. */
+    enum { VEC_DIM = 768, SPARSE_NNZE = 8, RI_SEED = 0x52494E44, IDF_SCALE = 1000 };
     float query_f[VEC_DIM];
     memset(query_f, 0, sizeof(query_f));
 
@@ -4617,13 +4617,37 @@ int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **ke
         if (!keywords[k] || !keywords[k][0]) {
             continue;
         }
-        /* Generate base sparse random vector (same as cbm_sem_random_index) */
-        uint64_t seed = XXH3_64bits(keywords[k], strlen(keywords[k]));
-        for (int i = 0; i < SPARSE_NNZE; i++) {
-            uint64_t h = XXH3_64bits_withSeed(&i, sizeof(i), seed + RI_SEED);
-            int pos = (int)(h % VEC_DIM);
-            float sign = (h & SKIP_ONE) ? 1.0f : -1.0f;
-            query_f[pos] += sign;
+        /* Try enriched vector from token_vectors table first */
+        sqlite3_stmt *tv_stmt = NULL;
+        const char *tv_sql = "SELECT vector, idf FROM token_vectors"
+                             " WHERE project = ?1 AND token = ?2 LIMIT 1";
+        bool found = false;
+        if (sqlite3_prepare_v2(s->db, tv_sql, -1, &tv_stmt, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(tv_stmt, SKIP_ONE, project, -1, SQLITE_STATIC);
+            sqlite3_bind_text(tv_stmt, ST_COL_2, keywords[k], -1, SQLITE_STATIC);
+            if (sqlite3_step(tv_stmt) == SQLITE_ROW) {
+                const int8_t *vec = (const int8_t *)sqlite3_value_blob(
+                    sqlite3_column_value(tv_stmt, 0));
+                int vec_len = sqlite3_column_bytes(tv_stmt, 0);
+                float idf = (float)sqlite3_column_int(tv_stmt, SKIP_ONE) / IDF_SCALE;
+                if (vec && vec_len == VEC_DIM) {
+                    for (int d = 0; d < VEC_DIM; d++) {
+                        query_f[d] += idf * ((float)vec[d] / 127.0f);
+                    }
+                    found = true;
+                }
+            }
+            sqlite3_finalize(tv_stmt);
+        }
+        /* Fallback: base sparse random vector if no enriched vector found */
+        if (!found) {
+            uint64_t seed = XXH3_64bits(keywords[k], strlen(keywords[k]));
+            for (int i = 0; i < SPARSE_NNZE; i++) {
+                uint64_t h = XXH3_64bits_withSeed(&i, sizeof(i), seed + RI_SEED);
+                int pos = (int)(h % VEC_DIM);
+                float sign = (h & SKIP_ONE) ? 1.0f : -1.0f;
+                query_f[pos] += sign;
+            }
         }
     }
 
@@ -4660,6 +4684,7 @@ int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **ke
         " FROM node_vectors v"
         " INNER JOIN nodes n ON n.id = v.node_id"
         " WHERE v.project = ?2"
+        " AND n.label IN ('Function','Method','Class')"
         " ORDER BY score DESC"
         " LIMIT ?3";
 

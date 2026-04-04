@@ -66,6 +66,63 @@ static void compute_fingerprint(CBMExtractCtx *ctx, CBMDefinition *def, TSNode f
         cbm_ast_profile_to_str(&profile, sp_buf, sizeof(sp_buf));
         def->structural_profile = cbm_arena_strdup(ctx->arena, sp_buf);
     }
+
+    /* Extract raw identifier tokens from body for semantic search.
+     * Walk the AST, collect unique identifier text, store as space-separated string.
+     * Cap at ~500 chars to fit in properties_json. */
+    {
+        enum { BT_STACK = 512, BT_BUF = 512, BT_MAX_IDENTS = 40, BT_SEEN = 128, BT_SEEN_MASK = 127 };
+        TSNode bt_stack[BT_STACK];
+        int bt_top = 0;
+        bt_stack[bt_top++] = body;
+        char bt_buf[BT_BUF];
+        int bt_pos = 0;
+        uint32_t bt_seen[BT_SEEN];
+        memset(bt_seen, 0, sizeof(bt_seen));
+        int bt_count = 0;
+
+        while (bt_top > 0 && bt_count < BT_MAX_IDENTS) {
+            TSNode nd = bt_stack[--bt_top];
+            uint32_t nc = ts_node_child_count(nd);
+            if (nc == 0) {
+                const char *k = ts_node_type(nd);
+                if (strcmp(k, "identifier") == 0 || strcmp(k, "field_identifier") == 0 ||
+                    strcmp(k, "property_identifier") == 0) {
+                    uint32_t s = ts_node_start_byte(nd);
+                    uint32_t e = ts_node_end_byte(nd);
+                    int len = (int)(e - s);
+                    if (len > 0 && len < CBM_SZ_64 && s < (uint32_t)ctx->source_len) {
+                        /* Dedup via simple hash set */
+                        uint32_t h = 0;
+                        for (int x = 0; x < len; x++) {
+                            h = h * 31 + (uint32_t)(unsigned char)ctx->source[s + x];
+                        }
+                        uint32_t slot = h & BT_SEEN_MASK;
+                        bool dup = false;
+                        for (int p = 0; p < BT_SEEN; p++) {
+                            uint32_t idx = (slot + (uint32_t)p) & BT_SEEN_MASK;
+                            if (bt_seen[idx] == 0) { bt_seen[idx] = h | 1; break; }
+                            if (bt_seen[idx] == (h | 1)) { dup = true; break; }
+                        }
+                        if (!dup && bt_pos + len + 1 < BT_BUF) {
+                            if (bt_pos > 0) { bt_buf[bt_pos++] = ' '; }
+                            memcpy(bt_buf + bt_pos, ctx->source + s, (size_t)len);
+                            bt_pos += len;
+                            bt_count++;
+                        }
+                    }
+                }
+            } else {
+                for (int i = (int)nc - 1; i >= 0 && bt_top < BT_STACK; i--) {
+                    bt_stack[bt_top++] = ts_node_child(nd, (uint32_t)i);
+                }
+            }
+        }
+        if (bt_pos > 0) {
+            bt_buf[bt_pos] = '\0';
+            def->body_tokens = cbm_arena_strdup(ctx->arena, bt_buf);
+        }
+    }
 }
 
 // Tree-sitter row is 0-based; lines are 1-based.

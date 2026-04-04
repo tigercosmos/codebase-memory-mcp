@@ -30,7 +30,8 @@
 /* ── Configuration ───────────────────────────────────────────────── */
 
 /* Random Indexing dimension. 256 is sufficient for <500K functions. */
-enum { CBM_SEM_DIM = 256 };
+/* 768 = UniXcoder embedding dimension.  Matches PRETRAINED_DIM. */
+enum { CBM_SEM_DIM = 768 };
 
 /* Random Indexing: non-zero entries per sparse random vector. */
 enum { CBM_SEM_SPARSE_NNZE = 8 };
@@ -146,6 +147,14 @@ const cbm_sem_vec_t *cbm_sem_corpus_ri_vec(const cbm_sem_corpus_t *corpus, const
 
 /* Get the total document count. */
 int cbm_sem_corpus_doc_count(const cbm_sem_corpus_t *corpus);
+
+/* Get the total token count (vocabulary size). */
+int cbm_sem_corpus_token_count(const cbm_sem_corpus_t *corpus);
+
+/* Get token name and enriched vector by index (for serialization).
+ * Returns NULL if index is out of range. */
+const char *cbm_sem_corpus_token_at(const cbm_sem_corpus_t *corpus, int index,
+                                    const cbm_sem_vec_t **out_vec, float *out_idf);
 
 /* Free corpus. */
 void cbm_sem_corpus_free(cbm_sem_corpus_t *corpus);

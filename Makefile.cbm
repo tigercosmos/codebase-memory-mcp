@@ -195,6 +195,9 @@ SIMHASH_SRCS = src/simhash/minhash.c
 # Semantic embedding module
 SEMANTIC_SRCS = src/semantic/semantic.c src/semantic/ast_profile.c
 
+# UniXcoder pretrained vectors (assembler blob)
+UNIXCODER_BLOB_SRC = vendored/unixcoder/code_vectors_blob.S
+
 # Traces module (new)
 TRACES_SRCS = src/traces/traces.c
 
@@ -415,7 +418,12 @@ $(BUILD_DIR)/test_lz4.o: $(CBM_DIR)/vendored/lz4/lz4.c | $(BUILD_DIR)
 $(BUILD_DIR)/test_lz4hc.o: $(CBM_DIR)/vendored/lz4/lz4hc.c | $(BUILD_DIR)
 	$(CC) -std=c11 -D_DEFAULT_SOURCE -g -O1 $(SANITIZE) -w -I$(CBM_DIR)/vendored/lz4 -c -o $@ $<
 
-OBJS_VENDORED_TEST = $(MIMALLOC_OBJ_TEST) $(SQLITE3_OBJ_TEST) $(TRE_OBJ_TEST) $(GRAMMAR_OBJS_TEST) $(TS_RUNTIME_OBJ_TEST) $(LSP_OBJ_TEST) $(PP_OBJ_TEST) $(MONGOOSE_OBJ_TEST) $(LZ4_OBJ_TEST)
+# UniXcoder pretrained vector blob
+UNIXCODER_OBJ = $(BUILD_DIR)/unixcoder_blob.o
+$(UNIXCODER_OBJ): $(UNIXCODER_BLOB_SRC) vendored/unixcoder/code_vectors.bin | $(BUILD_DIR)
+	$(AS) -o $@ $<
+
+OBJS_VENDORED_TEST = $(MIMALLOC_OBJ_TEST) $(SQLITE3_OBJ_TEST) $(TRE_OBJ_TEST) $(GRAMMAR_OBJS_TEST) $(TS_RUNTIME_OBJ_TEST) $(LSP_OBJ_TEST) $(PP_OBJ_TEST) $(MONGOOSE_OBJ_TEST) $(LZ4_OBJ_TEST) $(UNIXCODER_OBJ)
 
 $(BUILD_DIR)/test-runner: $(ALL_TEST_SRCS) $(PROD_SRCS) $(EXTRACTION_SRCS) $(AC_LZ4_SRCS) $(SQLITE_WRITER_SRC) $(OBJS_VENDORED_TEST) | $(BUILD_DIR)
 	$(CC) $(CFLAGS_TEST) -o $@ \
@@ -459,7 +467,7 @@ $(BUILD_DIR)/prod_lz4.o: $(CBM_DIR)/vendored/lz4/lz4.c | $(BUILD_DIR)
 $(BUILD_DIR)/prod_lz4hc.o: $(CBM_DIR)/vendored/lz4/lz4hc.c | $(BUILD_DIR)
 	$(CC) -std=c11 -D_DEFAULT_SOURCE -O2 -w -I$(CBM_DIR)/vendored/lz4 -c -o $@ $<
 
-OBJS_VENDORED_PROD = $(MIMALLOC_OBJ_PROD) $(SQLITE3_OBJ_PROD) $(TRE_OBJ_PROD) $(GRAMMAR_OBJS_PROD) $(TS_RUNTIME_OBJ_PROD) $(LSP_OBJ_PROD) $(PP_OBJ_PROD) $(MONGOOSE_OBJ_PROD) $(LZ4_OBJ_PROD)
+OBJS_VENDORED_PROD = $(MIMALLOC_OBJ_PROD) $(SQLITE3_OBJ_PROD) $(TRE_OBJ_PROD) $(GRAMMAR_OBJS_PROD) $(TS_RUNTIME_OBJ_PROD) $(LSP_OBJ_PROD) $(PP_OBJ_PROD) $(MONGOOSE_OBJ_PROD) $(LZ4_OBJ_PROD) $(UNIXCODER_OBJ)
 
 MAIN_SRC = src/main.c
 

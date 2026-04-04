@@ -206,6 +206,11 @@ static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def)
         append_json_string(buf, bufsize, &pos, "sp", def->structural_profile);
     }
 
+    /* Body tokens */
+    if (def->body_tokens && pos + CBM_SZ_512 < bufsize) {
+        append_json_string(buf, bufsize, &pos, "bt", def->body_tokens);
+    }
+
     if (pos < bufsize - SKIP_ONE) {
         buf[pos] = '}';
         buf[pos + SKIP_ONE] = '\0';

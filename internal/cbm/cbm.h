@@ -110,6 +110,7 @@ typedef struct {
     bool is_test;
     bool is_entry_point;
     const char *structural_profile; // AST structural profile (arena-allocated) or NULL
+    const char *body_tokens;        // space-separated raw identifier tokens from body (arena) or NULL
 } CBMDefinition;
 
 /* Argument captured from a call expression */

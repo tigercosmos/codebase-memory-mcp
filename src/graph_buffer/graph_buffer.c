@@ -88,6 +88,11 @@ struct cbm_gbuf {
     CBMDumpVector *dump_vectors;
     int dump_vector_count;
     int dump_vector_cap;
+
+    /* Token vector storage for enriched RI vectors (query-time lookup). */
+    CBMDumpTokenVec *dump_token_vecs;
+    int dump_token_vec_count;
+    int dump_token_vec_cap;
 };
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -431,6 +436,13 @@ void cbm_gbuf_free(cbm_gbuf_t *gb) {
     }
     free(gb->dump_vectors);
 
+    /* Free token vector storage */
+    for (int i = 0; i < gb->dump_token_vec_count; i++) {
+        free((void *)gb->dump_token_vecs[i].token);
+        free((void *)gb->dump_token_vecs[i].vector);
+    }
+    free(gb->dump_token_vecs);
+
     free(gb->project);
     free(gb->root_path);
     free(gb);
@@ -466,6 +478,42 @@ int cbm_gbuf_store_vector(cbm_gbuf_t *gb, int64_t node_id, const uint8_t *vector
         .vector = vec_copy,
         .vector_len = vector_len,
     };
+    return 0;
+}
+
+int cbm_gbuf_store_token_vector(cbm_gbuf_t *gb, const char *token, const uint8_t *vector,
+                                int vector_len, float idf) {
+    if (!gb || !token || !vector || vector_len <= 0) {
+        return -1;
+    }
+    enum { TV_INIT_CAP = 256, TV_GROW = 2 };
+    if (gb->dump_token_vec_count >= gb->dump_token_vec_cap) {
+        int new_cap = gb->dump_token_vec_cap < TV_INIT_CAP ? TV_INIT_CAP
+                                                           : gb->dump_token_vec_cap * TV_GROW;
+        CBMDumpTokenVec *grown =
+            realloc(gb->dump_token_vecs, (size_t)new_cap * sizeof(CBMDumpTokenVec));
+        if (!grown) {
+            return -1;
+        }
+        gb->dump_token_vecs = grown;
+        gb->dump_token_vec_cap = new_cap;
+    }
+    uint8_t *vec_copy = malloc((size_t)vector_len);
+    if (!vec_copy) {
+        return -1;
+    }
+    memcpy(vec_copy, vector, (size_t)vector_len);
+
+    int idx = gb->dump_token_vec_count;
+    gb->dump_token_vecs[idx] = (CBMDumpTokenVec){
+        .id = idx + SKIP_ONE, /* 1-based sequential ID */
+        .project = gb->project,
+        .token = strdup(token),
+        .vector = vec_copy,
+        .vector_len = vector_len,
+        .idf = idf,
+    };
+    gb->dump_token_vec_count++;
     return 0;
 }
 
@@ -1242,7 +1290,8 @@ int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
      * Callers must delete the old .db before calling this (reindex)
      * or ensure no file exists (first index). */
     int rc = cbm_write_db(path, gb->project, gb->root_path, indexed_at, dump_nodes, node_idx,
-                          dump_edges, edge_idx, gb->dump_vectors, gb->dump_vector_count);
+                          dump_edges, edge_idx, gb->dump_vectors, gb->dump_vector_count,
+                          gb->dump_token_vecs, gb->dump_token_vec_count);
 
     {
         char b1[CBM_SZ_16];

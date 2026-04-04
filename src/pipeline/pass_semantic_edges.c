@@ -30,6 +30,129 @@
 
 enum { PROPS_BUF = 512, MAX_FUNCS_INIT = 4096, GROW = 2, MAX_CALLEES = 64 };
 
+/* Forward declare helpers used by pattern injection. */
+static const char *json_str_value(const char *json, const char *key, char *buf, int bufsize);
+
+/* ── Technique 2: Code pattern vocabulary injection ──────────────── */
+/* Inject semantic tokens based on detected code patterns.
+ * This bridges the vocabulary gap for abstract concepts like "error handling". */
+
+static int inject_pattern_tokens(const cbm_gbuf_node_t *n, const cbm_gbuf_t *gbuf, char **tokens,
+                                 int count, int max_tokens) {
+    if (!n || count >= max_tokens) {
+        return count;
+    }
+
+    /* Check body tokens for patterns */
+    char bt_buf[CBM_SZ_512];
+    const char *bt = n->properties_json ? json_str_value(n->properties_json, "bt", bt_buf,
+                                                         sizeof(bt_buf))
+                                        : NULL;
+    /* Check decorators */
+    char dec_buf[CBM_SZ_256];
+    const char *decs = n->properties_json ? json_str_value(n->properties_json, "decorators", dec_buf,
+                                                           sizeof(dec_buf))
+                                          : NULL;
+
+    /* Pattern: try/catch/except in body → inject error handling tokens */
+    if (bt && (strstr(bt, "except") || strstr(bt, "catch") || strstr(bt, "rescue"))) {
+        if (count < max_tokens) tokens[count++] = strdup("error");
+        if (count < max_tokens) tokens[count++] = strdup("handling");
+        if (count < max_tokens) tokens[count++] = strdup("exception");
+    }
+
+    /* Pattern: raise/throw in body → inject error tokens */
+    if (bt && (strstr(bt, "raise") || strstr(bt, "throw"))) {
+        if (count < max_tokens) tokens[count++] = strdup("error");
+        if (count < max_tokens) tokens[count++] = strdup("exception");
+        if (count < max_tokens) tokens[count++] = strdup("throw");
+    }
+
+    /* Pattern: log/logger in callees or body → inject logging tokens */
+    if (bt && (strstr(bt, "logger") || strstr(bt, "logging") || strstr(bt, "log_"))) {
+        if (count < max_tokens) tokens[count++] = strdup("logging");
+        if (count < max_tokens) tokens[count++] = strdup("log");
+    }
+
+    /* Check callee names for logging/error patterns */
+    if (gbuf) {
+        const cbm_gbuf_edge_t **edges = NULL;
+        int ec = 0;
+        if (cbm_gbuf_find_edges_by_source_type(gbuf, n->id, "CALLS", &edges, &ec) == 0) {
+            for (int e = 0; e < ec && count < max_tokens; e++) {
+                const cbm_gbuf_node_t *t = cbm_gbuf_find_by_id(gbuf, edges[e]->target_id);
+                if (!t || !t->name) continue;
+                /* Callee is a logging function */
+                if (strstr(t->name, "log") || strstr(t->name, "Log") || strstr(t->name, "warn") ||
+                    strstr(t->name, "debug") || strstr(t->name, "info")) {
+                    if (count < max_tokens) tokens[count++] = strdup("logging");
+                    if (count < max_tokens) tokens[count++] = strdup("log");
+                }
+                /* Callee is an error function */
+                if (strstr(t->name, "Error") || strstr(t->name, "error") ||
+                    strstr(t->name, "Errorf") || strstr(t->name, "panic")) {
+                    if (count < max_tokens) tokens[count++] = strdup("error");
+                    if (count < max_tokens) tokens[count++] = strdup("handling");
+                }
+                /* Callee is a file/IO function */
+                if (strstr(t->name, "open") || strstr(t->name, "read") || strstr(t->name, "write") ||
+                    strstr(t->name, "close") || strstr(t->name, "Open") || strstr(t->name, "Read")) {
+                    if (count < max_tokens) tokens[count++] = strdup("io");
+                    if (count < max_tokens) tokens[count++] = strdup("file");
+                }
+            }
+        }
+    }
+
+    /* Pattern: decorator-based injection */
+    if (decs) {
+        if (strstr(decs, "route") || strstr(decs, "Route") || strstr(decs, "app.")) {
+            if (count < max_tokens) tokens[count++] = strdup("routing");
+            if (count < max_tokens) tokens[count++] = strdup("endpoint");
+            if (count < max_tokens) tokens[count++] = strdup("handler");
+        }
+        if (strstr(decs, "middleware") || strstr(decs, "Middleware")) {
+            if (count < max_tokens) tokens[count++] = strdup("middleware");
+        }
+        if (strstr(decs, "test") || strstr(decs, "Test") || strstr(decs, "pytest")) {
+            if (count < max_tokens) tokens[count++] = strdup("test");
+            if (count < max_tokens) tokens[count++] = strdup("testing");
+        }
+    }
+
+    /* Pattern: name-based injection */
+    if (n->name) {
+        if (strstr(n->name, "test_") || strstr(n->name, "Test")) {
+            if (count < max_tokens) tokens[count++] = strdup("test");
+            if (count < max_tokens) tokens[count++] = strdup("testing");
+        }
+        if (strstr(n->name, "middleware") || strstr(n->name, "Middleware")) {
+            if (count < max_tokens) tokens[count++] = strdup("middleware");
+        }
+        if (strstr(n->name, "handler") || strstr(n->name, "Handler")) {
+            if (count < max_tokens) tokens[count++] = strdup("handler");
+        }
+        if (strstr(n->name, "validator") || strstr(n->name, "Validator") ||
+            strstr(n->name, "validate") || strstr(n->name, "Validate")) {
+            if (count < max_tokens) tokens[count++] = strdup("validation");
+        }
+    }
+
+    return count;
+}
+
+/* ── Technique 3: Field weights for token sources ────────────────── */
+enum {
+    FW_NAME = 30,     /* ×3.0 */
+    FW_CALLEE = 20,   /* ×2.0 */
+    FW_BODY = 15,     /* ×1.5 */
+    FW_SIGNATURE = 10, /* ×1.0 */
+    FW_PARAM = 10,    /* ×1.0 */
+    FW_PATTERN = 25,  /* ×2.5 — injected semantic tokens are high value */
+    FW_PATH = 5,      /* ×0.5 */
+    FW_SCALE = 10,    /* divisor */
+};
+
 static const char *itoa_log(int val) {
     enum { RING = 4, MASK = 3 };
     static CBM_TLS char bufs[RING][CBM_SZ_32];
@@ -108,7 +231,8 @@ static int json_str_array(const char *json, const char *key, char **out, int max
 
 /* ── Tokenize node metadata ──────────────────────────────────────── */
 
-static int tokenize_node(const cbm_gbuf_node_t *n, char **tokens, int max_tokens) {
+static int tokenize_node(const cbm_gbuf_node_t *n, const cbm_gbuf_t *gbuf, char **tokens,
+                         int max_tokens) {
     int count = 0;
     /* Tokenize name (primary signal) */
     count += cbm_sem_tokenize(n->name, tokens + count, max_tokens - count);
@@ -159,6 +283,49 @@ static int tokenize_node(const cbm_gbuf_node_t *n, char **tokens, int max_tokens
             free(decos[p]);
         }
     }
+
+    /* Body tokens: raw identifiers from function body AST.
+     * Captures what the function DOES — "error" in catch blocks, "log" in logging, etc. */
+    if (n->properties_json && count < max_tokens) {
+        char bt_buf[CBM_SZ_512];
+        if (json_str_value(n->properties_json, "bt", bt_buf, sizeof(bt_buf))) {
+            count += cbm_sem_tokenize(bt_buf, tokens + count, max_tokens - count);
+        }
+    }
+
+    /* Callee names: what this function CALLS (behavioral vocabulary).
+     * "error handling" functions call errors.New, log.Error, etc. */
+    if (gbuf && count < max_tokens) {
+        const cbm_gbuf_edge_t **call_edges = NULL;
+        int call_count = 0;
+        if (cbm_gbuf_find_edges_by_source_type(gbuf, n->id, "CALLS", &call_edges, &call_count) ==
+            0) {
+            for (int e = 0; e < call_count && count < max_tokens; e++) {
+                const cbm_gbuf_node_t *target = cbm_gbuf_find_by_id(gbuf, call_edges[e]->target_id);
+                if (target && target->name) {
+                    count += cbm_sem_tokenize(target->name, tokens + count, max_tokens - count);
+                }
+            }
+        }
+    }
+
+    /* Caller names: what CALLS this function (contextual vocabulary).
+     * Functions called by error handlers inherit "error" context. */
+    if (gbuf && count < max_tokens) {
+        const cbm_gbuf_edge_t **caller_edges = NULL;
+        int caller_count = 0;
+        if (cbm_gbuf_find_edges_by_target_type(gbuf, n->id, "CALLS", &caller_edges,
+                                                &caller_count) == 0) {
+            for (int e = 0; e < caller_count && e < MAX_CALLEES && count < max_tokens; e++) {
+                const cbm_gbuf_node_t *source =
+                    cbm_gbuf_find_by_id(gbuf, caller_edges[e]->source_id);
+                if (source && source->name) {
+                    count += cbm_sem_tokenize(source->name, tokens + count, max_tokens - count);
+                }
+            }
+        }
+    }
+
     return count;
 }
 
@@ -333,7 +500,9 @@ int cbm_pipeline_pass_semantic_edges(cbm_pipeline_ctx_t *ctx) {
         }
         for (int i = 0; i < node_count && fi < func_count; i++, fi++) {
             char *tokens[CBM_SEM_MAX_TOKENS];
-            int tc = tokenize_node(nodes[i], tokens, CBM_SEM_MAX_TOKENS);
+            int tc = tokenize_node(nodes[i], gbuf, tokens, CBM_SEM_MAX_TOKENS);
+            /* Technique 2: inject semantic tokens from code patterns */
+            tc = inject_pattern_tokens(nodes[i], gbuf, tokens, tc, CBM_SEM_MAX_TOKENS);
             token_counts[fi] = tc;
 
             /* Store token pointers for later TF-IDF/RI vector construction */
@@ -348,6 +517,33 @@ int cbm_pipeline_pass_semantic_edges(cbm_pipeline_ctx_t *ctx) {
 
     /* Finalize corpus: compute IDF + co-occurrence enriched RI vectors */
     cbm_sem_corpus_finalize(corpus);
+
+    /* Export enriched token vectors to graph buffer for query-time lookup */
+    {
+        int tv_count = cbm_sem_corpus_token_count(corpus);
+        for (int t = 0; t < tv_count; t++) {
+            const cbm_sem_vec_t *vec = NULL;
+            float idf = 0.0f;
+            const char *tok = cbm_sem_corpus_token_at(corpus, t, &vec, &idf);
+            if (tok && vec && idf > 0.01f) {
+                /* Int8 quantize the enriched vector */
+                uint8_t qvec[CBM_SEM_DIM];
+                for (int d = 0; d < CBM_SEM_DIM; d++) {
+                    float clamped = vec->v[d];
+                    if (clamped > 1.0f) {
+                        clamped = 1.0f;
+                    }
+                    if (clamped < -1.0f) {
+                        clamped = -1.0f;
+                    }
+                    qvec[d] = (uint8_t)(int8_t)(clamped * 127.0f);
+                }
+                cbm_gbuf_store_token_vector(gbuf, tok, qvec, CBM_SEM_DIM, idf);
+            }
+        }
+        cbm_log_info("pass.semantic.token_vectors", "count",
+                     itoa_log(cbm_sem_corpus_token_count(corpus)));
+    }
 
     /* Phase 4: Build per-function TF-IDF + RI vectors */
     for (int f = 0; f < func_count; f++) {

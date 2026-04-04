@@ -10,6 +10,7 @@
 #include "foundation/hash_table.h"
 #include "foundation/log.h"
 #include "simhash/minhash.h"
+#include "unixcoder/code_vectors.h"
 
 #define XXH_INLINE_ALL
 #include "xxhash/xxhash.h"
@@ -97,6 +98,97 @@ int cbm_sem_tokenize(const char *name, char **out, int max_out) {
         buf[blen] = '\0';
         out[count++] = strdup(buf);
     }
+
+    /* Abbreviation expansion: add expanded forms for common code abbreviations.
+     * "err" → also add "error", "ctx" → "context", etc. */
+    /* Cross-language abbreviation table — covers Go, Python, JS/TS, Rust,
+     * Java, C/C++, Ruby, PHP, Kotlin, Swift, Scala, C#, and common patterns. */
+    static const struct {
+        const char *abbrev;
+        const char *expanded;
+    } abbrevs[] = {
+        /* Error/exception handling */
+        {"err", "error"},       {"exc", "exception"},   {"ex", "exception"},
+        /* Context/config */
+        {"ctx", "context"},     {"cfg", "config"},      {"conf", "configuration"},
+        {"env", "environment"}, {"opt", "option"},      {"opts", "options"},
+        /* Request/response (HTTP, RPC) */
+        {"req", "request"},     {"res", "response"},    {"resp", "response"},
+        {"rsp", "response"},    {"hdr", "header"},      {"hdrs", "headers"},
+        /* Strings/formatting */
+        {"str", "string"},      {"fmt", "format"},      {"msg", "message"},
+        {"txt", "text"},        {"lbl", "label"},       {"desc", "description"},
+        /* Data structures */
+        {"buf", "buffer"},      {"arr", "array"},       {"vec", "vector"},
+        {"lst", "list"},        {"dict", "dictionary"}, {"tbl", "table"},
+        {"stk", "stack"},       {"que", "queue"},
+        /* Functions/callbacks */
+        {"fn", "function"},     {"func", "function"},   {"cb", "callback"},
+        {"proc", "procedure"},  {"ctor", "constructor"},{"dtor", "destructor"},
+        /* Database/storage */
+        {"db", "database"},     {"col", "column"},      {"tbl", "table"},
+        {"stmt", "statement"},  {"txn", "transaction"}, {"trx", "transaction"},
+        {"repo", "repository"},
+        /* Auth/security */
+        {"auth", "authentication"}, {"authz", "authorization"}, {"perm", "permission"},
+        {"cred", "credential"}, {"tok", "token"},       {"pwd", "password"},
+        /* Values/types */
+        {"val", "value"},       {"num", "number"},      {"int", "integer"},
+        {"bool", "boolean"},    {"flt", "float"},       {"dbl", "double"},
+        /* Indexing/iteration */
+        {"idx", "index"},       {"iter", "iterator"},   {"elem", "element"},
+        {"cnt", "count"},       {"len", "length"},      {"sz", "size"},
+        {"pos", "position"},    {"off", "offset"},      {"cap", "capacity"},
+        /* Lifecycle */
+        {"init", "initialize"}, {"deinit", "deinitialize"}, {"alloc", "allocate"},
+        {"dealloc", "deallocate"}, {"del", "delete"},   {"rm", "remove"},
+        /* Implementation/interface */
+        {"impl", "implementation"}, {"iface", "interface"}, {"abs", "abstract"},
+        {"decl", "declaration"},
+        /* Parameters/attributes */
+        {"param", "parameter"}, {"arg", "argument"},    {"attr", "attribute"},
+        {"prop", "property"},   {"ret", "return"},
+        /* Source/destination */
+        {"src", "source"},      {"dst", "destination"}, {"tgt", "target"},
+        {"orig", "original"},   {"prev", "previous"},   {"cur", "current"},
+        {"tmp", "temporary"},   {"temp", "temporary"},
+        /* Networking/IO */
+        {"conn", "connection"}, {"sess", "session"},    {"sock", "socket"},
+        {"addr", "address"},    {"url", "uniform"},     {"srv", "server"},
+        {"cli", "client"},      {"svc", "service"},     {"ep", "endpoint"},
+        /* Management */
+        {"mgr", "manager"},     {"ctrl", "controller"}, {"hdlr", "handler"},
+        {"sched", "scheduler"}, {"disp", "dispatcher"}, {"reg", "registry"},
+        /* Async/concurrent */
+        {"chan", "channel"},     {"sem", "semaphore"},   {"mtx", "mutex"},
+        {"wg", "waitgroup"},    {"sig", "signal"},      {"evt", "event"},
+        {"sub", "subscriber"},  {"pub", "publisher"},
+        /* Testing */
+        {"spec", "specification"}, {"mock", "mock"},    {"stub", "stub"},
+        {"assert", "assertion"},
+        /* Logging/monitoring */
+        {"log", "logging"},     {"lvl", "level"},       {"dbg", "debug"},
+        {"wrn", "warning"},     {"inf", "info"},
+        /* Time */
+        {"ts", "timestamp"},    {"dur", "duration"},    {"ttl", "timetolive"},
+        /* Miscellaneous */
+        {"ver", "version"},     {"ns", "namespace"},    {"pkg", "package"},
+        {"mod", "module"},      {"lib", "library"},     {"dep", "dependency"},
+        {"ref", "reference"},   {"ptr", "pointer"},     {"obj", "object"},
+        {"doc", "document"},    {"cmd", "command"},     {"ops", "operations"},
+        {"util", "utility"},    {"hlp", "helper"},      {"ext", "extension"},
+        {NULL, NULL},
+    };
+    int orig_count = count;
+    for (int t = 0; t < orig_count && count < max_out; t++) {
+        for (int a = 0; abbrevs[a].abbrev; a++) {
+            if (strcmp(out[t], abbrevs[a].abbrev) == 0) {
+                out[count++] = strdup(abbrevs[a].expanded);
+                break;
+            }
+        }
+    }
+
     return count;
 }
 
@@ -121,13 +213,46 @@ float cbm_sem_cosine(const cbm_sem_vec_t *a, const cbm_sem_vec_t *b) {
     return dot / denom;
 }
 
+/* Pretrained token lookup table — built lazily on first use. */
+static CBMHashTable *g_pretrained_map = NULL;
+
+static void ensure_pretrained_map(void) {
+    if (g_pretrained_map) {
+        return;
+    }
+    g_pretrained_map = cbm_ht_create(PRETRAINED_TOKEN_COUNT);
+    char idx_buf[CBM_SZ_16];
+    for (int i = 0; i < PRETRAINED_TOKEN_COUNT; i++) {
+        const char *tok = PRETRAINED_TOKENS[i];
+        if (tok && tok[0]) {
+            snprintf(idx_buf, sizeof(idx_buf), "%d", i);
+            cbm_ht_set(g_pretrained_map, strdup(tok), strdup(idx_buf));
+        }
+    }
+}
+
 void cbm_sem_random_index(const char *token, cbm_sem_vec_t *out) {
     memset(out, 0, sizeof(*out));
     if (!token) {
         return;
     }
+
+    /* Try pretrained UniXcoder vector first (768d, trained on code). */
+    ensure_pretrained_map();
+    const char *idx_str = cbm_ht_get(g_pretrained_map, token);
+    if (idx_str) {
+        int idx = atoi(idx_str);
+        if (idx >= 0 && idx < PRETRAINED_TOKEN_COUNT) {
+            const int8_t *pvec = pretrained_vec_at(idx);
+            for (int d = 0; d < CBM_SEM_DIM && d < PRETRAINED_DIM; d++) {
+                out->v[d] = (float)pvec[d] / 127.0f;
+            }
+            return;
+        }
+    }
+
+    /* Fallback: sparse random vector for tokens not in pretrained vocab. */
     uint64_t seed = XXH3_64bits(token, strlen(token));
-    /* Generate SPARSE_NNZE non-zero entries at deterministic positions */
     for (int i = 0; i < CBM_SEM_SPARSE_NNZE; i++) {
         uint64_t h = XXH3_64bits_withSeed(&i, sizeof(i), seed + RI_SEED_BASE);
         int pos = (int)(h % CBM_SEM_DIM);
@@ -294,7 +419,60 @@ void cbm_sem_corpus_finalize(cbm_sem_corpus_t *corpus) {
         }
     }
 
-    /* Normalize all enriched vectors */
+    /* Normalize after first pass */
+    for (int i = 0; i < corpus->entry_count; i++) {
+        cbm_sem_normalize(&corpus->entries[i].enriched_vec);
+    }
+
+    /* Reflective Random Indexing (RRI): second co-occurrence pass.
+     * Save first-pass vectors, reset to zero, then re-accumulate using
+     * the first-pass vectors as index vectors.  This captures second-order
+     * co-occurrence.  Cohen & Widdows 2009. */
+    {
+        /* Save first-pass enriched vectors */
+        cbm_sem_vec_t *pass1 = malloc((size_t)corpus->entry_count * sizeof(cbm_sem_vec_t));
+        if (pass1) {
+            for (int i = 0; i < corpus->entry_count; i++) {
+                pass1[i] = corpus->entries[i].enriched_vec;
+                memset(&corpus->entries[i].enriched_vec, 0, sizeof(cbm_sem_vec_t));
+            }
+
+            /* Second pass: use pass1 vectors as index vectors */
+            for (int d = 0; d < corpus->doc_count; d++) {
+                int *ids = corpus->doc_token_ids[d];
+                int len = corpus->doc_token_counts[d];
+                for (int i = 0; i < len; i++) {
+                    if (ids[i] < 0) {
+                        continue;
+                    }
+                    cbm_sem_vec_t *target = &corpus->entries[ids[i]].enriched_vec;
+                    for (int w = -CBM_SEM_WINDOW; w <= CBM_SEM_WINDOW; w++) {
+                        if (w == 0) {
+                            continue;
+                        }
+                        int j = i + w;
+                        if (j < 0 || j >= len || ids[j] < 0) {
+                            continue;
+                        }
+                        float weight = 1.0f / (float)abs(w);
+                        cbm_sem_vec_add_scaled(target, &pass1[ids[j]], weight);
+                    }
+                }
+            }
+
+            /* Blend: final = 0.7 × pass1 + 0.3 × pass2 (preserve pass1 signal) */
+            for (int i = 0; i < corpus->entry_count; i++) {
+                cbm_sem_normalize(&corpus->entries[i].enriched_vec);
+                for (int d = 0; d < CBM_SEM_DIM; d++) {
+                    corpus->entries[i].enriched_vec.v[d] =
+                        0.7f * pass1[i].v[d] + 0.3f * corpus->entries[i].enriched_vec.v[d];
+                }
+            }
+            free(pass1);
+        }
+    }
+
+    /* Final normalization */
     for (int i = 0; i < corpus->entry_count; i++) {
         cbm_sem_normalize(&corpus->entries[i].enriched_vec);
     }
@@ -338,6 +516,25 @@ const cbm_sem_vec_t *cbm_sem_corpus_ri_vec(const cbm_sem_corpus_t *corpus, const
 
 int cbm_sem_corpus_doc_count(const cbm_sem_corpus_t *corpus) {
     return corpus ? corpus->doc_count : 0;
+}
+
+int cbm_sem_corpus_token_count(const cbm_sem_corpus_t *corpus) {
+    return corpus ? corpus->entry_count : 0;
+}
+
+const char *cbm_sem_corpus_token_at(const cbm_sem_corpus_t *corpus, int index,
+                                    const cbm_sem_vec_t **out_vec, float *out_idf) {
+    if (!corpus || index < 0 || index >= corpus->entry_count) {
+        return NULL;
+    }
+    if (out_vec) {
+        *out_vec = &corpus->entries[index].enriched_vec;
+    }
+    if (out_idf && corpus->doc_count > 0) {
+        int df = corpus->entries[index].doc_freq;
+        *out_idf = df > 0 ? logf((float)corpus->doc_count / (float)df) : 0.0f;
+    }
+    return corpus->entries[index].token;
 }
 
 void cbm_sem_corpus_free(cbm_sem_corpus_t *corpus) {

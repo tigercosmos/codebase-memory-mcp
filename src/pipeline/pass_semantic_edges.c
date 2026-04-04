@@ -383,7 +383,23 @@ int cbm_pipeline_pass_semantic_edges(cbm_pipeline_ctx_t *ctx) {
             }
         }
         cbm_sem_normalize(&funcs[f].ri_vec);
+
+        /* Int8-quantize and store in graph buffer for vector search at query time */
+        uint8_t qvec[CBM_SEM_DIM];
+        for (int d = 0; d < CBM_SEM_DIM; d++) {
+            float clamped = funcs[f].ri_vec.v[d];
+            if (clamped > 1.0f) {
+                clamped = 1.0f;
+            }
+            if (clamped < -1.0f) {
+                clamped = -1.0f;
+            }
+            qvec[d] = (uint8_t)(int8_t)(clamped * 127.0f);
+        }
+        cbm_gbuf_store_vector(gbuf, funcs[f].node_id, qvec, CBM_SEM_DIM);
     }
+
+    cbm_log_info("pass.semantic.vectors_stored", "count", itoa_log(func_count));
 
     /* Phase 5: Build cosine-LSH index using random hyperplanes on RI vectors.
      * This gives O(n) candidate generation instead of O(n²) brute-force.

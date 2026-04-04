@@ -82,6 +82,12 @@ struct cbm_gbuf {
     CBMHashTable *edges_by_source_type; /* "srcID:type" → edge_ptr_array_t* */
     CBMHashTable *edges_by_target_type; /* "tgtID:type" → edge_ptr_array_t* */
     CBMHashTable *edges_by_type;        /* "type" → edge_ptr_array_t* */
+
+    /* Vector storage for semantic embeddings (filled by pass_semantic_edges,
+     * consumed by cbm_write_db during dump). */
+    CBMDumpVector *dump_vectors;
+    int dump_vector_count;
+    int dump_vector_cap;
 };
 
 /* ── Helpers ─────────────────────────────────────────────────────── */
@@ -419,9 +425,48 @@ void cbm_gbuf_free(cbm_gbuf_t *gb) {
         cbm_ht_free(gb->edges_by_type);
     }
 
+    /* Free vector storage */
+    for (int i = 0; i < gb->dump_vector_count; i++) {
+        free((void *)gb->dump_vectors[i].vector);
+    }
+    free(gb->dump_vectors);
+
     free(gb->project);
     free(gb->root_path);
     free(gb);
+}
+
+/* ── Vector storage ──────────────────────────────────────────────── */
+
+int cbm_gbuf_store_vector(cbm_gbuf_t *gb, int64_t node_id, const uint8_t *vector, int vector_len) {
+    if (!gb || !vector || vector_len <= 0) {
+        return -1;
+    }
+    enum { VEC_INIT_CAP = 1024, VEC_GROW = 2 };
+    if (gb->dump_vector_count >= gb->dump_vector_cap) {
+        int new_cap =
+            gb->dump_vector_cap < VEC_INIT_CAP ? VEC_INIT_CAP : gb->dump_vector_cap * VEC_GROW;
+        CBMDumpVector *grown = realloc(gb->dump_vectors, (size_t)new_cap * sizeof(CBMDumpVector));
+        if (!grown) {
+            return -1;
+        }
+        gb->dump_vectors = grown;
+        gb->dump_vector_cap = new_cap;
+    }
+    /* Copy vector data */
+    uint8_t *vec_copy = malloc((size_t)vector_len);
+    if (!vec_copy) {
+        return -1;
+    }
+    memcpy(vec_copy, vector, (size_t)vector_len);
+
+    gb->dump_vectors[gb->dump_vector_count++] = (CBMDumpVector){
+        .node_id = node_id,
+        .project = gb->project, /* borrowed — valid until gbuf_free */
+        .vector = vec_copy,
+        .vector_len = vector_len,
+    };
+    return 0;
 }
 
 /* ── ID accessors ────────────────────────────────────────────────── */
@@ -1197,7 +1242,7 @@ int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
      * Callers must delete the old .db before calling this (reindex)
      * or ensure no file exists (first index). */
     int rc = cbm_write_db(path, gb->project, gb->root_path, indexed_at, dump_nodes, node_idx,
-                          dump_edges, edge_idx);
+                          dump_edges, edge_idx, gb->dump_vectors, gb->dump_vector_count);
 
     {
         char b1[CBM_SZ_16];

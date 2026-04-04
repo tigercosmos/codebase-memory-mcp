@@ -107,6 +107,9 @@ enum {
 // SQLite text serial type offset: serial_type = len*2 + TEXT_SERIAL_BASE.
 #define TEXT_SERIAL_BASE 13
 
+// SQLite blob serial type offset: serial_type = len*2 + BLOB_SERIAL_BASE.
+#define BLOB_SERIAL_BASE 12
+
 // SQLite integer storage range limits.
 #define INT8_MAX_VAL 127
 #define INT16_MAX_VAL 32767
@@ -357,6 +360,16 @@ static void rec_add_text(RecordBuilder *r, const char *s) {
     dynbuf_append(&r->header, vbuf, vlen);
     if (slen > 0) {
         dynbuf_append(&r->body, s, slen);
+    }
+}
+
+static void rec_add_blob(RecordBuilder *r, const uint8_t *data, int len) {
+    int64_t st = len > 0 ? (int64_t)len * 2 + BLOB_SERIAL_BASE : 0;
+    uint8_t vbuf[VARINT_MAX_BYTES];
+    int vlen = put_varint(vbuf, st);
+    dynbuf_append(&r->header, vbuf, vlen);
+    if (len > 0 && data) {
+        dynbuf_append(&r->body, data, len);
     }
 }
 
@@ -712,6 +725,21 @@ static uint8_t *build_edge_record(const CBMDumpEdge *e, int *out_len) {
     rec_add_int(&r, e->target_id);
     rec_add_text(&r, e->type);
     rec_add_text(&r, e->properties ? e->properties : "{}");
+
+    uint8_t *data = rec_finalize(&r, out_len);
+    rec_free(&r);
+    return data;
+}
+
+// Build a node_vectors table record: (node_id, project, vector)
+// Includes node_id in the record body (same pattern as build_node_record).
+static uint8_t *build_vector_record(const CBMDumpVector *v, int *out_len) {
+    RecordBuilder r;
+    rec_init(&r);
+
+    rec_add_int(&r, v->node_id);
+    rec_add_text(&r, v->project);
+    rec_add_blob(&r, v->vector, v->vector_len);
 
     uint8_t *data = rec_finalize(&r, out_len);
     rec_free(&r);
@@ -1462,10 +1490,13 @@ typedef struct {
     int node_count;
     CBMDumpEdge *edges;
     int edge_count;
+    CBMDumpVector *vectors;
+    int vector_count;
 } write_db_ctx_t;
 
-/* Phase 1: Write node + edge data tables (streaming). */
-static int write_data_tables(write_db_ctx_t *w, uint32_t *nodes_root, uint32_t *edges_root) {
+/* Phase 1: Write node + edge + vector data tables (streaming). */
+static int write_data_tables(write_db_ctx_t *w, uint32_t *nodes_root, uint32_t *edges_root,
+                             uint32_t *vectors_root) {
     if (w->node_count > 0) {
         PageBuilder pb;
         pb_init(&pb, w->fp, w->next_page, false);
@@ -1500,6 +1531,26 @@ static int write_data_tables(write_db_ctx_t *w, uint32_t *nodes_root, uint32_t *
         *edges_root = pb_finalize_table(&pb, &w->next_page, w->edges[w->edge_count - SKIP_ONE].id);
     } else {
         *edges_root = write_table_btree(w->fp, &w->next_page, NULL, NULL, NULL, 0, false);
+    }
+
+    /* node_vectors table — uses node_id as rowid (not AUTOINCREMENT) */
+    if (w->vector_count > 0 && w->vectors) {
+        PageBuilder pb;
+        pb_init(&pb, w->fp, w->next_page, false);
+        for (int i = 0; i < w->vector_count; i++) {
+            int rec_len;
+            uint8_t *rec = build_vector_record(&w->vectors[i], &rec_len);
+            if (!rec) {
+                return ERR_WRITE_FAILED;
+            }
+            pb_add_table_cell_with_flush(&pb, w->vectors[i].node_id, rec, rec_len,
+                                         i > 0 ? w->vectors[i - SKIP_ONE].node_id : 0);
+            free(rec);
+        }
+        *vectors_root =
+            pb_finalize_table(&pb, &w->next_page, w->vectors[w->vector_count - SKIP_ONE].node_id);
+    } else {
+        *vectors_root = write_table_btree(w->fp, &w->next_page, NULL, NULL, NULL, 0, false);
     }
     return 0;
 }
@@ -1548,7 +1599,7 @@ static void write_metadata_tables(write_db_ctx_t *w, uint32_t *projects_root,
 
 int cbm_write_db(const char *path, const char *project, const char *root_path,
                  const char *indexed_at, CBMDumpNode *nodes, int node_count, CBMDumpEdge *edges,
-                 int edge_count) {
+                 int edge_count, CBMDumpVector *vectors, int vector_count) {
     FILE *fp = fopen(path, "wb");
     if (!fp) {
         return CBM_NOT_FOUND;
@@ -1562,12 +1613,15 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
                         .nodes = nodes,
                         .node_count = node_count,
                         .edges = edges,
-                        .edge_count = edge_count};
+                        .edge_count = edge_count,
+                        .vectors = vectors,
+                        .vector_count = vector_count};
 
-    // Phase 1: Data tables (streaming node + edge records)
+    // Phase 1: Data tables (streaming node + edge + vector records)
     uint32_t nodes_root;
     uint32_t edges_root;
-    int rc = write_data_tables(&w, &nodes_root, &edges_root);
+    uint32_t vectors_root;
+    int rc = write_data_tables(&w, &nodes_root, &edges_root, &vectors_root);
     if (rc != 0) {
         (void)fclose(fp);
         return rc;
@@ -1753,6 +1807,9 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
          "NULL,\n\t\t\tupdated_at TEXT NOT NULL\n\t\t)"},
         {"index", "sqlite_autoindex_project_summaries_1", "project_summaries",
          autoindex_summaries_root, NULL},
+        {"table", "node_vectors", "node_vectors", vectors_root,
+         "CREATE TABLE node_vectors (\n\t\tnode_id INTEGER PRIMARY KEY,\n\t\tproject TEXT NOT "
+         "NULL,\n\t\tvector BLOB NOT NULL\n\t)"},
         {"table", "sqlite_sequence", "sqlite_sequence", sqlite_seq_root,
          "CREATE TABLE sqlite_sequence(name,seq)"},
     };

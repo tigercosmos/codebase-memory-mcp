@@ -269,7 +269,9 @@ static const tool_def_t TOOLS[] = {
      "\"string\"},\"name_pattern\":{\"type\":\"string\"},\"qn_pattern\":{\"type\":\"string\"},"
      "\"file_pattern\":{\"type\":\"string\"},\"relationship\":{\"type\":\"string\"},\"min_degree\":"
      "{\"type\":\"integer\"},\"max_degree\":{\"type\":\"integer\"},\"exclude_entry_points\":{"
-     "\"type\":\"boolean\"},\"include_connected\":{\"type\":\"boolean\"},\"limit\":{\"type\":"
+     "\"type\":\"boolean\"},\"include_connected\":{\"type\":\"boolean\"},\"semantic_query\":{"
+     "\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Keywords for semantic "
+     "vector search (requires moderate/full index mode)\"},\"limit\":{\"type\":"
      "\"integer\",\"description\":\"Max results. Default: "
      "unlimited\"},\"offset\":{\"type\":\"integer\",\"default\":0}},\"required\":[\"project\"]}"},
 
@@ -1098,6 +1100,56 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
     }
     yyjson_mut_obj_add_val(doc, root, "results", results);
     yyjson_mut_obj_add_bool(doc, root, "has_more", out.total > offset + out.count);
+
+    /* Semantic vector search: parse semantic_query array and run vector search */
+    {
+        yyjson_doc *args_doc = yyjson_read(args, strlen(args), 0);
+        yyjson_val *args_root = args_doc ? yyjson_doc_get_root(args_doc) : NULL;
+        yyjson_val *sq_arr = args_root ? yyjson_obj_get(args_root, "semantic_query") : NULL;
+        if (sq_arr && yyjson_is_arr(sq_arr)) {
+            int kw_count = (int)yyjson_arr_size(sq_arr);
+            if (kw_count > 0) {
+                enum { MAX_KW = 32 };
+                const char *keywords[MAX_KW];
+                if (kw_count > MAX_KW) {
+                    kw_count = MAX_KW;
+                }
+                size_t kw_idx = 0;
+                size_t kw_max = 0;
+                yyjson_val *kw_val;
+                int ki = 0;
+                yyjson_arr_foreach(sq_arr, kw_idx, kw_max, kw_val) {
+                    if (ki < kw_count && yyjson_is_str(kw_val)) {
+                        keywords[ki++] = yyjson_get_str(kw_val);
+                    }
+                }
+
+                cbm_vector_result_t *vresults = NULL;
+                int vcount = 0;
+                int sem_limit = limit > 0 ? limit : CBM_SZ_16;
+                if (cbm_store_vector_search(store, project, keywords, ki, sem_limit, &vresults,
+                                            &vcount) == CBM_STORE_OK &&
+                    vcount > 0) {
+                    yyjson_mut_val *sem_results = yyjson_mut_arr(doc);
+                    for (int v = 0; v < vcount; v++) {
+                        yyjson_mut_val *vitem = yyjson_mut_obj(doc);
+                        yyjson_mut_obj_add_strcpy(doc, vitem, "name", vresults[v].name);
+                        yyjson_mut_obj_add_strcpy(doc, vitem, "qualified_name",
+                                                  vresults[v].qualified_name);
+                        yyjson_mut_obj_add_strcpy(doc, vitem, "label", vresults[v].label);
+                        yyjson_mut_obj_add_strcpy(doc, vitem, "file_path", vresults[v].file_path);
+                        yyjson_mut_obj_add_real(doc, vitem, "score", vresults[v].score);
+                        yyjson_mut_arr_add_val(sem_results, vitem);
+                    }
+                    yyjson_mut_obj_add_val(doc, root, "semantic_results", sem_results);
+                    cbm_store_free_vector_results(vresults, vcount);
+                }
+            }
+        }
+        if (args_doc) {
+            yyjson_doc_free(args_doc);
+        }
+    }
 
     char *json = yy_doc_to_str(doc);
     yyjson_mut_doc_free(doc);

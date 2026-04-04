@@ -27,13 +27,21 @@ typedef struct {
     const char *url_path;   // extracted from properties by Go (for idx_edges_url_path)
 } CBMDumpEdge;
 
+typedef struct {
+    int64_t node_id;       // final sequential ID (matches nodes.id)
+    const char *project;
+    const uint8_t *vector; // int8-quantized vector blob
+    int vector_len;        // length in bytes (e.g. 256 for d=256)
+} CBMDumpVector;
+
 // --- Public API ---
 
 // Write a complete SQLite .db file from sorted in-memory data.
 // Constructs B-tree pages directly — no SQL parser, no INSERTs.
 // Returns 0 on success, non-zero on error.
+// vectors/vector_count may be NULL/0 if no vectors are available.
 int cbm_write_db(const char *path, const char *project, const char *root_path,
                  const char *indexed_at, CBMDumpNode *nodes, int node_count, CBMDumpEdge *edges,
-                 int edge_count);
+                 int edge_count, CBMDumpVector *vectors, int vector_count);
 
 #endif // CBM_SQLITE_WRITER_H

@@ -11,6 +11,8 @@
 #include <stdint.h>
 #include "foundation/constants.h"
 
+#include <math.h>
+
 enum {
     ST_COL_1 = 1,
     ST_COL_2 = 2,
@@ -58,6 +60,9 @@ enum {
 #include "foundation/platform.h"
 #include "foundation/compat.h"
 #include "foundation/compat_regex.h"
+
+#define XXH_INLINE_ALL
+#include "xxhash/xxhash.h"
 
 #include <sqlite3.h>
 #include <stdio.h>
@@ -340,6 +345,34 @@ static void sqlite_iregexp(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     sqlite3_result_int(ctx, rc == 0 ? SKIP_ONE : 0);
 }
 
+/* Cosine similarity between two int8 BLOB vectors.
+ * Returns float in [-1, 1].  Used for vector search at query time. */
+static void sqlite_cosine_i8(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    (void)argc;
+    if (sqlite3_value_type(argv[0]) != SQLITE_BLOB || sqlite3_value_type(argv[SKIP_ONE]) != SQLITE_BLOB) {
+        sqlite3_result_double(ctx, 0.0);
+        return;
+    }
+    int len_a = sqlite3_value_bytes(argv[0]);
+    int len_b = sqlite3_value_bytes(argv[SKIP_ONE]);
+    if (len_a != len_b || len_a == 0) {
+        sqlite3_result_double(ctx, 0.0);
+        return;
+    }
+    const int8_t *a = (const int8_t *)sqlite3_value_blob(argv[0]);
+    const int8_t *b = (const int8_t *)sqlite3_value_blob(argv[SKIP_ONE]);
+    int32_t dot = 0;
+    int32_t mag_a = 0;
+    int32_t mag_b = 0;
+    for (int i = 0; i < len_a; i++) {
+        dot += (int32_t)a[i] * (int32_t)b[i];
+        mag_a += (int32_t)a[i] * (int32_t)a[i];
+        mag_b += (int32_t)b[i] * (int32_t)b[i];
+    }
+    double denom = sqrt((double)mag_a) * sqrt((double)mag_b);
+    sqlite3_result_double(ctx, denom > 1e-10 ? (double)dot / denom : 0.0);
+}
+
 /* ── Lifecycle ──────────────────────────────────────────────────── */
 
 /* SQLite authorizer: deny dangerous operations that could be exploited via
@@ -391,6 +424,9 @@ static cbm_store_t *store_open_internal(const char *path, bool in_memory) {
     /* Case-insensitive variant for search with case_sensitive=false */
     sqlite3_create_function(s->db, "iregexp", ST_COL_2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL,
                             sqlite_iregexp, NULL, NULL);
+    /* Int8 cosine similarity for vector search */
+    sqlite3_create_function(s->db, "cbm_cosine_i8", ST_COL_2, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+                            NULL, sqlite_cosine_i8, NULL, NULL);
 
     if (configure_pragmas(s, in_memory) != CBM_STORE_OK || init_schema(s) != CBM_STORE_OK ||
         create_user_indexes(s) != CBM_STORE_OK) {
@@ -443,6 +479,8 @@ cbm_store_t *cbm_store_open_path_query(const char *db_path) {
                             sqlite_regexp, NULL, NULL);
     sqlite3_create_function(s->db, "iregexp", ST_COL_2, SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL,
                             sqlite_iregexp, NULL, NULL);
+    sqlite3_create_function(s->db, "cbm_cosine_i8", ST_COL_2, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
+                            NULL, sqlite_cosine_i8, NULL, NULL);
 
     if (configure_pragmas(s, false) != CBM_STORE_OK) {
         sqlite3_close(s->db);
@@ -4524,4 +4562,147 @@ void cbm_store_free_file_hashes(cbm_file_hash_t *hashes, int count) {
         free((void *)hashes[i].sha256);
     }
     free(hashes);
+}
+
+/* ── Vector search ────────────────────────��──────────────────────── */
+
+int cbm_store_count_vectors(cbm_store_t *s, const char *project) {
+    if (!s || !project) {
+        return 0;
+    }
+    sqlite3_stmt *stmt = NULL;
+    const char *sql = "SELECT count(*) FROM node_vectors WHERE project = ?1";
+    if (sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return 0;
+    }
+    sqlite3_bind_text(stmt, SKIP_ONE, project, -1, SQLITE_STATIC);
+    int count = 0;
+    if (sqlite3_step(stmt) == SQLITE_ROW) {
+        count = sqlite3_column_int(stmt, 0);
+    }
+    sqlite3_finalize(stmt);
+    return count;
+}
+
+void cbm_store_free_vector_results(cbm_vector_result_t *results, int count) {
+    if (!results) {
+        return;
+    }
+    for (int i = 0; i < count; i++) {
+        free(results[i].name);
+        free(results[i].qualified_name);
+        free(results[i].file_path);
+        free(results[i].label);
+    }
+    free(results);
+}
+
+int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **keywords,
+                            int keyword_count, int limit, cbm_vector_result_t **out,
+                            int *out_count) {
+    *out = NULL;
+    *out_count = 0;
+    if (!s || !project || !keywords || keyword_count <= 0) {
+        return CBM_STORE_ERR;
+    }
+
+    /* Build merged query vector: sum of base RI vectors for each keyword.
+     * Base RI = sparse random vector from xxHash(keyword) — same construction
+     * as in semantic.c, so it projects into the same space as stored vectors. */
+    enum { VEC_DIM = 256, SPARSE_NNZE = 8, RI_SEED = 0x52494E44 };
+    float query_f[VEC_DIM];
+    memset(query_f, 0, sizeof(query_f));
+
+    for (int k = 0; k < keyword_count; k++) {
+        if (!keywords[k] || !keywords[k][0]) {
+            continue;
+        }
+        /* Generate base sparse random vector (same as cbm_sem_random_index) */
+        uint64_t seed = XXH3_64bits(keywords[k], strlen(keywords[k]));
+        for (int i = 0; i < SPARSE_NNZE; i++) {
+            uint64_t h = XXH3_64bits_withSeed(&i, sizeof(i), seed + RI_SEED);
+            int pos = (int)(h % VEC_DIM);
+            float sign = (h & SKIP_ONE) ? 1.0f : -1.0f;
+            query_f[pos] += sign;
+        }
+    }
+
+    /* Normalize */
+    float mag = 0.0f;
+    for (int i = 0; i < VEC_DIM; i++) {
+        mag += query_f[i] * query_f[i];
+    }
+    mag = sqrtf(mag);
+    if (mag < 1e-10f) {
+        return CBM_STORE_OK; /* zero vector — no results */
+    }
+    float inv = 1.0f / mag;
+
+    /* Int8 quantize */
+    int8_t query_i8[VEC_DIM];
+    for (int i = 0; i < VEC_DIM; i++) {
+        float v = query_f[i] * inv * 127.0f;
+        if (v > 127.0f) {
+            v = 127.0f;
+        }
+        if (v < -127.0f) {
+            v = -127.0f;
+        }
+        query_i8[i] = (int8_t)v;
+    }
+
+    /* Query: cosine similarity JOIN with nodes for metadata.
+     * We use a subquery to compute the score first, then join for metadata
+     * — this avoids SQLite computing the cosine for rows we won't return. */
+    const char *sql =
+        "SELECT n.id, n.name, n.qualified_name, n.file_path, n.label,"
+        "       cbm_cosine_i8(v.vector, ?1) as score"
+        " FROM node_vectors v"
+        " INNER JOIN nodes n ON n.id = v.node_id"
+        " WHERE v.project = ?2"
+        " ORDER BY score DESC"
+        " LIMIT ?3";
+
+    sqlite3_stmt *stmt = NULL;
+    int prep_rc = sqlite3_prepare_v2(s->db, sql, -1, &stmt, NULL);
+    if (prep_rc != SQLITE_OK) {
+        (void)fprintf(stderr, "vector_search: %s\n", sqlite3_errmsg(s->db));
+        return CBM_STORE_ERR;
+    }
+
+    sqlite3_bind_blob(stmt, SKIP_ONE, query_i8, VEC_DIM, SQLITE_STATIC);
+    sqlite3_bind_text(stmt, ST_COL_2, project, -1, SQLITE_STATIC);
+    sqlite3_bind_int(stmt, ST_COL_3, limit > 0 ? limit : CBM_SZ_16);
+
+    cbm_vector_result_t *results = NULL;
+    int count = 0;
+    int cap = 0;
+
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        if (count >= cap) {
+            int nc = cap < CBM_SZ_16 ? CBM_SZ_16 : cap * ST_COL_2;
+            cbm_vector_result_t *grown = realloc(results, (size_t)nc * sizeof(cbm_vector_result_t));
+            if (!grown) {
+                break;
+            }
+            results = grown;
+            cap = nc;
+        }
+        results[count].node_id = sqlite3_column_int64(stmt, 0);
+        const char *name = (const char *)sqlite3_column_text(stmt, SKIP_ONE);
+        const char *qn = (const char *)sqlite3_column_text(stmt, ST_COL_2);
+        const char *fp = (const char *)sqlite3_column_text(stmt, ST_COL_3);
+        const char *label = (const char *)sqlite3_column_text(stmt, ST_COL_4);
+        results[count].name = name ? strdup(name) : strdup("");
+        results[count].qualified_name = qn ? strdup(qn) : strdup("");
+        results[count].file_path = fp ? strdup(fp) : strdup("");
+        results[count].label = label ? strdup(label) : strdup("");
+        results[count].score = sqlite3_column_double(stmt, ST_COL_5);
+        count++;
+    }
+
+    sqlite3_finalize(stmt);
+    *out = results;
+    *out_count = count;
+    return CBM_STORE_OK;
 }

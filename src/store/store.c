@@ -4606,22 +4606,32 @@ int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **ke
         return CBM_STORE_ERR;
     }
 
-    /* Build merged query vector from enriched token vectors stored in
-     * token_vectors table.  Falls back to base RI vectors if no enriched
-     * vectors are available. */
-    enum { VEC_DIM = 768, SPARSE_NNZE = 8, RI_SEED = 0x52494E44, IDF_SCALE = 1000 };
-    float query_f[VEC_DIM];
-    memset(query_f, 0, sizeof(query_f));
+    /* Per-keyword scoring: score each keyword independently against each
+     * node vector, then combine using min(cosine_k) across keywords.
+     * This ensures ALL keywords must be relevant, not just the average.
+     *
+     * Step 1: Build per-keyword int8 query vectors.
+     * Step 2: For each node, compute cosine per keyword, take min.
+     * Step 3: Rank by min-score. */
+    enum { VEC_DIM = 768, SPARSE_NNZE = 8, RI_SEED = 0x52494E44, IDF_SCALE = 1000,
+           MAX_KW = 32, SCAN_BUF_INIT = 1024 };
 
-    for (int k = 0; k < keyword_count; k++) {
+    /* Build per-keyword vectors */
+    int actual_kw = 0;
+    int8_t kw_vecs[MAX_KW][VEC_DIM];
+
+    for (int k = 0; k < keyword_count && actual_kw < MAX_KW; k++) {
         if (!keywords[k] || !keywords[k][0]) {
             continue;
         }
-        /* Try enriched vector from token_vectors table first */
+        float kw_f[VEC_DIM];
+        memset(kw_f, 0, sizeof(kw_f));
+        bool found = false;
+
+        /* Try enriched vector from token_vectors table */
         sqlite3_stmt *tv_stmt = NULL;
         const char *tv_sql = "SELECT vector, idf FROM token_vectors"
                              " WHERE project = ?1 AND token = ?2 LIMIT 1";
-        bool found = false;
         if (sqlite3_prepare_v2(s->db, tv_sql, -1, &tv_stmt, NULL) == SQLITE_OK) {
             sqlite3_bind_text(tv_stmt, SKIP_ONE, project, -1, SQLITE_STATIC);
             sqlite3_bind_text(tv_stmt, ST_COL_2, keywords[k], -1, SQLITE_STATIC);
@@ -4629,58 +4639,51 @@ int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **ke
                 const int8_t *vec = (const int8_t *)sqlite3_value_blob(
                     sqlite3_column_value(tv_stmt, 0));
                 int vec_len = sqlite3_column_bytes(tv_stmt, 0);
-                float idf = (float)sqlite3_column_int(tv_stmt, SKIP_ONE) / IDF_SCALE;
                 if (vec && vec_len == VEC_DIM) {
                     for (int d = 0; d < VEC_DIM; d++) {
-                        query_f[d] += idf * ((float)vec[d] / 127.0f);
+                        kw_f[d] = (float)vec[d] / 127.0f;
                     }
                     found = true;
                 }
             }
             sqlite3_finalize(tv_stmt);
         }
-        /* Fallback: base sparse random vector if no enriched vector found */
         if (!found) {
             uint64_t seed = XXH3_64bits(keywords[k], strlen(keywords[k]));
             for (int i = 0; i < SPARSE_NNZE; i++) {
                 uint64_t h = XXH3_64bits_withSeed(&i, sizeof(i), seed + RI_SEED);
                 int pos = (int)(h % VEC_DIM);
                 float sign = (h & SKIP_ONE) ? 1.0f : -1.0f;
-                query_f[pos] += sign;
+                kw_f[pos] += sign;
             }
         }
-    }
-
-    /* Normalize */
-    float mag = 0.0f;
-    for (int i = 0; i < VEC_DIM; i++) {
-        mag += query_f[i] * query_f[i];
-    }
-    mag = sqrtf(mag);
-    if (mag < 1e-10f) {
-        return CBM_STORE_OK; /* zero vector — no results */
-    }
-    float inv = 1.0f / mag;
-
-    /* Int8 quantize */
-    int8_t query_i8[VEC_DIM];
-    for (int i = 0; i < VEC_DIM; i++) {
-        float v = query_f[i] * inv * 127.0f;
-        if (v > 127.0f) {
-            v = 127.0f;
+        /* Normalize + quantize */
+        float mag = 0.0f;
+        for (int d = 0; d < VEC_DIM; d++) {
+            mag += kw_f[d] * kw_f[d];
         }
-        if (v < -127.0f) {
-            v = -127.0f;
+        mag = sqrtf(mag);
+        if (mag < 1e-10f) {
+            continue;
         }
-        query_i8[i] = (int8_t)v;
+        float inv = 1.0f / mag;
+        for (int d = 0; d < VEC_DIM; d++) {
+            float v = kw_f[d] * inv * 127.0f;
+            kw_vecs[actual_kw][d] = (int8_t)(v > 127.0f ? 127.0f : (v < -127.0f ? -127.0f : v));
+        }
+        actual_kw++;
     }
 
-    /* Query: cosine similarity JOIN with nodes for metadata.
-     * We use a subquery to compute the score first, then join for metadata
-     * — this avoids SQLite computing the cosine for rows we won't return. */
+    if (actual_kw == 0) {
+        return CBM_STORE_OK;
+    }
+
+    /* Scan all node vectors, compute per-keyword cosine, take min.
+     * We use the FIRST keyword as the SQL sort (for top-K pre-filter),
+     * then re-score with min across all keywords in C. */
     const char *sql =
         "SELECT n.id, n.name, n.qualified_name, n.file_path, n.label,"
-        "       cbm_cosine_i8(v.vector, ?1) as score"
+        "       cbm_cosine_i8(v.vector, ?1) as score, v.vector"
         " FROM node_vectors v"
         " INNER JOIN nodes n ON n.id = v.node_id"
         " WHERE v.project = ?2"
@@ -4695,9 +4698,11 @@ int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **ke
         return CBM_STORE_ERR;
     }
 
-    sqlite3_bind_blob(stmt, SKIP_ONE, query_i8, VEC_DIM, SQLITE_STATIC);
+    /* Use first keyword for SQL pre-filter, fetch more candidates for re-ranking */
+    int fetch_limit = (limit > 0 ? limit : CBM_SZ_16) * ST_COL_5;
+    sqlite3_bind_blob(stmt, SKIP_ONE, kw_vecs[0], VEC_DIM, SQLITE_STATIC);
     sqlite3_bind_text(stmt, ST_COL_2, project, -1, SQLITE_STATIC);
-    sqlite3_bind_int(stmt, ST_COL_3, limit > 0 ? limit : CBM_SZ_16);
+    sqlite3_bind_int(stmt, ST_COL_3, fetch_limit);
 
     cbm_vector_result_t *results = NULL;
     int count = 0;
@@ -4722,11 +4727,62 @@ int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **ke
         results[count].qualified_name = qn ? strdup(qn) : strdup("");
         results[count].file_path = fp ? strdup(fp) : strdup("");
         results[count].label = label ? strdup(label) : strdup("");
-        results[count].score = sqlite3_column_double(stmt, ST_COL_5);
+
+        /* Compute per-keyword min-score for this node.
+         * The SQL pre-filtered by first keyword; now re-score with ALL keywords. */
+        const void *node_vec = sqlite3_column_blob(stmt, ST_COL_6);
+        int node_vec_len = sqlite3_column_bytes(stmt, ST_COL_6);
+        double min_score = 1.0;
+        if (node_vec && node_vec_len == VEC_DIM) {
+            const int8_t *nv = (const int8_t *)node_vec;
+            for (int k = 0; k < actual_kw; k++) {
+                /* Inline int8 cosine for speed */
+                int32_t dot = 0;
+                int32_t ma = 0;
+                int32_t mb = 0;
+                for (int d = 0; d < VEC_DIM; d++) {
+                    dot += (int32_t)kw_vecs[k][d] * (int32_t)nv[d];
+                    ma += (int32_t)kw_vecs[k][d] * (int32_t)kw_vecs[k][d];
+                    mb += (int32_t)nv[d] * (int32_t)nv[d];
+                }
+                double denom = sqrt((double)ma) * sqrt((double)mb);
+                double cos_k = denom > 1e-10 ? (double)dot / denom : 0.0;
+                if (cos_k < min_score) {
+                    min_score = cos_k;
+                }
+            }
+        } else {
+            min_score = 0.0;
+        }
+        results[count].score = min_score;
         count++;
     }
 
     sqlite3_finalize(stmt);
+
+    /* Re-sort by min-score (SQL sorted by first keyword only) */
+    for (int i = 0; i < count - SKIP_ONE; i++) {
+        for (int j = i + SKIP_ONE; j < count; j++) {
+            if (results[j].score > results[i].score) {
+                cbm_vector_result_t tmp = results[i];
+                results[i] = results[j];
+                results[j] = tmp;
+            }
+        }
+    }
+
+    /* Trim to requested limit */
+    int final_limit = limit > 0 ? limit : CBM_SZ_16;
+    if (count > final_limit) {
+        for (int i = final_limit; i < count; i++) {
+            free(results[i].name);
+            free(results[i].qualified_name);
+            free(results[i].file_path);
+            free(results[i].label);
+        }
+        count = final_limit;
+    }
+
     *out = results;
     *out_count = count;
     return CBM_STORE_OK;

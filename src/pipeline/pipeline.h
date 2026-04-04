@@ -31,8 +31,9 @@ typedef struct cbm_pipeline cbm_pipeline_t;
 #ifndef CBM_INDEX_MODE_T_DEFINED
 #define CBM_INDEX_MODE_T_DEFINED
 typedef enum {
-    CBM_MODE_FULL = 0, /* Full index: read everything, build from scratch */
-    CBM_MODE_FAST = 1, /* Fast: skip non-essential files (media, docs, etc.) */
+    CBM_MODE_FULL = 0,     /* Full: everything including SIMILAR_TO + SEMANTICALLY_RELATED */
+    CBM_MODE_MODERATE = 1, /* Moderate: fast discovery + SIMILAR_TO + SEMANTICALLY_RELATED */
+    CBM_MODE_FAST = 2,     /* Fast: skip non-essential files, no similarity/semantic edges */
 } cbm_index_mode_t;
 #endif
 
@@ -54,6 +55,9 @@ void cbm_pipeline_cancel(cbm_pipeline_t *p);
 /* Get the project name derived from repo_path. Returned string is
  * owned by the pipeline. Valid until cbm_pipeline_free(). */
 const char *cbm_pipeline_project_name(const cbm_pipeline_t *p);
+
+/* Get the index mode (CBM_MODE_FULL, CBM_MODE_MODERATE, CBM_MODE_FAST). */
+int cbm_pipeline_get_mode(const cbm_pipeline_t *p);
 
 /* ── Index lock (prevents concurrent pipeline runs on same DB) ──── */
 

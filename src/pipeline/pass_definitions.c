@@ -21,6 +21,7 @@ enum { PD_RING = 4, PD_RING_MASK = 3, PD_JSON_MARGIN = 10, PD_ESC_MARGIN = 3, PD
 #include "foundation/compat.h"
 #include "cbm.h"
 #include "simhash/minhash.h"
+#include "semantic/ast_profile.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -198,6 +199,11 @@ static void build_def_props(char *buf, size_t bufsize, const CBMDefinition *def)
         char fp_hex[CBM_MINHASH_HEX_BUF];
         cbm_minhash_to_hex((const cbm_minhash_t *)def->fingerprint, fp_hex, sizeof(fp_hex));
         append_json_string(buf, bufsize, &pos, "fp", fp_hex);
+    }
+
+    /* AST structural profile */
+    if (def->structural_profile && pos + CBM_AST_PROFILE_BUF < bufsize) {
+        append_json_string(buf, bufsize, &pos, "sp", def->structural_profile);
     }
 
     if (pos < bufsize - SKIP_ONE) {

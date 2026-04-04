@@ -1678,6 +1678,8 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     cbm_index_mode_t mode = CBM_MODE_FULL;
     if (mode_str && strcmp(mode_str, "fast") == 0) {
         mode = CBM_MODE_FAST;
+    } else if (mode_str && strcmp(mode_str, "moderate") == 0) {
+        mode = CBM_MODE_MODERATE;
     }
     free(mode_str);
 

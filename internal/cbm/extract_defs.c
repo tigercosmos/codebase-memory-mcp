@@ -4,6 +4,7 @@
 #include "lang_specs.h"
 #include "foundation/constants.h"
 #include "simhash/minhash.h"
+#include "semantic/ast_profile.h"
 #include "tree_sitter/api.h" // TSNode, ts_node_*
 #include <stdint.h>          // uint32_t
 #include <string.h>
@@ -50,6 +51,21 @@ static void compute_fingerprint(CBMExtractCtx *ctx, CBMDefinition *def, TSNode f
     memcpy(fp, result.values, CBM_MINHASH_K * sizeof(uint32_t));
     def->fingerprint = fp;
     def->fingerprint_k = CBM_MINHASH_K;
+
+    /* AST structural profile (signals 8, 9, 11) — rides the same body node */
+    cbm_ast_profile_t profile;
+    int pc = 0;
+    if (def->param_names) {
+        while (def->param_names[pc]) {
+            pc++;
+        }
+    }
+    if (cbm_ast_profile_compute(body, ctx->source, def->param_names, pc, &profile)) {
+        profile.body_lines = (uint16_t)def->lines;
+        char sp_buf[CBM_AST_PROFILE_BUF];
+        cbm_ast_profile_to_str(&profile, sp_buf, sizeof(sp_buf));
+        def->structural_profile = cbm_arena_strdup(ctx->arena, sp_buf);
+    }
 }
 
 // Tree-sitter row is 0-based; lines are 1-based.

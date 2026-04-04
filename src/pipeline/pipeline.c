@@ -157,6 +157,10 @@ atomic_int *cbm_pipeline_cancelled_ptr(cbm_pipeline_t *p) {
     return p ? &p->cancelled : NULL;
 }
 
+int cbm_pipeline_get_mode(const cbm_pipeline_t *p) {
+    return p ? (int)p->mode : 0;
+}
+
 /* Resolve the DB path for this pipeline. Caller must free(). */
 static char *resolve_db_path(const cbm_pipeline_t *p) {
     char *path = malloc(CBM_SZ_1K);
@@ -425,10 +429,17 @@ static void run_predump_passes(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx) {
         cbm_log_info("pass.timing", "pass", "route_match", "elapsed_ms",
                      itoa_buf((int)elapsed_ms(t)));
     }
-    if (!check_cancel(p)) {
+    /* SIMILAR_TO + SEMANTICALLY_RELATED edges only in moderate/full modes */
+    if (!check_cancel(p) && p->mode <= CBM_MODE_MODERATE) {
         cbm_clock_gettime(CLOCK_MONOTONIC, &t);
         cbm_pipeline_pass_similarity(ctx);
         cbm_log_info("pass.timing", "pass", "similarity", "elapsed_ms",
+                     itoa_buf((int)elapsed_ms(t)));
+    }
+    if (!check_cancel(p) && p->mode <= CBM_MODE_MODERATE) {
+        cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+        cbm_pipeline_pass_semantic_edges(ctx);
+        cbm_log_info("pass.timing", "pass", "semantic_edges", "elapsed_ms",
                      itoa_buf((int)elapsed_ms(t)));
     }
 }
@@ -732,6 +743,7 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
         .gbuf = p->gbuf,
         .registry = p->registry,
         .cancelled = &p->cancelled,
+        .mode = (int)p->mode,
     };
 
     cbm_clock_gettime(CLOCK_MONOTONIC, &t);

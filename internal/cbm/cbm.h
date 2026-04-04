@@ -109,6 +109,7 @@ typedef struct {
     bool is_abstract;
     bool is_test;
     bool is_entry_point;
+    const char *structural_profile; // AST structural profile (arena-allocated) or NULL
 } CBMDefinition;
 
 /* Argument captured from a call expression */

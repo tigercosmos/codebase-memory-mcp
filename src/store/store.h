@@ -633,4 +633,8 @@ void cbm_store_free_vector_results(cbm_vector_result_t *results, int count);
 /* Count vectors for a project. */
 int cbm_store_count_vectors(cbm_store_t *s, const char *project);
 
+/* Execute an arbitrary SQL statement (pragmas, FTS5 maintenance, etc).
+ * Returns CBM_STORE_OK on success. */
+int cbm_store_exec(cbm_store_t *s, const char *sql);
+
 #endif /* CBM_STORE_H */

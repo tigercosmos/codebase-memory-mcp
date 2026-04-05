@@ -1017,6 +1017,54 @@ static const char **extract_base_classes(CBMArena *a, TSNode node, const char *s
         }
     }
 
+    // C#: explicit base_list handler.  The generic fallback (find_base_from_children)
+    // returns the raw text of the whole `base_list` node, which includes the leading
+    // `:` separator — producing names like `": IExamService"` that fail registry lookup.
+    // Iterate the named children directly and strip generic type args.
+    for (uint32_t i = 0; i < count; i++) {
+        TSNode child = ts_node_child(node, i);
+        if (strcmp(ts_node_type(child), "base_list") != 0) {
+            continue;
+        }
+        const char *bases[MAX_BASES];
+        int base_count = 0;
+        uint32_t bnc = ts_node_named_child_count(child);
+        for (uint32_t bi = 0; bi < bnc && base_count < MAX_BASES_MINUS_1; bi++) {
+            TSNode bc = ts_node_named_child(child, bi);
+            const char *bk = ts_node_type(bc);
+            char *text = NULL;
+            if (strcmp(bk, "identifier") == 0 || strcmp(bk, "generic_name") == 0 ||
+                strcmp(bk, "qualified_name") == 0) {
+                text = cbm_node_text(a, bc, source);
+            } else {
+                /* Nested wrapper — grab the first named grandchild. */
+                TSNode inner = ts_node_named_child(bc, 0);
+                if (!ts_node_is_null(inner)) {
+                    text = cbm_node_text(a, inner, source);
+                }
+            }
+            if (text && text[0]) {
+                /* Strip generic type arguments: "List<int>" → "List". */
+                char *angle = strchr(text, '<');
+                if (angle) {
+                    *angle = '\0';
+                }
+                bases[base_count++] = text;
+            }
+        }
+        if (base_count > 0) {
+            const char **result = (const char **)cbm_arena_alloc(
+                a, (base_count + NULL_TERM) * sizeof(const char *));
+            if (result) {
+                for (int j = 0; j < base_count; j++) {
+                    result[j] = bases[j];
+                }
+                result[base_count] = NULL;
+                return result;
+            }
+        }
+    }
+
     // Fallback: search for common base class node types as children
     static const char *base_types[] = {"superclass",
                                        "superinterfaces",

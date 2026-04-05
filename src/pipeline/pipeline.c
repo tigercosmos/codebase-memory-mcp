@@ -652,6 +652,23 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
                                            stat_mtime_ns(&fst), fst.st_size);
             }
         }
+
+        /* FTS5 backfill: populate nodes_fts with camelCase-split names.
+         * Contentless FTS5 requires the special 'delete-all' command instead of
+         * DELETE FROM to wipe prior rows (there's no underlying content table).
+         * Falls back to plain names if cbm_camel_split is unavailable (which
+         * shouldn't happen because we always register it, but we stay defensive). */
+        cbm_store_exec(hash_store, "INSERT INTO nodes_fts(nodes_fts) VALUES('delete-all');");
+        if (cbm_store_exec(
+                hash_store,
+                "INSERT INTO nodes_fts(rowid, name, qualified_name, label, file_path) "
+                "SELECT id, cbm_camel_split(name), qualified_name, label, file_path "
+                "FROM nodes;") != CBM_STORE_OK) {
+            cbm_store_exec(hash_store,
+                           "INSERT INTO nodes_fts(rowid, name, qualified_name, label, file_path) "
+                           "SELECT id, name, qualified_name, label, file_path FROM nodes;");
+        }
+
         cbm_store_close(hash_store);
         cbm_log_info("pass.timing", "pass", "persist_hashes", "files", itoa_buf(file_count));
     }

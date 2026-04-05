@@ -40,6 +40,7 @@ enum {
 #define SLEN(s) (sizeof(s) - 1)
 #include "mcp/mcp.h"
 #include "store/store.h"
+#include <sqlite3.h>
 #include "cypher/cypher.h"
 #include "pipeline/pipeline.h"
 #include "cli/cli.h"
@@ -263,13 +264,24 @@ static const tool_def_t TOOLS[] = {
 
     {"search_graph",
      "Search the code knowledge graph for functions, classes, routes, and variables. Use INSTEAD "
-     "OF grep/glob when finding code definitions, implementations, or relationships. Returns "
-     "precise results in one call.",
-     "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"},\"label\":{\"type\":"
-     "\"string\"},\"name_pattern\":{\"type\":\"string\"},\"qn_pattern\":{\"type\":\"string\"},"
-     "\"file_pattern\":{\"type\":\"string\"},\"relationship\":{\"type\":\"string\"},\"min_degree\":"
-     "{\"type\":\"integer\"},\"max_degree\":{\"type\":\"integer\"},\"exclude_entry_points\":{"
-     "\"type\":\"boolean\"},\"include_connected\":{\"type\":\"boolean\"},\"semantic_query\":{"
+     "OF grep/glob when finding code definitions, implementations, or relationships. Three search "
+     "modes: (1) query='update settings' for BM25 ranked full-text search with camelCase "
+     "splitting and structural label boosting — recommended for natural-language discovery; "
+     "(2) name_pattern='.*regex.*' for exact pattern matching; (3) semantic_query=[...] for "
+     "vector cosine search that bridges vocabulary (finds 'publish' when you search 'send'). "
+     "The three modes are independent and can be combined in a single call.",
+     "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"},"
+     "\"query\":{\"type\":\"string\",\"description\":\"Natural-language or keyword full-text "
+     "search using BM25 ranking. Tokens are split on whitespace; camelCase identifiers are "
+     "indexed as individual words (updateCloudClient → update, cloud, client). Results are "
+     "ranked with structural boosting: Functions/Methods +10, Routes +8, Classes/Interfaces +5. "
+     "Noise labels (File/Folder/Module/Variable) are filtered out. When provided, name_pattern "
+     "is ignored.\"},"
+     "\"label\":{\"type\":\"string\"},\"name_pattern\":{\"type\":\"string\"},\"qn_pattern\":{"
+     "\"type\":\"string\"},\"file_pattern\":{\"type\":\"string\"},"
+     "\"relationship\":{\"type\":\"string\"},\"min_degree\":{\"type\":\"integer\"},"
+     "\"max_degree\":{\"type\":\"integer\"},\"exclude_entry_points\":{\"type\":\"boolean\"},"
+     "\"include_connected\":{\"type\":\"boolean\"},\"semantic_query\":{"
      "\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"MUST be an ARRAY of "
      "keyword strings (e.g. [\\\"send\\\",\\\"pubsub\\\",\\\"publish\\\"]) — NOT a single string. "
      "Each keyword is scored independently via per-keyword min-cosine; results reflect functions "
@@ -1025,6 +1037,145 @@ static void enrich_connected(yyjson_mut_doc *doc, yyjson_mut_val *item, cbm_stor
     }
 }
 
+/* Build an FTS5 MATCH expression from a free-form query string by splitting
+ * on whitespace and joining the terms with OR.  Each token is also sanitized:
+ * anything that isn't alnum or underscore is dropped, so the caller can't
+ * inject FTS5 operators or double-quoted phrases.  Returns the number of
+ * tokens emitted (0 if the query contained no usable terms). */
+static int bm25_build_match(const char *query, char *out, size_t out_size) {
+    if (!query || !out || out_size < 2) {
+        return 0;
+    }
+    size_t pos = 0;
+    int tokens = 0;
+    const char *p = query;
+    while (*p) {
+        while (*p && !((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                       (*p >= '0' && *p <= '9') || *p == '_')) {
+            p++;
+        }
+        if (!*p) {
+            break;
+        }
+        const char *tok_start = p;
+        while (*p && ((*p >= 'a' && *p <= 'z') || (*p >= 'A' && *p <= 'Z') ||
+                      (*p >= '0' && *p <= '9') || *p == '_')) {
+            p++;
+        }
+        size_t tok_len = (size_t)(p - tok_start);
+        if (tok_len == 0) {
+            continue;
+        }
+        const char *sep = (tokens > 0) ? " OR " : "";
+        size_t sep_len = strlen(sep);
+        if (pos + sep_len + tok_len + 1 >= out_size) {
+            break; /* out of room — stop cleanly, keep what we have */
+        }
+        memcpy(out + pos, sep, sep_len);
+        pos += sep_len;
+        memcpy(out + pos, tok_start, tok_len);
+        pos += tok_len;
+        tokens++;
+    }
+    out[pos] = '\0';
+    return tokens;
+}
+
+/* Run the BM25 full-text search path and return the JSON result string.
+ * Returns NULL if FTS5 is unavailable or the query produced no usable tokens,
+ * in which case the caller falls back to the regex-based search path. */
+static char *bm25_search(cbm_store_t *store, const char *project, const char *query, int limit,
+                         int offset) {
+    sqlite3 *db = cbm_store_get_db(store);
+    if (!db) {
+        return NULL;
+    }
+    char fts_query[1024];
+    int tok_count = bm25_build_match(query, fts_query, sizeof(fts_query));
+    if (tok_count == 0) {
+        return NULL;
+    }
+
+    /* BM25 ranked query with structural label boosting.  bm25() returns a
+     * NEGATIVE score (lower = more relevant), so we subtract the boost to
+     * make high-value labels sort first.  File/Folder/Module/Variable are
+     * excluded entirely — agents rarely want those as discovery results. */
+    const char *sql =
+        "SELECT n.id, n.label, n.name, n.qualified_name, n.file_path, n.start_line, n.end_line, "
+        "       (bm25(nodes_fts) "
+        "        - CASE WHEN n.label IN ('Function','Method') THEN 10.0 "
+        "               WHEN n.label = 'Route' THEN 8.0 "
+        "               WHEN n.label IN ('Class','Interface','Type','Enum') THEN 5.0 "
+        "               ELSE 0.0 END) AS rank "
+        "FROM nodes_fts "
+        "JOIN nodes n ON n.id = nodes_fts.rowid "
+        "WHERE nodes_fts MATCH ?1 "
+        "  AND n.project = ?2 "
+        "  AND n.label NOT IN ('File','Folder','Module','Section','Variable','Project') "
+        "ORDER BY rank "
+        "LIMIT ?3 OFFSET ?4";
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+        return NULL;
+    }
+    sqlite3_bind_text(stmt, 1, fts_query, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, project, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 3, limit > 0 ? limit : 100);
+    sqlite3_bind_int(stmt, 4, offset > 0 ? offset : 0);
+
+    /* Count total hits (for pagination) in a separate cheap query. */
+    int total = 0;
+    {
+        const char *count_sql =
+            "SELECT COUNT(*) FROM nodes_fts JOIN nodes n ON n.id = nodes_fts.rowid "
+            "WHERE nodes_fts MATCH ?1 AND n.project = ?2 "
+            "  AND n.label NOT IN ('File','Folder','Module','Section','Variable','Project')";
+        sqlite3_stmt *cs = NULL;
+        if (sqlite3_prepare_v2(db, count_sql, -1, &cs, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(cs, 1, fts_query, -1, SQLITE_TRANSIENT);
+            sqlite3_bind_text(cs, 2, project, -1, SQLITE_TRANSIENT);
+            if (sqlite3_step(cs) == SQLITE_ROW) {
+                total = sqlite3_column_int(cs, 0);
+            }
+            sqlite3_finalize(cs);
+        }
+    }
+
+    yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
+    yyjson_mut_val *root = yyjson_mut_obj(doc);
+    yyjson_mut_doc_set_root(doc, root);
+    yyjson_mut_obj_add_int(doc, root, "total", total);
+    yyjson_mut_obj_add_str(doc, root, "search_mode", "bm25");
+
+    yyjson_mut_val *results = yyjson_mut_arr(doc);
+    int emitted = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW) {
+        yyjson_mut_val *item = yyjson_mut_obj(doc);
+        yyjson_mut_obj_add_strcpy(doc, item, "name",
+                                  (const char *)sqlite3_column_text(stmt, 2));
+        yyjson_mut_obj_add_strcpy(doc, item, "qualified_name",
+                                  (const char *)sqlite3_column_text(stmt, 3));
+        yyjson_mut_obj_add_strcpy(doc, item, "label",
+                                  (const char *)sqlite3_column_text(stmt, 1));
+        yyjson_mut_obj_add_strcpy(doc, item, "file_path",
+                                  (const char *)sqlite3_column_text(stmt, 4));
+        yyjson_mut_obj_add_int(doc, item, "start_line", sqlite3_column_int(stmt, 5));
+        yyjson_mut_obj_add_int(doc, item, "end_line", sqlite3_column_int(stmt, 6));
+        yyjson_mut_obj_add_real(doc, item, "rank", sqlite3_column_double(stmt, 7));
+        yyjson_mut_arr_add_val(results, item);
+        emitted++;
+    }
+    sqlite3_finalize(stmt);
+
+    yyjson_mut_obj_add_val(doc, root, "results", results);
+    yyjson_mut_obj_add_bool(doc, root, "has_more", total > offset + emitted);
+
+    char *json = yy_doc_to_str(doc);
+    yyjson_mut_doc_free(doc);
+    return json;
+}
+
 static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
     char *project = cbm_mcp_get_string_arg(args, "project");
     cbm_store_t *store = resolve_store(srv, project);
@@ -1035,6 +1186,25 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
         free(project);
         return not_indexed;
     }
+
+    /* BM25 path: if `query` is set, run FTS5 full-text search with ranking
+     * and return early.  The regex/vector path below is untouched for all
+     * other callers.  If FTS5 is unavailable or the query is empty after
+     * tokenization, fall through to the regex path. */
+    char *query = cbm_mcp_get_string_arg(args, "query");
+    if (query && query[0]) {
+        int q_limit = cbm_mcp_get_int_arg(args, "limit", 100);
+        int q_offset = cbm_mcp_get_int_arg(args, "offset", 0);
+        char *bm25_json = bm25_search(store, project, query, q_limit, q_offset);
+        if (bm25_json) {
+            free(query);
+            free(project);
+            char *result = cbm_mcp_text_result(bm25_json, false);
+            free(bm25_json);
+            return result;
+        }
+    }
+    free(query);
 
     char *label = cbm_mcp_get_string_arg(args, "label");
     char *name_pattern = cbm_mcp_get_string_arg(args, "name_pattern");

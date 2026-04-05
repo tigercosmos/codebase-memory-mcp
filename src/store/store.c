@@ -254,7 +254,32 @@ static int init_schema(cbm_store_t *s) {
                       "  updated_at TEXT NOT NULL"
                       ");";
 
-    return exec_sql(s, ddl);
+    int rc = exec_sql(s, ddl);
+    if (rc != CBM_STORE_OK) {
+        return rc;
+    }
+
+    /* FTS5 contentless virtual table for BM25 full-text search.
+     * Contentless (content='') means FTS5 stores only the inverted index,
+     * not a copy of the source text — required for camelCase tokenization
+     * because we feed it `cbm_camel_split(name)` at insert time but want
+     * queries to match against the split tokens, not the original.
+     * Fails silently if FTS5 is not compiled in (SQLITE_ENABLE_FTS5). */
+    {
+        char *fts_err = NULL;
+        int fts_rc = sqlite3_exec(
+            s->db,
+            "CREATE VIRTUAL TABLE IF NOT EXISTS nodes_fts USING fts5("
+            "  name, qualified_name, label, file_path,"
+            "  content='',"
+            "  tokenize='unicode61 remove_diacritics 2'"
+            ");",
+            NULL, NULL, &fts_err);
+        if (fts_rc != SQLITE_OK && fts_err) {
+            sqlite3_free(fts_err);
+        }
+    }
+    return CBM_STORE_OK;
 }
 
 static int create_user_indexes(cbm_store_t *s) {
@@ -299,6 +324,54 @@ static int configure_pragmas(cbm_store_t *s, bool in_memory) {
         rc = exec_sql(s, "PRAGMA mmap_size = 67108864;"); /* CBM_SZ_64 MB */
     }
     return rc;
+}
+
+/* ── camelCase splitter for FTS5 indexing ───────────────────────── */
+
+/* Emits the original identifier plus a space-separated split version, so FTS5's
+ * whitespace tokenizer produces both `updateCloudClient` (exact match) and the
+ * word tokens `update`, `cloud`, `client`.  Rules:
+ *   1. insert space before an uppercase letter preceded by a lowercase letter
+ *      ("updateCloud" → "update Cloud")
+ *   2. insert space before an uppercase letter preceded by another uppercase
+ *      but followed by a lowercase letter ("XMLParser" → "XML Parser", not
+ *      "X M L Parser")
+ * snake_case is already split by FTS5's unicode61 tokenizer on `_`. */
+enum { CAMEL_SPLIT_BUF = 2048 };
+static void sqlite_camel_split(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
+    (void)argc;
+    const char *input = (const char *)sqlite3_value_text(argv[0]);
+    if (!input || !input[0]) {
+        sqlite3_result_text(ctx, input ? input : "", -1, SQLITE_TRANSIENT);
+        return;
+    }
+    char buf[CAMEL_SPLIT_BUF];
+    int len = snprintf(buf, sizeof(buf), "%s ", input);
+    if (len < 0 || len >= (int)sizeof(buf)) {
+        /* Input too long — fall back to the original string unmodified. */
+        sqlite3_result_text(ctx, input, -1, SQLITE_TRANSIENT);
+        return;
+    }
+    for (int i = 0; input[i] && len < (int)sizeof(buf) - 2; i++) {
+        if (i > 0) {
+            bool split = false;
+            char curr = input[i];
+            char prev = input[i - 1];
+            char next = input[i + 1];
+            if (curr >= 'A' && curr <= 'Z' && prev >= 'a' && prev <= 'z') {
+                split = true;
+            } else if (curr >= 'A' && curr <= 'Z' && prev >= 'A' && prev <= 'Z' &&
+                       next >= 'a' && next <= 'z') {
+                split = true;
+            }
+            if (split) {
+                buf[len++] = ' ';
+            }
+        }
+        buf[len++] = input[i];
+    }
+    buf[len] = '\0';
+    sqlite3_result_text(ctx, buf, len, SQLITE_TRANSIENT);
 }
 
 /* ── REGEXP function for SQLite ──────────────────────────────────── */
@@ -428,6 +501,10 @@ static cbm_store_t *store_open_internal(const char *path, bool in_memory) {
     /* Int8 cosine similarity for vector search */
     sqlite3_create_function(s->db, "cbm_cosine_i8", ST_COL_2, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
                             NULL, sqlite_cosine_i8, NULL, NULL);
+    /* camelCase splitter for FTS5 BM25 indexing */
+    sqlite3_create_function(s->db, "cbm_camel_split", SKIP_ONE,
+                            SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL, sqlite_camel_split, NULL,
+                            NULL);
 
     if (configure_pragmas(s, in_memory) != CBM_STORE_OK || init_schema(s) != CBM_STORE_OK ||
         create_user_indexes(s) != CBM_STORE_OK) {
@@ -482,6 +559,9 @@ cbm_store_t *cbm_store_open_path_query(const char *db_path) {
                             sqlite_iregexp, NULL, NULL);
     sqlite3_create_function(s->db, "cbm_cosine_i8", ST_COL_2, SQLITE_UTF8 | SQLITE_DETERMINISTIC,
                             NULL, sqlite_cosine_i8, NULL, NULL);
+    sqlite3_create_function(s->db, "cbm_camel_split", SKIP_ONE,
+                            SQLITE_UTF8 | SQLITE_DETERMINISTIC, NULL, sqlite_camel_split, NULL,
+                            NULL);
 
     if (configure_pragmas(s, false) != CBM_STORE_OK) {
         sqlite3_close(s->db);
@@ -612,6 +692,10 @@ void cbm_store_close(cbm_store_t *s) {
 
 sqlite3 *cbm_store_get_db(cbm_store_t *s) {
     return s ? s->db : NULL;
+}
+
+int cbm_store_exec(cbm_store_t *s, const char *sql) {
+    return exec_sql(s, sql);
 }
 
 const char *cbm_store_error(cbm_store_t *s) {

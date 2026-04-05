@@ -17,6 +17,7 @@
 #include "sqlite_writer.h"
 #include "foundation/constants.h"
 #include "foundation/compat_thread.h"
+#include "foundation/profile.h"
 
 #include <stddef.h> // NULL
 #include <stdio.h>
@@ -26,6 +27,25 @@
 #include <stdbool.h>
 
 #define CBM_PAGE_SIZE 65536
+
+/* SQLite reserves the page containing the 1 GiB file offset (the "pending byte"
+ * used for file locking on Windows). This page MUST be skipped during allocation
+ * otherwise integrity_check reports "2nd reference to page N" because it marks
+ * this page as referenced before walking any tree.
+ *
+ * PENDING_BYTE = 0x40000000 = 1073741824 (1 GiB)
+ * PENDING_BYTE_PAGE = (PENDING_BYTE / page_size) + 1
+ *   64KB pages → page 16385
+ *   32KB pages → page 32769
+ *   16KB pages → page 65537
+ */
+#define CBM_PENDING_BYTE (0x40000000u)
+#define CBM_PENDING_BYTE_PAGE ((CBM_PENDING_BYTE / CBM_PAGE_SIZE) + 1)
+
+/* Skip the pending byte page if allocation lands on it. */
+static inline uint32_t cbm_skip_pending_byte(uint32_t pgno) {
+    return pgno == CBM_PENDING_BYTE_PAGE ? pgno + 1 : pgno;
+}
 #define SCHEMA_FORMAT 4
 #define FILE_FORMAT 1
 #define SQLITE_VERSION 3046000 // 3.46.0
@@ -467,7 +487,8 @@ static void pb_flush_leaf(PageBuilder *pb) {
     put_u16(pb->page + hdr + HDR_CONTENT_OFF, (uint16_t)pb->content_offset);
     pb->page[hdr + HDR_FRAGBYTES_OFF] = 0; // fragmented free bytes
 
-    // Write page to file
+    // Write page to file. Skip the pending byte page (SQLite reserved).
+    pb->next_page = cbm_skip_pending_byte(pb->next_page);
     uint32_t page_num = pb->next_page;
     long offset = (long)(page_num - SKIP_ONE) * CBM_PAGE_SIZE;
     (void)fseek(pb->fp, offset, SEEK_SET);
@@ -559,6 +580,7 @@ static int write_interior_page(PageBuilder *pb, uint8_t *page, int cell_count, i
                                uint32_t right_child_page, const PageRef *children,
                                int right_child_idx, bool is_index, PageRef **parents,
                                int parent_count, int *parent_cap) {
+    pb->next_page = cbm_skip_pending_byte(pb->next_page);
     uint32_t pnum = pb->next_page++;
     page[0] = is_index ? INTERIOR_INDEX_FLAG : INTERIOR_TABLE_FLAG;
     put_u16(page + HDR_FREEBLOCK_OFF, 0);
@@ -1009,6 +1031,7 @@ static uint32_t write_table_btree(FILE *fp, uint32_t *next_page, const uint8_t *
                                   bool first_is_page1) {
     if (count == 0) {
         // Empty table: write a single empty leaf page
+        *next_page = cbm_skip_pending_byte(*next_page);
         uint32_t pnum = (*next_page)++;
         uint8_t page[CBM_PAGE_SIZE];
         memset(page, 0, CBM_PAGE_SIZE);
@@ -1046,7 +1069,9 @@ static bool pb_promote_and_flush(PageBuilder *pb, uint8_t **cells, int *cell_len
     memcpy(pb->leaves[pb->leaf_count].sep_cell, cells[prev_idx], cell_lens[prev_idx]);
     pb->leaves[pb->leaf_count].sep_cell_len = cell_lens[prev_idx];
 
-    // Un-add the last cell
+    // Un-add the last cell — it's promoted to the interior separator.
+    // SQLite index B-tree interior cells are counted by integrity_check,
+    // so this cell exists in the interior page instead of the leaf.
     pb->cell_count--;
     pb->content_offset += cell_lens[prev_idx];
     pb->ptr_offset -= CELL_PTR_SIZE;
@@ -1057,6 +1082,7 @@ static bool pb_promote_and_flush(PageBuilder *pb, uint8_t **cells, int *cell_len
 
 // Write an empty index leaf page.
 static uint32_t write_empty_index_leaf(FILE *fp, uint32_t *next_page) {
+    *next_page = cbm_skip_pending_byte(*next_page);
     uint32_t pnum = (*next_page)++;
     uint8_t page[CBM_PAGE_SIZE];
     memset(page, 0, CBM_PAGE_SIZE);
@@ -1660,6 +1686,7 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
                         .token_vec_count = token_vec_count};
 
     // Phase 1: Data tables (streaming node + edge + vector + token_vector records)
+    CBM_PROF_START(t_data);
     uint32_t nodes_root;
     uint32_t edges_root;
     uint32_t vectors_root;
@@ -1669,14 +1696,17 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         (void)fclose(fp);
         return rc;
     }
+    CBM_PROF_END_N("write_db", "1_data_tables", t_data, node_count + edge_count);
 
     // Phase 2: Metadata tables (projects, file_hashes, summaries, sqlite_sequence)
+    CBM_PROF_START(t_meta);
     uint32_t projects_root;
     uint32_t file_hashes_root;
     uint32_t summaries_root;
     uint32_t sqlite_seq_root;
     write_metadata_tables(&w, &projects_root, &file_hashes_root, &summaries_root, &sqlite_seq_root);
     uint32_t next_page = w.next_page;
+    CBM_PROF_END("write_db", "2_metadata_tables", t_meta);
 
     // --- Build indexes (all sorted by key columns before writing) ---
 
@@ -1703,6 +1733,8 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         {edge_count, cmp_edge_by_src_tgt_type, NULL},
     };
 
+    // Phase 3: Parallel sort of 11 index permutations
+    CBM_PROF_START(t_sort);
     {
         cbm_thread_t st[TOTAL_SORT_THREADS];
         int nt = 0;
@@ -1720,7 +1752,10 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
             cbm_thread_join(&st[i]);
         }
     }
+    CBM_PROF_END_N("write_db", "3_parallel_sort_indexes", t_sort, node_count + edge_count);
 
+    // Phase 4: Build node index B-trees (SEQUENTIAL)
+    CBM_PROF_START(t_node_idx);
     uint32_t idx_nodes_label_root =
         build_node_index_sorted(fp, &next_page, nodes, node_count, nsorts[0].perm, ncol_label);
     uint32_t idx_nodes_name_root = build_node_index_sorted(fp, &next_page, nodes, node_count,
@@ -1735,9 +1770,10 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         (void)fclose(fp);
         return ERR_SORT_FAILED;
     }
+    CBM_PROF_END_N("write_db", "4_node_indexes_seq", t_node_idx, node_count * 4);
 
-    // --- Edge indexes (all sorted) ---
-
+    // Phase 5: Build edge index B-trees (SEQUENTIAL)
+    CBM_PROF_START(t_edge_idx);
     uint32_t idx_edges_source_root =
         build_edge_index_sorted(fp, &next_page, edges, edge_count, esorts[0].perm, ecell_source);
     uint32_t idx_edges_target_root = build_edge_index_sorted(
@@ -1762,6 +1798,7 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
         (void)fclose(fp);
         return ERR_SORT_FAILED;
     }
+    CBM_PROF_END_N("write_db", "5_edge_indexes_seq", t_edge_idx, edge_count * 7);
 
     // Autoindex for projects(name TEXT PK) — single text column
     uint32_t autoindex_projects_root;
@@ -1925,8 +1962,9 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
 
         // Write the 100-byte SQLite file header
         memcpy(page1, "SQLite format 3\000", 16);
-        /* Page size 65536 is encoded as 1 in the 2-byte header field */
-        put_u16(page1 + HDR_OFF_CBM_PAGE_SIZE, (uint16_t)SKIP_ONE);
+        /* Page size: 65536 is encoded as 1; all others stored directly */
+        put_u16(page1 + HDR_OFF_CBM_PAGE_SIZE,
+                CBM_PAGE_SIZE == 65536 ? (uint16_t)1 : (uint16_t)CBM_PAGE_SIZE);
         page1[HDR_OFF_WRITE_VERSION] = FILE_FORMAT;             // file format write version
         page1[HDR_OFF_READ_VERSION] = FILE_FORMAT;              // file format read version
         page1[HDR_OFF_RESERVED] = 0;                            // reserved space per page

@@ -107,7 +107,8 @@ FOUNDATION_SRCS = \
     src/foundation/compat_fs.c \
     src/foundation/compat_regex.c \
     src/foundation/mem.c \
-    src/foundation/diagnostics.c
+    src/foundation/diagnostics.c \
+    src/foundation/profile.c
 
 # Existing extraction C code (compiled from current location)
 EXTRACTION_SRCS = \
@@ -195,8 +196,8 @@ SIMHASH_SRCS = src/simhash/minhash.c
 # Semantic embedding module
 SEMANTIC_SRCS = src/semantic/semantic.c src/semantic/ast_profile.c
 
-# UniXcoder pretrained vectors (assembler blob)
-UNIXCODER_BLOB_SRC = vendored/unixcoder/code_vectors_blob.S
+# nomic-embed-code pretrained vectors (assembler blob)
+UNIXCODER_BLOB_SRC = vendored/nomic/code_vectors_blob.S
 
 # Traces module (new)
 TRACES_SRCS = src/traces/traces.c
@@ -418,9 +419,9 @@ $(BUILD_DIR)/test_lz4.o: $(CBM_DIR)/vendored/lz4/lz4.c | $(BUILD_DIR)
 $(BUILD_DIR)/test_lz4hc.o: $(CBM_DIR)/vendored/lz4/lz4hc.c | $(BUILD_DIR)
 	$(CC) -std=c11 -D_DEFAULT_SOURCE -g -O1 $(SANITIZE) -w -I$(CBM_DIR)/vendored/lz4 -c -o $@ $<
 
-# UniXcoder pretrained vector blob
+# nomic-embed-code pretrained vector blob
 UNIXCODER_OBJ = $(BUILD_DIR)/unixcoder_blob.o
-$(UNIXCODER_OBJ): $(UNIXCODER_BLOB_SRC) vendored/unixcoder/code_vectors.bin | $(BUILD_DIR)
+$(UNIXCODER_OBJ): $(UNIXCODER_BLOB_SRC) vendored/nomic/code_vectors.bin | $(BUILD_DIR)
 	$(AS) -o $@ $<
 
 OBJS_VENDORED_TEST = $(MIMALLOC_OBJ_TEST) $(SQLITE3_OBJ_TEST) $(TRE_OBJ_TEST) $(GRAMMAR_OBJS_TEST) $(TS_RUNTIME_OBJ_TEST) $(LSP_OBJ_TEST) $(PP_OBJ_TEST) $(MONGOOSE_OBJ_TEST) $(LZ4_OBJ_TEST) $(UNIXCODER_OBJ)

@@ -26,6 +26,7 @@ enum {
 #include "foundation/compat.h"
 #include "foundation/log.h"
 #include "foundation/dyn_array.h"
+#include "foundation/profile.h"
 #include <sqlite3.h>
 
 #include <stdatomic.h>
@@ -1158,6 +1159,12 @@ static int64_t remap_id(const int64_t *temp_to_final, int64_t max_temp_id, int64
 }
 
 /* Build dump-ready node array with sequential IDs. Populates temp_to_final mapping. */
+static int cmp_dump_vectors_by_id(const void *a, const void *b) {
+    int64_t da = ((const CBMDumpVector *)a)->node_id;
+    int64_t db = ((const CBMDumpVector *)b)->node_id;
+    return (da > db) - (da < db);
+}
+
 static CBMDumpNode *build_dump_nodes(cbm_gbuf_t *gb, int live_count, int64_t *temp_to_final,
                                      int64_t max_temp_id, int *out_count) {
     CBMDumpNode *dump_nodes =
@@ -1247,7 +1254,8 @@ int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
         return CBM_NOT_FOUND;
     }
 
-    /* Count live nodes (not deleted from QN index) */
+    /* Sub-phase: Count live nodes (not deleted from QN index) */
+    CBM_PROF_START(t_count);
     int live_count = 0;
     for (int i = 0; i < gb->nodes.count; i++) {
         cbm_gbuf_node_t *n = gb->nodes.items[i];
@@ -1255,8 +1263,10 @@ int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
             live_count++;
         }
     }
+    CBM_PROF_END_N("dump", "1_count_live_nodes", t_count, live_count);
 
-    /* Build temp→final ID mapping */
+    /* Sub-phase: Build temp→final ID mapping + dump_nodes array */
+    CBM_PROF_START(t_build_nodes);
     int64_t max_temp_id = gb->next_id;
     int64_t *temp_to_final = calloc((size_t)max_temp_id, sizeof(int64_t));
     if (!temp_to_final) {
@@ -1266,11 +1276,15 @@ int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
     int node_idx = 0;
     CBMDumpNode *dump_nodes =
         build_dump_nodes(gb, live_count, temp_to_final, max_temp_id, &node_idx);
+    CBM_PROF_END_N("dump", "2_build_dump_nodes", t_build_nodes, node_idx);
 
+    /* Sub-phase: Build dump_edges array with remapped IDs */
+    CBM_PROF_START(t_build_edges);
     int edge_idx = 0;
     char **url_paths = NULL;
     CBMDumpEdge *dump_edges =
         build_dump_edges(gb, temp_to_final, max_temp_id, &edge_idx, &url_paths);
+    CBM_PROF_END_N("dump", "3_build_dump_edges", t_build_edges, edge_idx);
 
     /* Generate ISO 8601 timestamp */
     time_t now = time(NULL);
@@ -1281,17 +1295,65 @@ int cbm_gbuf_dump_to_sqlite(cbm_gbuf_t *gb, const char *path) {
         snprintf(indexed_at, sizeof(indexed_at), "1970-01-01T00:00:00Z");
     }
 
-    /* Release lookup tables — no longer needed now that dump arrays are built.
-     * Frees hash tables (~200-400MB on large codebases) while keeping the
-     * raw node/edge data alive for cbm_write_db() to read via dump arrays. */
+    /* Sub-phase: Release lookup tables — frees 200-400MB on large codebases */
+    CBM_PROF_START(t_release_idx);
     release_gbuf_indexes(gb);
+    CBM_PROF_END("dump", "4_release_gbuf_indexes", t_release_idx);
 
+    /* Sub-phase: Remap + sort + dedup node_vectors for B-tree writer */
+    CBM_PROF_START(t_vec_remap);
+    /* Remap node_vectors IDs through temp_to_final (same as edges).
+     * temp_to_final maps gbuf node IDs → sequential dump IDs (1-based).
+     * Drop vectors whose gbuf ID has no mapping (node was filtered out). */
+    {
+        int remapped = 0;
+        int dropped = 0;
+        for (int i = 0; i < gb->dump_vector_count; i++) {
+            int64_t old_id = gb->dump_vectors[i].node_id;
+            int64_t new_id = (old_id > 0 && old_id < max_temp_id) ? temp_to_final[old_id] : 0;
+            if (new_id > 0) {
+                gb->dump_vectors[remapped] = gb->dump_vectors[i];
+                gb->dump_vectors[remapped].node_id = new_id;
+                remapped++;
+            } else {
+                dropped++;
+            }
+        }
+        if (dropped > 0) {
+            char r_buf[CBM_SZ_16], d_buf[CBM_SZ_16];
+            snprintf(r_buf, sizeof(r_buf), "%d", remapped);
+            snprintf(d_buf, sizeof(d_buf), "%d", dropped);
+            cbm_log_info("dump.vectors.remap", "remapped", r_buf, "dropped", d_buf);
+        }
+        gb->dump_vector_count = remapped;
+    }
+    /* Sort vectors by remapped node_id — B-tree writer requires ascending keys.
+     * Also deduplicate: parallel workers may store the same node_id twice. */
+    if (gb->dump_vector_count > 1) {
+        qsort(gb->dump_vectors, (size_t)gb->dump_vector_count, sizeof(CBMDumpVector),
+              cmp_dump_vectors_by_id);
+        /* Dedup: keep last occurrence of each node_id (latest vector wins) */
+        int deduped = 0;
+        for (int i = 0; i < gb->dump_vector_count; i++) {
+            if (i + 1 < gb->dump_vector_count &&
+                gb->dump_vectors[i].node_id == gb->dump_vectors[i + 1].node_id) {
+                continue; /* skip duplicate, keep the later one */
+            }
+            gb->dump_vectors[deduped++] = gb->dump_vectors[i];
+        }
+        gb->dump_vector_count = deduped;
+    }
+    CBM_PROF_END_N("dump", "5_vector_remap_sort", t_vec_remap, gb->dump_vector_count);
+
+    /* Sub-phase: Write SQLite DB file (B-tree writer) */
+    CBM_PROF_START(t_write_db);
     /* Write directly to final path — no .tmp + rename.
      * Callers must delete the old .db before calling this (reindex)
      * or ensure no file exists (first index). */
     int rc = cbm_write_db(path, gb->project, gb->root_path, indexed_at, dump_nodes, node_idx,
                           dump_edges, edge_idx, gb->dump_vectors, gb->dump_vector_count,
                           gb->dump_token_vecs, gb->dump_token_vec_count);
+    CBM_PROF_END_N("dump", "6_write_db_btree", t_write_db, node_idx + edge_idx);
 
     {
         char b1[CBM_SZ_16];

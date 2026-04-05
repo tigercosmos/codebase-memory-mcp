@@ -260,3 +260,33 @@ bool cbm_validate_shell_arg(const char *s) {
     }
     return true;
 }
+
+int cbm_json_escape(char *buf, int bufsize, const char *src) {
+    if (!buf || bufsize <= 0) return 0;
+    if (!src) { buf[0] = '\0'; return 0; }
+    int pos = 0;
+    for (int i = 0; src[i] && pos < bufsize - 1; i++) {
+        unsigned char c = (unsigned char)src[i];
+        if (c == '"' || c == '\\') {
+            if (pos + 2 > bufsize - 1) break;
+            buf[pos++] = '\\';
+            buf[pos++] = (char)c;
+        } else if (c == '\n') {
+            if (pos + 2 > bufsize - 1) break;
+            buf[pos++] = '\\'; buf[pos++] = 'n';
+        } else if (c == '\r') {
+            if (pos + 2 > bufsize - 1) break;
+            buf[pos++] = '\\'; buf[pos++] = 'r';
+        } else if (c == '\t') {
+            if (pos + 2 > bufsize - 1) break;
+            buf[pos++] = '\\'; buf[pos++] = 't';
+        } else if (c < 0x20) {
+            /* Other control chars: skip */
+            continue;
+        } else {
+            buf[pos++] = (char)c;
+        }
+    }
+    buf[pos] = '\0';
+    return pos;
+}

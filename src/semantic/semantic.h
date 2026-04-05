@@ -30,7 +30,7 @@
 /* ── Configuration ───────────────────────────────────────────────── */
 
 /* Random Indexing dimension. 256 is sufficient for <500K functions. */
-/* 768 = UniXcoder embedding dimension.  Matches PRETRAINED_DIM. */
+/* 768 = nomic-embed-code embedding dimension.  Matches PRETRAINED_DIM. */
 enum { CBM_SEM_DIM = 768 };
 
 /* Random Indexing: non-zero entries per sparse random vector. */
@@ -92,6 +92,11 @@ float cbm_sem_cosine(const cbm_sem_vec_t *a, const cbm_sem_vec_t *b);
  * Uses xxHash(token) as seed. Output has SEM_SPARSE_NNZE non-zeros. */
 void cbm_sem_random_index(const char *token, cbm_sem_vec_t *out);
 
+/* Eagerly initialize the pretrained token lookup map.
+ * Call this BEFORE dispatching parallel work that invokes cbm_sem_random_index,
+ * so the lazy init races are avoided entirely on the hot path. */
+void cbm_sem_ensure_ready(void);
+
 /* Normalize a vector to unit length in-place. */
 void cbm_sem_normalize(cbm_sem_vec_t *v);
 
@@ -135,6 +140,14 @@ cbm_sem_corpus_t *cbm_sem_corpus_new(void);
 
 /* Register a function's tokens in the corpus (for IDF counting). */
 void cbm_sem_corpus_add_doc(cbm_sem_corpus_t *corpus, const char **tokens, int count);
+
+/* Batch-build the corpus from pre-tokenized documents (PARALLEL variant).
+ * `all_tokens` layout: all_tokens[f * max_tokens_per_doc + t] = token pointer.
+ * `token_counts[f]` = number of tokens in document f.
+ * This replaces a loop of cbm_sem_corpus_add_doc() calls. */
+void cbm_sem_corpus_add_docs_batch(cbm_sem_corpus_t *corpus, char **all_tokens,
+                                    const int *token_counts, int doc_count,
+                                    int max_tokens_per_doc);
 
 /* Finalize: compute IDF, build enriched token vectors via co-occurrence. */
 void cbm_sem_corpus_finalize(cbm_sem_corpus_t *corpus);

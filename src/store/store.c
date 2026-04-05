@@ -59,6 +59,7 @@ enum {
 #include "store/store.h"
 #include "foundation/platform.h"
 #include "foundation/compat.h"
+#include "foundation/log.h"
 #include "foundation/compat_regex.h"
 
 #define XXH_INLINE_ALL
@@ -4704,11 +4705,19 @@ int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **ke
     sqlite3_bind_text(stmt, ST_COL_2, project, -1, SQLITE_STATIC);
     sqlite3_bind_int(stmt, ST_COL_3, fetch_limit);
 
+    {
+        char kw_buf[16], fl_buf[16];
+        snprintf(kw_buf, sizeof(kw_buf), "%d", actual_kw);
+        snprintf(fl_buf, sizeof(fl_buf), "%d", fetch_limit);
+        cbm_log_info("vector_search.exec", "kw_count", kw_buf, "fetch_limit", fl_buf, "project", project);
+    }
+
     cbm_vector_result_t *results = NULL;
     int count = 0;
     int cap = 0;
 
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
+    int step_rc;
+    while ((step_rc = sqlite3_step(stmt)) == SQLITE_ROW) {
         if (count >= cap) {
             int nc = cap < CBM_SZ_16 ? CBM_SZ_16 : cap * ST_COL_2;
             cbm_vector_result_t *grown = realloc(results, (size_t)nc * sizeof(cbm_vector_result_t));
@@ -4758,6 +4767,16 @@ int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **ke
         count++;
     }
 
+    if (step_rc != SQLITE_DONE) {
+        char rc_buf[16];
+        snprintf(rc_buf, sizeof(rc_buf), "%d", step_rc);
+        cbm_log_warn("vector_search.step_error", "rc", rc_buf, "msg", sqlite3_errmsg(s->db));
+    }
+    {
+        char cnt_buf[16];
+        snprintf(cnt_buf, sizeof(cnt_buf), "%d", count);
+        cbm_log_info("vector_search.done", "candidates", cnt_buf);
+    }
     sqlite3_finalize(stmt);
 
     /* Re-sort by min-score (SQL sorted by first keyword only) */

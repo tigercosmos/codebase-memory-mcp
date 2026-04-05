@@ -9,14 +9,19 @@
 #include "foundation/constants.h"
 #include "foundation/hash_table.h"
 #include "foundation/log.h"
+#include "foundation/profile.h"
+#include "foundation/platform.h"
+#include "foundation/compat_thread.h"
+#include "pipeline/worker_pool.h"
 #include "simhash/minhash.h"
-#include "unixcoder/code_vectors.h"
+#include "nomic/code_vectors.h"
 
 #define XXH_INLINE_ALL
 #include "xxhash/xxhash.h"
 
 #include <ctype.h>
 #include <math.h>
+#include <stdatomic.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -215,20 +220,46 @@ float cbm_sem_cosine(const cbm_sem_vec_t *a, const cbm_sem_vec_t *b) {
 
 /* Pretrained token lookup table — built lazily on first use. */
 static CBMHashTable *g_pretrained_map = NULL;
+static _Atomic int g_pretrained_ready = 0;
+static cbm_mutex_t g_pretrained_mtx;
+static _Atomic int g_pretrained_mtx_init = 0;
 
+/* Thread-safe lazy init of the pretrained token lookup map.
+ * Uses double-checked locking: fast path reads an atomic flag. */
 static void ensure_pretrained_map(void) {
-    if (g_pretrained_map) {
+    if (atomic_load_explicit(&g_pretrained_ready, memory_order_acquire)) {
         return;
     }
-    g_pretrained_map = cbm_ht_create(PRETRAINED_TOKEN_COUNT);
-    char idx_buf[CBM_SZ_16];
-    for (int i = 0; i < PRETRAINED_TOKEN_COUNT; i++) {
-        const char *tok = PRETRAINED_TOKENS[i];
-        if (tok && tok[0]) {
-            snprintf(idx_buf, sizeof(idx_buf), "%d", i);
-            cbm_ht_set(g_pretrained_map, strdup(tok), strdup(idx_buf));
+    /* First-time init of the mutex itself (also needs to be thread-safe) */
+    int expected = 0;
+    if (atomic_compare_exchange_strong_explicit(&g_pretrained_mtx_init, &expected, 1,
+                                                 memory_order_acq_rel, memory_order_acquire)) {
+        cbm_mutex_init(&g_pretrained_mtx);
+        atomic_store_explicit(&g_pretrained_mtx_init, 2, memory_order_release);
+    } else {
+        /* Spin until another thread finishes initializing the mutex */
+        while (atomic_load_explicit(&g_pretrained_mtx_init, memory_order_acquire) != 2) {
+            /* brief spin */
         }
     }
+    cbm_mutex_lock(&g_pretrained_mtx);
+    if (!atomic_load_explicit(&g_pretrained_ready, memory_order_acquire)) {
+        g_pretrained_map = cbm_ht_create(PRETRAINED_TOKEN_COUNT);
+        char idx_buf[CBM_SZ_16];
+        for (int i = 0; i < PRETRAINED_TOKEN_COUNT; i++) {
+            const char *tok = PRETRAINED_TOKENS[i];
+            if (tok && tok[0]) {
+                snprintf(idx_buf, sizeof(idx_buf), "%d", i);
+                cbm_ht_set(g_pretrained_map, strdup(tok), strdup(idx_buf));
+            }
+        }
+        atomic_store_explicit(&g_pretrained_ready, 1, memory_order_release);
+    }
+    cbm_mutex_unlock(&g_pretrained_mtx);
+}
+
+void cbm_sem_ensure_ready(void) {
+    ensure_pretrained_map();
 }
 
 void cbm_sem_random_index(const char *token, cbm_sem_vec_t *out) {
@@ -237,7 +268,7 @@ void cbm_sem_random_index(const char *token, cbm_sem_vec_t *out) {
         return;
     }
 
-    /* Try pretrained UniXcoder vector first (768d, trained on code). */
+    /* Try pretrained nomic-embed-code vector first (768d, distilled from 7B). */
     ensure_pretrained_map();
     const char *idx_str = cbm_ht_get(g_pretrained_map, token);
     if (idx_str) {
@@ -383,100 +414,726 @@ void cbm_sem_corpus_add_doc(cbm_sem_corpus_t *corpus, const char **tokens, int c
     free(seen);
 }
 
+/* ── Parallel corpus batch build ──────────────────────────────────── */
+/* Strategy:
+ *   Phase A (SEQUENTIAL): Scan all documents once to build the global
+ *     token_map (inserts unique tokens, assigns global IDs). This is
+ *     inherently sequential (hash table mutation), but much faster than
+ *     the current per-doc add_doc because we avoid the per-doc malloc of
+ *     the `seen` array and per-doc bookkeeping.
+ *   Phase B (PARALLEL): Each worker processes a chunk of docs, translates
+ *     tokens → global IDs via read-only token_map lookups, fills
+ *     doc_token_ids[d], and accumulates doc_freq contributions via atomics.
+ */
+
+typedef struct {
+    cbm_sem_corpus_t *corpus;
+    char **all_tokens;
+    const int *token_counts;
+    int max_tokens;
+    int doc_count;
+    _Atomic int *doc_freq_atomic; /* per-entry atomic counter (entry_count long) */
+    _Atomic int next_idx;
+} batch_resolve_ctx_t;
+
+static void batch_resolve_worker(int worker_id, void *ctx_ptr) {
+    (void)worker_id;
+    batch_resolve_ctx_t *bc = ctx_ptr;
+    /* Per-worker scratch for unique-per-doc tracking */
+    int local_seen_cap = 256;
+    int *seen = malloc((size_t)local_seen_cap * sizeof(int));
+
+    while (1) {
+        int start = atomic_fetch_add_explicit(&bc->next_idx, 64, memory_order_relaxed);
+        if (start >= bc->doc_count) break;
+        int end = start + 64;
+        if (end > bc->doc_count) end = bc->doc_count;
+
+        for (int d = start; d < end; d++) {
+            int count = bc->token_counts[d];
+            if (count <= 0) {
+                bc->corpus->doc_token_ids[d] = NULL;
+                bc->corpus->doc_token_counts[d] = 0;
+                continue;
+            }
+            if (count > local_seen_cap) {
+                local_seen_cap = count;
+                seen = realloc(seen, (size_t)local_seen_cap * sizeof(int));
+            }
+            int *ids = malloc((size_t)count * sizeof(int));
+            bc->corpus->doc_token_ids[d] = ids;
+            bc->corpus->doc_token_counts[d] = count;
+
+            int seen_count = 0;
+            char **tokens = &bc->all_tokens[d * bc->max_tokens];
+            for (int i = 0; i < count; i++) {
+                const char *idx_str = cbm_ht_get(bc->corpus->token_map, tokens[i]);
+                int tid = idx_str ? atoi(idx_str) : -1;
+                ids[i] = tid;
+                if (tid < 0) continue;
+                /* Unique-per-doc check for IDF */
+                bool is_new = true;
+                for (int j = 0; j < seen_count; j++) {
+                    if (seen[j] == tid) { is_new = false; break; }
+                }
+                if (is_new) {
+                    seen[seen_count++] = tid;
+                    atomic_fetch_add_explicit(&bc->doc_freq_atomic[tid], 1,
+                                              memory_order_relaxed);
+                }
+            }
+        }
+    }
+    free(seen);
+}
+
+void cbm_sem_corpus_add_docs_batch(cbm_sem_corpus_t *corpus, char **all_tokens,
+                                    const int *token_counts, int doc_count,
+                                    int max_tokens_per_doc) {
+    if (!corpus || !all_tokens || !token_counts || doc_count <= 0) {
+        return;
+    }
+
+    /* Phase A (SEQUENTIAL): Build token_map and allocate doc arrays.
+     * Hash table mutation can't be parallelized; strdup+insert is the cost. */
+    if (corpus->doc_cap < corpus->doc_count + doc_count) {
+        int new_cap = corpus->doc_count + doc_count;
+        corpus->doc_token_ids = realloc(corpus->doc_token_ids, (size_t)new_cap * sizeof(int *));
+        corpus->doc_token_counts =
+            realloc(corpus->doc_token_counts, (size_t)new_cap * sizeof(int));
+        corpus->doc_cap = new_cap;
+    }
+    int base_doc = corpus->doc_count;
+    corpus->doc_count += doc_count;
+
+    for (int d = 0; d < doc_count; d++) {
+        int count = token_counts[d];
+        char **tokens = &all_tokens[d * max_tokens_per_doc];
+        for (int i = 0; i < count; i++) {
+            /* Inserts token into token_map if new; we discard return here —
+             * Phase B will re-lookup in read-only mode to get the ID. */
+            (void)corpus_get_or_add(corpus, tokens[i]);
+        }
+    }
+
+    /* Phase B (PARALLEL): Resolve tokens → IDs and count doc_freq per entry.
+     * token_map is now read-only; each worker owns its doc range (no writes
+     * to shared state except atomic doc_freq counters). */
+    _Atomic int *doc_freq_atomic = calloc((size_t)corpus->entry_count, sizeof(_Atomic int));
+    if (!doc_freq_atomic) {
+        /* OOM fallback: sequential path. Roll back doc_count first since
+         * add_doc increments it itself. */
+        corpus->doc_count = base_doc;
+        for (int d = 0; d < doc_count; d++) {
+            int count = token_counts[d];
+            char **tokens = &all_tokens[d * max_tokens_per_doc];
+            cbm_sem_corpus_add_doc(corpus, (const char **)tokens, count);
+        }
+        return;
+    }
+
+    int worker_count = cbm_default_worker_count(false);
+    batch_resolve_ctx_t bc = {
+        .corpus = corpus,
+        .all_tokens = all_tokens,
+        .token_counts = token_counts,
+        .max_tokens = max_tokens_per_doc,
+        .doc_count = doc_count,
+        .doc_freq_atomic = doc_freq_atomic,
+    };
+    atomic_init(&bc.next_idx, 0);
+    /* Temporarily re-base doc arrays so workers write to base_doc..base_doc+doc_count */
+    corpus->doc_token_ids += base_doc;
+    corpus->doc_token_counts += base_doc;
+    cbm_parallel_for_opts_t opts = {.max_workers = worker_count, .force_pthreads = false};
+    cbm_parallel_for(worker_count, batch_resolve_worker, &bc, opts);
+    corpus->doc_token_ids -= base_doc;
+    corpus->doc_token_counts -= base_doc;
+
+    /* Phase C (SEQUENTIAL reduce): atomic counters → entries[].doc_freq */
+    for (int i = 0; i < corpus->entry_count; i++) {
+        corpus->entries[i].doc_freq +=
+            atomic_load_explicit(&doc_freq_atomic[i], memory_order_relaxed);
+    }
+    free(doc_freq_atomic);
+}
+
+/* ── Parallel corpus_finalize ─────────────────────────────────────── */
+/* Strategy:
+ *   1. Precompute base RI vectors into a shared array (eliminates ~333M
+ *      redundant cbm_sem_random_index calls on kernel-scale corpora).
+ *   2. Co-occurrence passes: partition TARGET tokens across workers so each
+ *      worker writes to a disjoint range of enriched_vec (zero contention).
+ *      Each worker still scans all documents but only accumulates for targets
+ *      in its range. Inner vector add is the parallelized work.
+ *   3. Normalize/blend loops are trivially parallel per-entry.
+ */
+
+/* Reverse index: for each token id, a list of (doc_id, position_in_doc) pairs.
+ * Built once, reused for both cooccur passes. Eliminates the O(num_chunks × doc_count)
+ * redundant outer scan in the old algorithm. */
+typedef struct {
+    int32_t doc_id;
+    int32_t pos;
+} cooccur_pos_t;
+
+typedef struct {
+    int *offsets;        /* offsets[entry_count + 1], prefix sum of occurrences */
+    cooccur_pos_t *flat; /* flat array of positions, total = offsets[entry_count] */
+} reverse_index_t;
+
+/* Tagged source vector: sparse (~30% of tokens, 8 inline nonzeros) or dense int8
+ * reference into PRETRAINED_VECTOR_BLOB (no copy). Dense path converts int8→float
+ * on the fly in the hot loop. Tested with both int8 and float32 blob storage
+ * formats — cooccur passes are memory-bandwidth-bound, so the int8 format (4x
+ * less source traffic) is equivalent in wall time despite the conversion cost,
+ * while saving 90 MB of binary size. */
+typedef struct {
+    uint8_t is_sparse;       /* 1 = sparse path, 0 = dense int8 reference */
+    uint8_t nnz;              /* number of nonzeros used in sparse path */
+    uint16_t _pad;
+    uint16_t indices[CBM_SEM_SPARSE_NNZE]; /* 8 * 2 = 16 bytes */
+    float values[CBM_SEM_SPARSE_NNZE];      /* 8 * 4 = 32 bytes */
+    const int8_t *dense_int8;                /* points into PRETRAINED_VECTOR_BLOB */
+} cbm_sem_src_entry_t;
+
+/* Inline helper: initialize a target vector from a sparse/dense source. */
+static inline void sem_target_init_from_src(cbm_sem_vec_t *dst,
+                                              const cbm_sem_src_entry_t *src) {
+    memset(dst, 0, sizeof(*dst));
+    if (src->is_sparse) {
+        for (int k = 0; k < src->nnz; k++) {
+            dst->v[src->indices[k]] = src->values[k];
+        }
+    } else {
+        const int8_t *s = src->dense_int8;
+        const float inv127 = 1.0f / 127.0f;
+        for (int d = 0; d < CBM_SEM_DIM; d++) {
+            dst->v[d] = inv127 * (float)s[d];
+        }
+    }
+}
+
+/* Inline helper: add weighted source into target.
+ * Sparse path: ~8 operations, ~48 bytes source memory traffic.
+ * Dense path: 768 mul-adds with int8→float conversion, ~768 bytes traffic. */
+static inline void sem_vec_add_src_scaled(cbm_sem_vec_t *dst,
+                                           const cbm_sem_src_entry_t *src, float scale) {
+    if (src->is_sparse) {
+        for (int k = 0; k < src->nnz; k++) {
+            dst->v[src->indices[k]] += scale * src->values[k];
+        }
+    } else {
+        const int8_t *s = src->dense_int8;
+        const float mul = scale * (1.0f / 127.0f);
+        for (int d = 0; d < CBM_SEM_DIM; d++) {
+            dst->v[d] += mul * (float)s[d];
+        }
+    }
+}
+
+/* Pass 1 context: uses sparse/int8 tagged sources (most memory-efficient). */
+typedef struct {
+    corpus_entry_t *entries;
+    const cbm_sem_src_entry_t *src_entries; /* sparse or int8-dense per token */
+    int **doc_token_ids;
+    const int *doc_token_counts;
+    const reverse_index_t *rev;
+    int doc_count;
+    int entry_count;
+    _Atomic int next_chunk;
+    int num_chunks;
+    int chunk_size;
+
+    /* Cache-blocked tiling parameters */
+    int tile_size; /* targets per L2-resident tile */
+} cooccur_sparse_ctx_t;
+
+static void cooccur_worker_sparse(int worker_id, void *ctx_ptr) {
+    (void)worker_id;
+    cooccur_sparse_ctx_t *cc = ctx_ptr;
+    while (1) {
+        int ci = atomic_fetch_add_explicit(&cc->next_chunk, 1, memory_order_relaxed);
+        if (ci >= cc->num_chunks) break;
+        int chunk_start = ci * cc->chunk_size;
+        int chunk_end = chunk_start + cc->chunk_size;
+        if (chunk_end > cc->entry_count) chunk_end = cc->entry_count;
+
+        /* Cache-blocked target tiling: process tile_size targets at a time so
+         * their vectors stay resident in L2 cache during their accumulation. */
+        for (int tile_start = chunk_start; tile_start < chunk_end;
+             tile_start += cc->tile_size) {
+            int tile_end = tile_start + cc->tile_size;
+            if (tile_end > chunk_end) tile_end = chunk_end;
+
+            for (int tid = tile_start; tid < tile_end; tid++) {
+                /* Init target from sparse/dense source */
+                sem_target_init_from_src(&cc->entries[tid].enriched_vec,
+                                          &cc->src_entries[tid]);
+                cbm_sem_vec_t *target = &cc->entries[tid].enriched_vec;
+
+                int occ_start = cc->rev->offsets[tid];
+                int occ_end = cc->rev->offsets[tid + 1];
+                for (int p = occ_start; p < occ_end; p++) {
+                    int d = cc->rev->flat[p].doc_id;
+                    int i = cc->rev->flat[p].pos;
+                    int *ids = cc->doc_token_ids[d];
+                    int len = cc->doc_token_counts[d];
+                    for (int w = -CBM_SEM_WINDOW; w <= CBM_SEM_WINDOW; w++) {
+                        if (w == 0) continue;
+                        int j = i + w;
+                        if (j < 0 || j >= len) continue;
+                        int nid = ids[j];
+                        if (nid < 0) continue;
+                        float weight = 1.0f / (float)abs(w);
+                        sem_vec_add_src_scaled(target, &cc->src_entries[nid], weight);
+                    }
+                }
+            }
+        }
+    }
+}
+
+/* Pass 2 (RRI) context: uses int8-quantized pass1 vectors as source.
+ * Pass1 outputs are dense float32 post-normalization, values in [-1,1].
+ * We quantize to int8 once (×127) to cut source memory traffic 4x. */
+typedef struct {
+    corpus_entry_t *entries;
+    const int8_t *pass1_q;  /* [entry_count × CBM_SEM_DIM] int8 quantized pass1 */
+    int **doc_token_ids;
+    const int *doc_token_counts;
+    const reverse_index_t *rev;
+    int doc_count;
+    int entry_count;
+    _Atomic int next_chunk;
+    int num_chunks;
+    int chunk_size;
+    int tile_size;
+} cooccur_int8_ctx_t;
+
+static inline void sem_vec_add_int8_scaled(cbm_sem_vec_t *dst, const int8_t *src,
+                                             float scale) {
+    const float mul = scale * (1.0f / 127.0f);
+    for (int d = 0; d < CBM_SEM_DIM; d++) {
+        dst->v[d] += mul * (float)src[d];
+    }
+}
+
+static void cooccur_worker_int8(int worker_id, void *ctx_ptr) {
+    (void)worker_id;
+    cooccur_int8_ctx_t *cc = ctx_ptr;
+    while (1) {
+        int ci = atomic_fetch_add_explicit(&cc->next_chunk, 1, memory_order_relaxed);
+        if (ci >= cc->num_chunks) break;
+        int chunk_start = ci * cc->chunk_size;
+        int chunk_end = chunk_start + cc->chunk_size;
+        if (chunk_end > cc->entry_count) chunk_end = cc->entry_count;
+
+        for (int tile_start = chunk_start; tile_start < chunk_end;
+             tile_start += cc->tile_size) {
+            int tile_end = tile_start + cc->tile_size;
+            if (tile_end > chunk_end) tile_end = chunk_end;
+
+            for (int tid = tile_start; tid < tile_end; tid++) {
+                /* RRI pass 2 starts from zero (no self-init) */
+                memset(&cc->entries[tid].enriched_vec, 0, sizeof(cbm_sem_vec_t));
+                cbm_sem_vec_t *target = &cc->entries[tid].enriched_vec;
+
+                int occ_start = cc->rev->offsets[tid];
+                int occ_end = cc->rev->offsets[tid + 1];
+                for (int p = occ_start; p < occ_end; p++) {
+                    int d = cc->rev->flat[p].doc_id;
+                    int i = cc->rev->flat[p].pos;
+                    int *ids = cc->doc_token_ids[d];
+                    int len = cc->doc_token_counts[d];
+                    for (int w = -CBM_SEM_WINDOW; w <= CBM_SEM_WINDOW; w++) {
+                        if (w == 0) continue;
+                        int j = i + w;
+                        if (j < 0 || j >= len) continue;
+                        int nid = ids[j];
+                        if (nid < 0) continue;
+                        float weight = 1.0f / (float)abs(w);
+                        sem_vec_add_int8_scaled(target,
+                                                 &cc->pass1_q[(size_t)nid * CBM_SEM_DIM],
+                                                 weight);
+                    }
+                }
+            }
+        }
+    }
+}
+
+typedef struct {
+    corpus_entry_t *entries;
+    int entry_count;
+    _Atomic int next_idx;
+} norm_ctx_t;
+
+static void normalize_worker(int worker_id, void *ctx_ptr) {
+    (void)worker_id;
+    norm_ctx_t *nc = ctx_ptr;
+    while (1) {
+        int start = atomic_fetch_add_explicit(&nc->next_idx, 256, memory_order_relaxed);
+        if (start >= nc->entry_count) break;
+        int end = start + 256;
+        if (end > nc->entry_count) end = nc->entry_count;
+        for (int i = start; i < end; i++) {
+            cbm_sem_normalize(&nc->entries[i].enriched_vec);
+        }
+    }
+}
+
+typedef struct {
+    corpus_entry_t *entries;
+    const cbm_sem_vec_t *pass1;
+    int entry_count;
+    _Atomic int next_idx;
+} blend_ctx_t;
+
+static void blend_worker(int worker_id, void *ctx_ptr) {
+    (void)worker_id;
+    blend_ctx_t *bc = ctx_ptr;
+    while (1) {
+        int start = atomic_fetch_add_explicit(&bc->next_idx, 256, memory_order_relaxed);
+        if (start >= bc->entry_count) break;
+        int end = start + 256;
+        if (end > bc->entry_count) end = bc->entry_count;
+        for (int i = start; i < end; i++) {
+            cbm_sem_normalize(&bc->entries[i].enriched_vec);
+            for (int d = 0; d < CBM_SEM_DIM; d++) {
+                bc->entries[i].enriched_vec.v[d] =
+                    0.7f * bc->pass1[i].v[d] + 0.3f * bc->entries[i].enriched_vec.v[d];
+            }
+        }
+    }
+}
+
+typedef struct {
+    corpus_entry_t *entries;
+    cbm_sem_src_entry_t *src_entries;
+    int entry_count;
+    _Atomic int next_idx;
+} src_build_ctx_t;
+
+/* Build one src_entry for a token: dense float32 reference if in nomic vocab,
+ * sparse inline representation otherwise. Collisions in the sparse hash are
+ * merged and zeros filtered so the final representation is exactly the same
+ * mathematical vector that the old dense path produced. */
+static void build_src_entry(const char *token, cbm_sem_src_entry_t *out) {
+    memset(out, 0, sizeof(*out));
+    if (!token) {
+        out->is_sparse = 1;
+        out->nnz = 0;
+        return;
+    }
+    /* Dense path: direct int8 pointer into pretrained blob (zero-copy). */
+    const char *idx_str = cbm_ht_get(g_pretrained_map, token);
+    if (idx_str) {
+        int idx = atoi(idx_str);
+        if (idx >= 0 && idx < PRETRAINED_TOKEN_COUNT) {
+            out->is_sparse = 0;
+            out->dense_int8 = pretrained_vec_at(idx);
+            return;
+        }
+    }
+    /* Sparse path: compute 8 hash positions with collision merging. */
+    out->is_sparse = 1;
+    uint16_t tmp_idx[CBM_SEM_SPARSE_NNZE];
+    float tmp_val[CBM_SEM_SPARSE_NNZE];
+    int count = 0;
+    uint64_t seed = XXH3_64bits(token, strlen(token));
+    for (int i = 0; i < CBM_SEM_SPARSE_NNZE; i++) {
+        uint64_t h = XXH3_64bits_withSeed(&i, sizeof(i), seed + RI_SEED_BASE);
+        int pos = (int)(h % CBM_SEM_DIM);
+        float sign = (h & 1) ? 1.0f : -1.0f;
+        /* Merge collisions */
+        int found = -1;
+        for (int j = 0; j < count; j++) {
+            if (tmp_idx[j] == (uint16_t)pos) { found = j; break; }
+        }
+        if (found >= 0) {
+            tmp_val[found] += sign;
+        } else {
+            tmp_idx[count] = (uint16_t)pos;
+            tmp_val[count] = sign;
+            count++;
+        }
+    }
+    /* Filter zeros */
+    int nnz = 0;
+    for (int j = 0; j < count; j++) {
+        if (tmp_val[j] != 0.0f) {
+            out->indices[nnz] = tmp_idx[j];
+            out->values[nnz] = tmp_val[j];
+            nnz++;
+        }
+    }
+    out->nnz = (uint8_t)nnz;
+}
+
+static void src_build_worker(int worker_id, void *ctx_ptr) {
+    (void)worker_id;
+    src_build_ctx_t *sc = ctx_ptr;
+    while (1) {
+        int start = atomic_fetch_add_explicit(&sc->next_idx, 256, memory_order_relaxed);
+        if (start >= sc->entry_count) break;
+        int end = start + 256;
+        if (end > sc->entry_count) end = sc->entry_count;
+        for (int i = start; i < end; i++) {
+            build_src_entry(sc->entries[i].token, &sc->src_entries[i]);
+        }
+    }
+}
+
+/* Quantize pass1 float vectors to int8 (× 127) for use as pass2 source.
+ * Input vectors are unit-normalized, so values are in [-1, 1] → int8 preserves
+ * ~99% precision. 4x less memory traffic for pass2. */
+typedef struct {
+    const corpus_entry_t *entries;
+    int8_t *pass1_q;
+    int entry_count;
+    _Atomic int next_idx;
+} pass1_quant_ctx_t;
+
+static void pass1_quantize_worker(int worker_id, void *ctx_ptr) {
+    (void)worker_id;
+    pass1_quant_ctx_t *qc = ctx_ptr;
+    while (1) {
+        int start = atomic_fetch_add_explicit(&qc->next_idx, 128, memory_order_relaxed);
+        if (start >= qc->entry_count) break;
+        int end = start + 128;
+        if (end > qc->entry_count) end = qc->entry_count;
+        for (int i = start; i < end; i++) {
+            const cbm_sem_vec_t *src = &qc->entries[i].enriched_vec;
+            int8_t *dst = &qc->pass1_q[(size_t)i * CBM_SEM_DIM];
+            for (int d = 0; d < CBM_SEM_DIM; d++) {
+                float v = src->v[d] * 127.0f;
+                if (v > 127.0f) v = 127.0f;
+                if (v < -127.0f) v = -127.0f;
+                dst[d] = (int8_t)(v >= 0 ? v + 0.5f : v - 0.5f);
+            }
+        }
+    }
+}
+
+/* Build reverse index: token_id → list of (doc_id, position) pairs.
+ * SEQUENTIAL (fast: just pointer arithmetic + flat array fill). */
+static reverse_index_t *build_reverse_index(cbm_sem_corpus_t *corpus) {
+    reverse_index_t *rev = calloc(1, sizeof(reverse_index_t));
+    if (!rev) return NULL;
+    /* Phase A: count occurrences per token */
+    int *counts = calloc((size_t)(corpus->entry_count + 1), sizeof(int));
+    if (!counts) { free(rev); return NULL; }
+    long total = 0;
+    for (int d = 0; d < corpus->doc_count; d++) {
+        int *ids = corpus->doc_token_ids[d];
+        int len = corpus->doc_token_counts[d];
+        for (int i = 0; i < len; i++) {
+            int tid = ids[i];
+            if (tid >= 0 && tid < corpus->entry_count) {
+                counts[tid]++;
+                total++;
+            }
+        }
+    }
+    /* Phase B: exclusive prefix sum → offsets[] */
+    rev->offsets = malloc((size_t)(corpus->entry_count + 1) * sizeof(int));
+    if (!rev->offsets) { free(counts); free(rev); return NULL; }
+    int running = 0;
+    for (int t = 0; t < corpus->entry_count; t++) {
+        rev->offsets[t] = running;
+        running += counts[t];
+        counts[t] = 0; /* reuse as per-token fill cursor */
+    }
+    rev->offsets[corpus->entry_count] = running;
+    /* Phase C: fill flat array */
+    rev->flat = malloc((size_t)total * sizeof(cooccur_pos_t));
+    if (!rev->flat) { free(rev->offsets); free(counts); free(rev); return NULL; }
+    for (int d = 0; d < corpus->doc_count; d++) {
+        int *ids = corpus->doc_token_ids[d];
+        int len = corpus->doc_token_counts[d];
+        for (int i = 0; i < len; i++) {
+            int tid = ids[i];
+            if (tid >= 0 && tid < corpus->entry_count) {
+                int slot = rev->offsets[tid] + counts[tid]++;
+                rev->flat[slot].doc_id = (int32_t)d;
+                rev->flat[slot].pos = (int32_t)i;
+            }
+        }
+    }
+    free(counts);
+    return rev;
+}
+
+static void free_reverse_index(reverse_index_t *rev) {
+    if (!rev) return;
+    free(rev->offsets);
+    free(rev->flat);
+    free(rev);
+}
+
 void cbm_sem_corpus_finalize(cbm_sem_corpus_t *corpus) {
     if (!corpus || corpus->finalized) {
         return;
     }
 
-    /* Initialize base random index vectors for each token */
-    for (int i = 0; i < corpus->entry_count; i++) {
-        cbm_sem_random_index(corpus->entries[i].token, &corpus->entries[i].enriched_vec);
+    /* Eager init before parallel dispatch to avoid lazy-init races */
+    ensure_pretrained_map();
+
+    int worker_count = cbm_default_worker_count(false);
+    cbm_parallel_for_opts_t opts = {.max_workers = worker_count, .force_pthreads = false};
+
+    /* Finer chunks = better load balancing for skewed token distributions.
+     * 32x more chunks than workers: rare chunks finish fast, workers then
+     * steal from popular chunks that contain hot tokens. */
+    int num_chunks = worker_count * 32;
+    if (num_chunks > corpus->entry_count) num_chunks = corpus->entry_count;
+    if (num_chunks < 1) num_chunks = 1;
+    int chunk_size = (corpus->entry_count + num_chunks - 1) / num_chunks;
+
+    /* Sub-phase 0: Build reverse index (token → occurrences) — SEQUENTIAL but fast. */
+    CBM_PROF_START(t_rev_idx);
+    reverse_index_t *rev = build_reverse_index(corpus);
+    CBM_PROF_END_N("corpus_finalize", "0_reverse_index_seq", t_rev_idx, corpus->entry_count);
+    if (!rev) {
+        corpus->finalized = true;
+        return;
     }
 
-    /* Co-occurrence pass: for each document, accumulate neighbor vectors */
-    for (int d = 0; d < corpus->doc_count; d++) {
-        int *ids = corpus->doc_token_ids[d];
-        int len = corpus->doc_token_counts[d];
-        for (int i = 0; i < len; i++) {
-            if (ids[i] < 0) {
-                continue;
-            }
-            cbm_sem_vec_t *target = &corpus->entries[ids[i]].enriched_vec;
-            /* Add neighbor vectors within window */
-            for (int w = -CBM_SEM_WINDOW; w <= CBM_SEM_WINDOW; w++) {
-                if (w == 0) {
-                    continue;
-                }
-                int j = i + w;
-                if (j < 0 || j >= len || ids[j] < 0) {
-                    continue;
-                }
-                float weight = 1.0f / (float)abs(w); /* closer = more influence */
-                cbm_sem_vec_t neighbor_ri;
-                cbm_sem_random_index(corpus->entries[ids[j]].token, &neighbor_ri);
-                cbm_sem_vec_add_scaled(target, &neighbor_ri, weight);
-            }
-        }
+    /* Sub-phase 1: Build src_entries[] — sparse/dense-int8 tagged sources (PARALLEL).
+     * Replaces the old dense float base_ri[]. Out-of-vocab tokens use sparse inline
+     * representation (8 nonzeros). Nomic-vocab tokens reference pretrained int8
+     * directly (no copy). ~40x less memory for sparse, ~4x less for dense vs float. */
+    CBM_PROF_START(t_src_build);
+    cbm_sem_src_entry_t *src_entries =
+        calloc((size_t)corpus->entry_count, sizeof(cbm_sem_src_entry_t));
+    if (!src_entries) {
+        free_reverse_index(rev);
+        corpus->finalized = true;
+        return;
     }
-
-    /* Normalize after first pass */
-    for (int i = 0; i < corpus->entry_count; i++) {
-        cbm_sem_normalize(&corpus->entries[i].enriched_vec);
-    }
-
-    /* Reflective Random Indexing (RRI): second co-occurrence pass.
-     * Save first-pass vectors, reset to zero, then re-accumulate using
-     * the first-pass vectors as index vectors.  This captures second-order
-     * co-occurrence.  Cohen & Widdows 2009. */
     {
-        /* Save first-pass enriched vectors */
-        cbm_sem_vec_t *pass1 = malloc((size_t)corpus->entry_count * sizeof(cbm_sem_vec_t));
-        if (pass1) {
-            for (int i = 0; i < corpus->entry_count; i++) {
-                pass1[i] = corpus->entries[i].enriched_vec;
-                memset(&corpus->entries[i].enriched_vec, 0, sizeof(cbm_sem_vec_t));
-            }
+        src_build_ctx_t sc = {
+            .entries = corpus->entries,
+            .src_entries = src_entries,
+            .entry_count = corpus->entry_count,
+        };
+        atomic_init(&sc.next_idx, 0);
+        cbm_parallel_for(worker_count, src_build_worker, &sc, opts);
+    }
+    CBM_PROF_END_N("corpus_finalize", "1_src_build_parallel", t_src_build,
+                   corpus->entry_count);
 
-            /* Second pass: use pass1 vectors as index vectors */
-            for (int d = 0; d < corpus->doc_count; d++) {
-                int *ids = corpus->doc_token_ids[d];
-                int len = corpus->doc_token_counts[d];
-                for (int i = 0; i < len; i++) {
-                    if (ids[i] < 0) {
-                        continue;
-                    }
-                    cbm_sem_vec_t *target = &corpus->entries[ids[i]].enriched_vec;
-                    for (int w = -CBM_SEM_WINDOW; w <= CBM_SEM_WINDOW; w++) {
-                        if (w == 0) {
-                            continue;
-                        }
-                        int j = i + w;
-                        if (j < 0 || j >= len || ids[j] < 0) {
-                            continue;
-                        }
-                        float weight = 1.0f / (float)abs(w);
-                        cbm_sem_vec_add_scaled(target, &pass1[ids[j]], weight);
-                    }
-                }
-            }
+    /* Cache-blocked target tiling: tile_size targets stay resident in L2 during
+     * their accumulation. Each cbm_sem_vec_t is 3KB, so ~40 targets ≈ 120KB fits
+     * in L1 on most platforms and L2 comfortably. */
+    int tile_size = 40;
 
-            /* Blend: final = 0.7 × pass1 + 0.3 × pass2 (preserve pass1 signal) */
-            for (int i = 0; i < corpus->entry_count; i++) {
-                cbm_sem_normalize(&corpus->entries[i].enriched_vec);
-                for (int d = 0; d < CBM_SEM_DIM; d++) {
-                    corpus->entries[i].enriched_vec.v[d] =
-                        0.7f * pass1[i].v[d] + 0.3f * corpus->entries[i].enriched_vec.v[d];
-                }
-            }
-            free(pass1);
+    /* Sub-phase 2: Co-occurrence pass 1 (PARALLEL, sparse+int8 sources).
+     * For 80% of tokens (out-of-vocab), inner add is just 8 scalar updates.
+     * For 20% dense tokens, inner add reads int8 directly from pretrained blob.
+     * Reverse index iteration = zero wasted outer scan. */
+    CBM_PROF_START(t_cooc1);
+    {
+        cooccur_sparse_ctx_t cc = {
+            .entries = corpus->entries,
+            .src_entries = src_entries,
+            .doc_token_ids = corpus->doc_token_ids,
+            .doc_token_counts = corpus->doc_token_counts,
+            .rev = rev,
+            .doc_count = corpus->doc_count,
+            .entry_count = corpus->entry_count,
+            .num_chunks = num_chunks,
+            .chunk_size = chunk_size,
+            .tile_size = tile_size,
+        };
+        atomic_init(&cc.next_chunk, 0);
+        cbm_parallel_for(worker_count, cooccur_worker_sparse, &cc, opts);
+    }
+    CBM_PROF_END_N("corpus_finalize", "2_cooccur_pass1_sparse", t_cooc1, corpus->doc_count);
+
+    /* Sub-phase 3: Normalize pass 1 (PARALLEL per-entry). */
+    CBM_PROF_START(t_norm1);
+    {
+        norm_ctx_t nc = {.entries = corpus->entries, .entry_count = corpus->entry_count};
+        atomic_init(&nc.next_idx, 0);
+        cbm_parallel_for(worker_count, normalize_worker, &nc, opts);
+    }
+    CBM_PROF_END_N("corpus_finalize", "3_normalize_pass1_parallel", t_norm1, corpus->entry_count);
+
+    /* Sub-phase 4a: Quantize pass1 to int8 for RRI (PARALLEL).
+     * Pass1 values are in [-1, 1] after normalization — int8 with scale 127
+     * preserves ~99% precision and cuts pass2 memory traffic 4x. */
+    CBM_PROF_START(t_quant);
+    int8_t *pass1_q = malloc((size_t)corpus->entry_count * CBM_SEM_DIM * sizeof(int8_t));
+    if (pass1_q) {
+        pass1_quant_ctx_t qc = {
+            .entries = corpus->entries,
+            .pass1_q = pass1_q,
+            .entry_count = corpus->entry_count,
+        };
+        atomic_init(&qc.next_idx, 0);
+        cbm_parallel_for(worker_count, pass1_quantize_worker, &qc, opts);
+    }
+    CBM_PROF_END_N("corpus_finalize", "4a_quantize_pass1_parallel", t_quant,
+                   corpus->entry_count);
+
+    /* Also save float pass1 for the final blend step. */
+    cbm_sem_vec_t *pass1 = malloc((size_t)corpus->entry_count * sizeof(cbm_sem_vec_t));
+    if (pass1) {
+        for (int i = 0; i < corpus->entry_count; i++) {
+            pass1[i] = corpus->entries[i].enriched_vec;
         }
     }
 
-    /* Final normalization */
-    for (int i = 0; i < corpus->entry_count; i++) {
-        cbm_sem_normalize(&corpus->entries[i].enriched_vec);
+    /* Sub-phase 4b: RRI pass 2 (PARALLEL, int8 source). */
+    CBM_PROF_START(t_rri);
+    if (pass1_q) {
+        cooccur_int8_ctx_t cc = {
+            .entries = corpus->entries,
+            .pass1_q = pass1_q,
+            .doc_token_ids = corpus->doc_token_ids,
+            .doc_token_counts = corpus->doc_token_counts,
+            .rev = rev,
+            .doc_count = corpus->doc_count,
+            .entry_count = corpus->entry_count,
+            .num_chunks = num_chunks,
+            .chunk_size = chunk_size,
+            .tile_size = tile_size,
+        };
+        atomic_init(&cc.next_chunk, 0);
+        cbm_parallel_for(worker_count, cooccur_worker_int8, &cc, opts);
     }
+    CBM_PROF_END_N("corpus_finalize", "4b_rri_pass2_int8", t_rri, corpus->doc_count);
 
+    /* Sub-phase 5: Blend pass1 + pass2 (PARALLEL per-entry).
+     * final = 0.7 * pass1 + 0.3 * normalize(pass2) */
+    CBM_PROF_START(t_blend);
+    if (pass1) {
+        blend_ctx_t bc = {
+            .entries = corpus->entries,
+            .pass1 = pass1,
+            .entry_count = corpus->entry_count,
+        };
+        atomic_init(&bc.next_idx, 0);
+        cbm_parallel_for(worker_count, blend_worker, &bc, opts);
+        free(pass1);
+    }
+    free(pass1_q);
+    CBM_PROF_END_N("corpus_finalize", "5_blend_parallel", t_blend, corpus->entry_count);
+
+    /* Sub-phase 6: Final normalization (PARALLEL per-entry). */
+    CBM_PROF_START(t_final_norm);
+    {
+        norm_ctx_t nc = {.entries = corpus->entries, .entry_count = corpus->entry_count};
+        atomic_init(&nc.next_idx, 0);
+        cbm_parallel_for(worker_count, normalize_worker, &nc, opts);
+    }
+    CBM_PROF_END_N("corpus_finalize", "6_normalize_final_parallel", t_final_norm,
+                   corpus->entry_count);
+
+    free(src_entries);
+    free_reverse_index(rev);
     corpus->finalized = true;
 }
 
@@ -613,6 +1270,20 @@ float cbm_sem_combined_score(const cbm_sem_func_t *a, const cbm_sem_func_t *b,
     if (!a || !b || !cfg) {
         return 0.0f;
     }
+
+    /* Short-circuit: if MinHash Jaccard is already above the SIMILAR_TO threshold,
+     * the pass_similarity pipeline already emitted a SIMILAR_TO edge for this pair.
+     * Returning 0 here avoids flooding top-k with cross-service copy-paste boilerplate
+     * (logging_middleware, shared push/pull handlers) that SIMILAR_TO already covers,
+     * freeing the edge budget for true semantic leaps (vocabulary-bridged relations). */
+    if (a->has_minhash && b->has_minhash) {
+        double early_j = cbm_minhash_jaccard((const cbm_minhash_t *)a->minhash,
+                                             (const cbm_minhash_t *)b->minhash);
+        if (early_j >= CBM_MINHASH_JACCARD_THRESHOLD) {
+            return 0.0f;
+        }
+    }
+
     float score = 0.0f;
 
     /* Signal 1: TF-IDF sparse cosine */
@@ -670,8 +1341,19 @@ float cbm_sem_combined_score(const cbm_sem_func_t *a, const cbm_sem_func_t *b,
     float sp_score = small_cosine(a->struct_profile, b->struct_profile, SP_DIMS);
     score += cfg->w_struct_profile * sp_score;
 
-    /* Signal 6: Module proximity (multiplier, not additive) */
+    /* Signal 6: Module proximity (multiplier, not additive).
+     * Proximity returns [1.0, 1.10] — a same-file/same-dir boost for ranking.
+     * Clamp the final product to [0, 1] so the output stays within valid
+     * cosine-similarity range.  Without the clamp, a 0.95 base × 1.10 proximity
+     * would emit a 1.045 score which violates the semantic of "similarity" and
+     * breaks downstream consumers that expect a normalized value. */
     score *= cbm_sem_proximity(a->file_path, b->file_path);
+    if (score > 1.0f) {
+        score = 1.0f;
+    }
+    if (score < 0.0f) {
+        score = 0.0f;
+    }
 
     return score;
 }

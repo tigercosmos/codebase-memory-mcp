@@ -37,6 +37,8 @@ enum {
 #include "foundation/log.h"
 #include "foundation/slab_alloc.h"
 #include "foundation/mem.h"
+#include "foundation/str_util.h"
+#include "foundation/profile.h"
 #include "foundation/compat_regex.h"
 #include "cbm.h"
 #include "simhash/minhash.h"
@@ -554,21 +556,23 @@ int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
                      itoa_log((int)(worker_budget / ((size_t)CBM_SZ_1K * CBM_SZ_1K))));
     }
 
-    /* Ensure extraction library is initialized */
+    /* Sub-phase: Ensure extraction library is initialized */
+    CBM_PROF_START(t_init);
     cbm_init();
 
-    /* Slab allocator for tree-sitter (thread-safe via TLS).
-     * Safe: extract_worker frees TSTree via cbm_free_tree() before
-     * cbm_slab_reset_thread(), so no live tree pointers cross slab boundaries. */
+    /* Slab allocator for tree-sitter (thread-safe via TLS). */
     cbm_slab_install();
+    CBM_PROF_END("parallel_extract", "1_init_libs", t_init);
 
-    /* Sort files by descending size for tail-latency reduction */
+    /* Sub-phase: Sort files by descending size for tail-latency reduction */
+    CBM_PROF_START(t_sort);
     file_sort_entry_t *sorted = malloc(file_count * sizeof(file_sort_entry_t));
     for (int i = 0; i < file_count; i++) {
         sorted[i].idx = i;
         sorted[i].size = files[i].size;
     }
     qsort(sorted, file_count, sizeof(file_sort_entry_t), compare_by_size_desc);
+    CBM_PROF_END_N("parallel_extract", "2_sort_files", t_sort, file_count);
 
     /* Allocate per-worker state (cache-line aligned via posix_memalign) */
     extract_worker_state_t *workers = NULL;
@@ -594,11 +598,14 @@ int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
     atomic_init(&ec.next_worker_id, 0);
     atomic_init(&ec.next_file_idx, 0);
 
-    /* Dispatch workers */
+    /* Sub-phase: Dispatch workers (parse + extract per file, PARALLEL) */
+    CBM_PROF_START(t_dispatch);
     cbm_parallel_for_opts_t opts = {.max_workers = worker_count, .force_pthreads = false};
     cbm_parallel_for(worker_count, extract_worker, &ec, opts);
+    CBM_PROF_END_N("parallel_extract", "3_dispatch_workers_parallel", t_dispatch, file_count);
 
-    /* Merge all local gbufs into main gbuf */
+    /* Sub-phase: Merge all local gbufs into main gbuf (SEQUENTIAL, gbuf not thread-safe) */
+    CBM_PROF_START(t_merge);
     int total_nodes = 0;
     int total_errors = 0;
     for (int i = 0; i < worker_count; i++) {
@@ -609,6 +616,7 @@ int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
             cbm_gbuf_free(workers[i].local_gbuf);
         }
     }
+    CBM_PROF_END_N("parallel_extract", "4_merge_gbufs_seq", t_merge, total_nodes);
 
     cbm_aligned_free(workers);
     free(sorted);
@@ -703,9 +711,10 @@ int cbm_build_registry_from_cache(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t
             const cbm_gbuf_node_t *source_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
 
             if (source_node && target) {
+                char esc_ln[CBM_SZ_128];
+                cbm_json_escape(esc_ln, sizeof(esc_ln), imp->local_name ? imp->local_name : "");
                 char imp_props[CBM_SZ_256];
-                snprintf(imp_props, sizeof(imp_props), "{\"local_name\":\"%s\"}",
-                         imp->local_name ? imp->local_name : "");
+                snprintf(imp_props, sizeof(imp_props), "{\"local_name\":\"%s\"}", esc_ln);
                 cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, target->id, "IMPORTS", imp_props);
                 imports_edges++;
             }
@@ -771,19 +780,25 @@ static void sanitize_expr(char *expr_buf, const char *expr) {
 
 /* Format one call arg as JSON. Returns snprintf result. */
 static int format_call_arg(char *buf, size_t bufsize, const CBMCallArg *a, const char *expr) {
+    char esc_k[CBM_SZ_128], esc_e[CBM_SZ_128], esc_v[CBM_SZ_128];
+    cbm_json_escape(esc_e, sizeof(esc_e), expr);
     if (a->keyword && a->value) {
+        cbm_json_escape(esc_k, sizeof(esc_k), a->keyword);
+        cbm_json_escape(esc_v, sizeof(esc_v), a->value);
         return snprintf(buf, bufsize, "{\"i\":%d,\"k\":\"%s\",\"e\":\"%s\",\"v\":\"%s\"}", a->index,
-                        a->keyword, expr, a->value);
+                        esc_k, esc_e, esc_v);
     }
     if (a->keyword) {
-        return snprintf(buf, bufsize, "{\"i\":%d,\"k\":\"%s\",\"e\":\"%s\"}", a->index, a->keyword,
-                        expr);
+        cbm_json_escape(esc_k, sizeof(esc_k), a->keyword);
+        return snprintf(buf, bufsize, "{\"i\":%d,\"k\":\"%s\",\"e\":\"%s\"}", a->index, esc_k,
+                        esc_e);
     }
     if (a->value) {
-        return snprintf(buf, bufsize, "{\"i\":%d,\"e\":\"%s\",\"v\":\"%s\"}", a->index, expr,
-                        a->value);
+        cbm_json_escape(esc_v, sizeof(esc_v), a->value);
+        return snprintf(buf, bufsize, "{\"i\":%d,\"e\":\"%s\",\"v\":\"%s\"}", a->index, esc_e,
+                        esc_v);
     }
-    return snprintf(buf, bufsize, "{\"i\":%d,\"e\":\"%s\"}", a->index, expr);
+    return snprintf(buf, bufsize, "{\"i\":%d,\"e\":\"%s\"}", a->index, esc_e);
 }
 
 static size_t append_args_json(char *buf, size_t bufsize, size_t pos, const CBMCall *call) {
@@ -868,9 +883,9 @@ static const char *find_route_path_in_args(const CBMCall *call, const char **out
 /* Build props JSON, append args, close brace, emit edge. */
 static void finalize_and_emit(cbm_gbuf_t *gbuf, int64_t src_id, int64_t tgt_id,
                               const char *edge_type, char *props, int n, const CBMCall *call) {
-    if (n > 0 && (size_t)n < sizeof(props) - PP_ESC_SPACE) {
+    if (n > 0 && (size_t)n < CBM_SZ_2K - PP_ESC_SPACE) {
         size_t pos = append_args_json(props, CBM_SZ_2K, (size_t)n, call);
-        if (pos < sizeof(props) - SKIP_ONE) {
+        if (pos < CBM_SZ_2K - SKIP_ONE) {
             props[pos] = '}';
             props[pos + SKIP_ONE] = '\0';
         }
@@ -912,9 +927,12 @@ static void emit_http_async_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t
 
     int64_t route_id = build_service_route(gbuf, arg, method, broker, svc);
 
+    char esc_c[CBM_SZ_256], esc_a[CBM_SZ_256];
+    cbm_json_escape(esc_c, sizeof(esc_c), call->callee_name);
+    cbm_json_escape(esc_a, sizeof(esc_a), arg);
     char props[CBM_SZ_2K];
     int n = snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"url_path\":\"%s\"",
-                     call->callee_name, arg);
+                     esc_c, esc_a);
     if (method) {
         n += snprintf(props + n, sizeof(props) - (size_t)n, ",\"method\":\"%s\"", method);
     }
@@ -928,9 +946,12 @@ static void emit_http_async_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t
 static void emit_config_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
                              const cbm_gbuf_node_t *target, const CBMCall *call,
                              const cbm_resolution_t *res, const char *arg) {
+    char esc_c[CBM_SZ_256], esc_k[CBM_SZ_256];
+    cbm_json_escape(esc_c, sizeof(esc_c), call->callee_name);
+    cbm_json_escape(esc_k, sizeof(esc_k), arg ? arg : "");
     char props[CBM_SZ_2K];
     int n = snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"key\":\"%s\",\"confidence\":%.2f",
-                     call->callee_name, arg ? arg : "", res->confidence);
+                     esc_c, esc_k, res->confidence);
     finalize_and_emit(gbuf, source->id, target->id, "CONFIGURES", props, n, call);
 }
 
@@ -938,10 +959,12 @@ static void emit_config_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
 static void emit_normal_calls_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
                                    const cbm_gbuf_node_t *target, const CBMCall *call,
                                    const cbm_resolution_t *res) {
+    char esc_c[CBM_SZ_256];
+    cbm_json_escape(esc_c, sizeof(esc_c), call->callee_name);
     char props[CBM_SZ_2K];
     int n = snprintf(props, sizeof(props),
                      "{\"callee\":\"%s\",\"confidence\":%.2f,\"strategy\":\"%s\",\"candidates\":%d",
-                     call->callee_name, res->confidence, res->strategy ? res->strategy : "unknown",
+                     esc_c, res->confidence, res->strategy ? res->strategy : "unknown",
                      res->candidate_count);
     finalize_and_emit(gbuf, source->id, target->id, "CALLS", props, n, call);
 }
@@ -1044,10 +1067,12 @@ static void detect_url_in_args(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
         snprintf(route_qn, sizeof(route_qn), "__route__ANY__%s", norm);
         int64_t route_id = cbm_gbuf_upsert_node(gbuf, "Route", norm, route_qn, "", 0, 0,
                                                 "{\"source\":\"arg_url\"}");
+        char esc_c[CBM_SZ_256], esc_n[CBM_SZ_256];
+        cbm_json_escape(esc_c, sizeof(esc_c), call->callee_name);
+        cbm_json_escape(esc_n, sizeof(esc_n), norm);
         char eprops[CBM_SZ_512];
         snprintf(eprops, sizeof(eprops),
-                 "{\"callee\":\"%s\",\"url_path\":\"%s\",\"via\":\"arg_url\"}", call->callee_name,
-                 norm);
+                 "{\"callee\":\"%s\",\"url_path\":\"%s\",\"via\":\"arg_url\"}", esc_c, esc_n);
         cbm_gbuf_insert_edge(gbuf, source->id, route_id, "HTTP_CALLS", eprops);
         break;
     }
@@ -1406,10 +1431,15 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
     };
     atomic_init(&rc.next_file_idx, 0);
 
+    /* Sub-phase: Dispatch resolve workers (per-file call/usage resolution, PARALLEL) */
+    CBM_PROF_START(t_resolve_dispatch);
     cbm_parallel_for_opts_t opts = {.max_workers = worker_count, .force_pthreads = false};
     cbm_parallel_for(worker_count, resolve_worker, &rc, opts);
+    CBM_PROF_END_N("parallel_resolve", "1_dispatch_workers_parallel", t_resolve_dispatch,
+                   file_count);
 
-    /* Merge all local edge bufs into main gbuf */
+    /* Sub-phase: Merge all local edge bufs into main gbuf (SEQUENTIAL) */
+    CBM_PROF_START(t_resolve_merge);
     int total_calls = 0;
     int total_usages = 0;
     int total_semantic = 0;
@@ -1422,6 +1452,8 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
             cbm_gbuf_free(workers[i].local_edge_buf);
         }
     }
+    CBM_PROF_END_N("parallel_resolve", "2_merge_edge_bufs_seq", t_resolve_merge,
+                   total_calls + total_usages);
 
     cbm_aligned_free(workers);
 

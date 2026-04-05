@@ -270,8 +270,11 @@ static const tool_def_t TOOLS[] = {
      "\"file_pattern\":{\"type\":\"string\"},\"relationship\":{\"type\":\"string\"},\"min_degree\":"
      "{\"type\":\"integer\"},\"max_degree\":{\"type\":\"integer\"},\"exclude_entry_points\":{"
      "\"type\":\"boolean\"},\"include_connected\":{\"type\":\"boolean\"},\"semantic_query\":{"
-     "\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"Keywords for semantic "
-     "vector search (requires moderate/full index mode)\"},\"limit\":{\"type\":"
+     "\"type\":\"array\",\"items\":{\"type\":\"string\"},\"description\":\"MUST be an ARRAY of "
+     "keyword strings (e.g. [\\\"send\\\",\\\"pubsub\\\",\\\"publish\\\"]) — NOT a single string. "
+     "Each keyword is scored independently via per-keyword min-cosine; results reflect functions "
+     "that score well on ALL keywords. Requires moderate/full index mode. Results appear in the "
+     "'semantic_results' field (separate from 'results').\"},\"limit\":{\"type\":"
      "\"integer\",\"description\":\"Max results. Default: "
      "unlimited\"},\"offset\":{\"type\":\"integer\",\"default\":0}},\"required\":[\"project\"]}"},
 
@@ -1101,13 +1104,19 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
     yyjson_mut_obj_add_val(doc, root, "results", results);
     yyjson_mut_obj_add_bool(doc, root, "has_more", out.total > offset + out.count);
 
-    /* Semantic vector search: parse semantic_query array and run vector search */
+    /* Semantic vector search: parse semantic_query array and run vector search.
+     * Strict validation: if the key is present it MUST be an array of strings.
+     * A plain string (e.g. "send pubsub publish") is rejected with a clear error
+     * so callers notice the mistake instead of silently getting an unranked list. */
+    bool sq_type_error = false;
     {
         yyjson_doc *args_doc = yyjson_read(args, strlen(args), 0);
         yyjson_val *args_root = args_doc ? yyjson_doc_get_root(args_doc) : NULL;
-        yyjson_val *sq_arr = args_root ? yyjson_obj_get(args_root, "semantic_query") : NULL;
-        if (sq_arr && yyjson_is_arr(sq_arr)) {
-            int kw_count = (int)yyjson_arr_size(sq_arr);
+        yyjson_val *sq_val = args_root ? yyjson_obj_get(args_root, "semantic_query") : NULL;
+        if (sq_val && !yyjson_is_arr(sq_val)) {
+            sq_type_error = true;
+        } else if (sq_val) {
+            int kw_count = (int)yyjson_arr_size(sq_val);
             if (kw_count > 0) {
                 enum { MAX_KW = 32 };
                 const char *keywords[MAX_KW];
@@ -1118,7 +1127,7 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
                 size_t kw_max = 0;
                 yyjson_val *kw_val;
                 int ki = 0;
-                yyjson_arr_foreach(sq_arr, kw_idx, kw_max, kw_val) {
+                yyjson_arr_foreach(sq_val, kw_idx, kw_max, kw_val) {
                     if (ki < kw_count && yyjson_is_str(kw_val)) {
                         keywords[ki++] = yyjson_get_str(kw_val);
                     }
@@ -1149,6 +1158,23 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
         if (args_doc) {
             yyjson_doc_free(args_doc);
         }
+    }
+
+    if (sq_type_error) {
+        yyjson_mut_doc_free(doc);
+        cbm_store_search_free(&out);
+        free(project);
+        free(label);
+        free(name_pattern);
+        free(qn_pattern);
+        free(file_pattern);
+        free(relationship);
+        return cbm_mcp_text_result(
+            "semantic_query must be an array of keyword strings, e.g. "
+            "[\"send\",\"pubsub\",\"publish\"] — not a single string. Split your query "
+            "into individual keywords; each is scored independently via per-keyword "
+            "min-cosine.",
+            true);
     }
 
     char *json = yy_doc_to_str(doc);

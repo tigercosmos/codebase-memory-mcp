@@ -990,12 +990,7 @@ cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
 #ifdef __APPLE__
     snprintf(path, sizeof(path), "%s/Library/Application Support/Zed", home_dir);
 #elif defined(_WIN32)
-    {
-        const char *zed_local = cbm_app_local_dir();
-        if (zed_local) {
-            snprintf(path, sizeof(path), "%s/Zed", zed_local);
-        }
-    }
+    snprintf(path, sizeof(path), "%s/AppData/Local/Zed", home_dir);
 #else
     snprintf(path, sizeof(path), "%s/.config/zed", home_dir);
 #endif
@@ -1014,6 +1009,9 @@ cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
 #ifdef __APPLE__
     snprintf(path, sizeof(path),
              "%s/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code", home_dir);
+#elif defined(_WIN32)
+    snprintf(path, sizeof(path), "%s/AppData/Roaming/Code/User/globalStorage/kilocode.kilo-code",
+             home_dir);
 #else
     snprintf(path, sizeof(path), "%s/.config/Code/User/globalStorage/kilocode.kilo-code", home_dir);
 #endif
@@ -1021,6 +1019,8 @@ cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
 
 #ifdef __APPLE__
     snprintf(path, sizeof(path), "%s/Library/Application Support/Code/User", home_dir);
+#elif defined(_WIN32)
+    snprintf(path, sizeof(path), "%s/AppData/Roaming/Code/User", home_dir);
 #else
     snprintf(path, sizeof(path), "%s/.config/Code/User", home_dir);
 #endif

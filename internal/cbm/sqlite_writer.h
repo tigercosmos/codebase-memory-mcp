@@ -28,14 +28,14 @@ typedef struct {
 } CBMDumpEdge;
 
 typedef struct {
-    int64_t node_id;       // final sequential ID (matches nodes.id)
+    int64_t node_id; // final sequential ID (matches nodes.id)
     const char *project;
     const uint8_t *vector; // int8-quantized vector blob
     int vector_len;        // length in bytes (e.g. 256 for d=256)
 } CBMDumpVector;
 
 typedef struct {
-    int64_t id;            // sequential ID (1..T)
+    int64_t id; // sequential ID (1..T)
     const char *project;
     const char *token;     // the token string
     const uint8_t *vector; // int8-quantized enriched RI vector blob

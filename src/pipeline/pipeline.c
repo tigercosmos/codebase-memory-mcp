@@ -410,47 +410,42 @@ static void cbm_pipeline_extract_infra_routes(cbm_gbuf_t *gbuf, const cbm_file_i
 }
 
 /* Run decorator_tags, configlink, and route matching passes. */
+typedef void (*predump_pass_fn)(cbm_pipeline_ctx_t *);
+static void predump_deco(cbm_pipeline_ctx_t *ctx) {
+    cbm_pipeline_pass_decorator_tags(ctx->gbuf, ctx->project_name);
+}
+static void predump_route(cbm_pipeline_ctx_t *ctx) {
+    cbm_pipeline_create_route_nodes(ctx->gbuf);
+}
+static void predump_sim(cbm_pipeline_ctx_t *ctx) {
+    cbm_pipeline_pass_similarity(ctx);
+}
+static void predump_sem(cbm_pipeline_ctx_t *ctx) {
+    cbm_pipeline_pass_semantic_edges(ctx);
+}
+static void predump_cfg(cbm_pipeline_ctx_t *ctx) {
+    cbm_pipeline_pass_configlink(ctx);
+}
+
 static void run_predump_passes(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx) {
+    static const struct {
+        predump_pass_fn fn;
+        const char *name;
+        bool moderate_only; /* true = skip in fast mode */
+    } passes[] = {
+        {predump_deco, "decorator_tags", false}, {predump_cfg, "configlink", false},
+        {predump_route, "route_match", false},   {predump_sim, "similarity", true},
+        {predump_sem, "semantic_edges", true},
+    };
+    enum { PREDUMP_PASS_COUNT = 5 };
     struct timespec t;
-    if (!check_cancel(p)) {
+    for (int i = 0; i < PREDUMP_PASS_COUNT && !check_cancel(p); i++) {
+        if (passes[i].moderate_only && p->mode > CBM_MODE_MODERATE) {
+            continue;
+        }
         cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-        CBM_PROF_START(t_deco);
-        cbm_pipeline_pass_decorator_tags(p->gbuf, p->project_name);
-        CBM_PROF_END("pipeline", "pass_decorator_tags", t_deco);
-        cbm_log_info("pass.timing", "pass", "decorator_tags", "elapsed_ms",
-                     itoa_buf((int)elapsed_ms(t)));
-    }
-    if (!check_cancel(p)) {
-        cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-        CBM_PROF_START(t_cfg);
-        cbm_pipeline_pass_configlink(ctx);
-        CBM_PROF_END("pipeline", "pass_configlink", t_cfg);
-        cbm_log_info("pass.timing", "pass", "configlink", "elapsed_ms",
-                     itoa_buf((int)elapsed_ms(t)));
-    }
-    if (!check_cancel(p)) {
-        cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-        CBM_PROF_START(t_route);
-        cbm_pipeline_create_route_nodes(p->gbuf);
-        CBM_PROF_END("pipeline", "pass_route_match", t_route);
-        cbm_log_info("pass.timing", "pass", "route_match", "elapsed_ms",
-                     itoa_buf((int)elapsed_ms(t)));
-    }
-    /* SIMILAR_TO + SEMANTICALLY_RELATED edges only in moderate/full modes */
-    if (!check_cancel(p) && p->mode <= CBM_MODE_MODERATE) {
-        cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-        CBM_PROF_START(t_sim);
-        cbm_pipeline_pass_similarity(ctx);
-        CBM_PROF_END("pipeline", "pass_similarity_total", t_sim);
-        cbm_log_info("pass.timing", "pass", "similarity", "elapsed_ms",
-                     itoa_buf((int)elapsed_ms(t)));
-    }
-    if (!check_cancel(p) && p->mode <= CBM_MODE_MODERATE) {
-        cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-        CBM_PROF_START(t_sem);
-        cbm_pipeline_pass_semantic_edges(ctx);
-        CBM_PROF_END("pipeline", "pass_semantic_edges_total", t_sem);
-        cbm_log_info("pass.timing", "pass", "semantic_edges", "elapsed_ms",
+        passes[i].fn(ctx);
+        cbm_log_info("pass.timing", "pass", passes[i].name, "elapsed_ms",
                      itoa_buf((int)elapsed_ms(t)));
     }
 }
@@ -659,11 +654,10 @@ static int dump_and_persist_hashes(cbm_pipeline_t *p, const cbm_file_info_t *fil
          * Falls back to plain names if cbm_camel_split is unavailable (which
          * shouldn't happen because we always register it, but we stay defensive). */
         cbm_store_exec(hash_store, "INSERT INTO nodes_fts(nodes_fts) VALUES('delete-all');");
-        if (cbm_store_exec(
-                hash_store,
-                "INSERT INTO nodes_fts(rowid, name, qualified_name, label, file_path) "
-                "SELECT id, cbm_camel_split(name), qualified_name, label, file_path "
-                "FROM nodes;") != CBM_STORE_OK) {
+        if (cbm_store_exec(hash_store,
+                           "INSERT INTO nodes_fts(rowid, name, qualified_name, label, file_path) "
+                           "SELECT id, cbm_camel_split(name), qualified_name, label, file_path "
+                           "FROM nodes;") != CBM_STORE_OK) {
             cbm_store_exec(hash_store,
                            "INSERT INTO nodes_fts(rowid, name, qualified_name, label, file_path) "
                            "SELECT id, name, qualified_name, label, file_path FROM nodes;");
@@ -718,6 +712,74 @@ static int run_githistory(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx) {
 
 /* ── Pipeline run ────────────────────────────────────────────────── */
 
+/* Run tests + git history. Returns 0 on success. */
+static int run_tests_and_history(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
+                                 const cbm_file_info_t *files, int file_count) {
+    struct timespec t;
+    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+    CBM_PROF_START(t_tests);
+    int rc = cbm_pipeline_pass_tests(ctx, files, file_count);
+    CBM_PROF_END_N("pipeline", "pass_tests", t_tests, file_count);
+    cbm_log_info("pass.timing", "pass", "tests", "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
+    if (rc == 0 && !check_cancel(p)) {
+        CBM_PROF_START(t_gh);
+        rc = run_githistory(p, ctx);
+        CBM_PROF_END("pipeline", "pass_githistory", t_gh);
+    }
+    if (check_cancel(p)) {
+        return CBM_NOT_FOUND;
+    }
+    return rc;
+}
+
+/* Run tests, git history, predump passes, and dump+persist. */
+static int run_post_extraction(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
+                               const cbm_file_info_t *files, int file_count) {
+    int rc = run_tests_and_history(p, ctx, files, file_count);
+    if (rc != 0) {
+        return rc;
+    }
+
+    CBM_PROF_START(t_predump);
+    run_predump_passes(p, ctx);
+    CBM_PROF_END("pipeline", "3_predump_passes_total", t_predump);
+
+    if (!check_cancel(p)) {
+        struct timespec t;
+        CBM_PROF_START(t_dump);
+        rc = dump_and_persist_hashes(p, files, file_count, &t);
+        CBM_PROF_END("pipeline", "4_dump_and_persist", t_dump);
+    }
+    return rc;
+}
+
+#define MIN_FILES_FOR_PARALLEL 50
+
+/* Run structure + extraction passes (parallel or sequential). */
+static int run_extraction_phase(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
+                                const cbm_file_info_t *files, int file_count) {
+    struct timespec t;
+    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
+    CBM_PROF_START(t_struct);
+    pass_structure(p, files, file_count);
+    CBM_PROF_END_N("pipeline", "pass_structure", t_struct, file_count);
+    cbm_log_info("pass.timing", "pass", "structure", "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
+    if (check_cancel(p)) {
+        return CBM_NOT_FOUND;
+    }
+
+    int worker_count = cbm_default_worker_count(true);
+    CBM_PROF_START(t_extract_total);
+    int rc = (worker_count > SKIP_ONE && file_count > MIN_FILES_FOR_PARALLEL)
+                 ? run_parallel_pipeline(p, ctx, files, file_count, worker_count, &t)
+                 : run_sequential_pipeline(p, ctx, files, file_count, &t);
+    CBM_PROF_END_N("pipeline", "2_extraction_total", t_extract_total, file_count);
+    if (check_cancel(p)) {
+        return CBM_NOT_FOUND;
+    }
+    return rc;
+}
+
 int cbm_pipeline_run(cbm_pipeline_t *p) {
     if (!p) {
         return CBM_NOT_FOUND;
@@ -766,9 +828,6 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
     p->gbuf = cbm_gbuf_new(p->project_name, p->repo_path);
     p->registry = cbm_registry_new();
 
-    /* Phase 3: Run passes */
-    struct timespec t;
-
     /* Build shared context for pass functions */
     cbm_pipeline_ctx_t ctx = {
         .project_name = p->project_name,
@@ -779,60 +838,12 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
         .mode = (int)p->mode,
     };
 
-    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-    CBM_PROF_START(t_struct);
-    pass_structure(p, files, file_count);
-    CBM_PROF_END_N("pipeline", "pass_structure", t_struct, file_count);
-    cbm_log_info("pass.timing", "pass", "structure", "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
-    if (check_cancel(p)) {
-        rc = CBM_NOT_FOUND;
-        goto cleanup;
-    }
-
-    /* Run extraction passes (parallel or sequential) */
-    int worker_count = cbm_default_worker_count(true);
-#define MIN_FILES_FOR_PARALLEL 50
-    CBM_PROF_START(t_extract_total);
-    rc = (worker_count > SKIP_ONE && file_count > MIN_FILES_FOR_PARALLEL)
-             ? run_parallel_pipeline(p, &ctx, files, file_count, worker_count, &t)
-             : run_sequential_pipeline(p, &ctx, files, file_count, &t);
-    CBM_PROF_END_N("pipeline", "2_extraction_total", t_extract_total, file_count);
-    if (check_cancel(p)) {
-        rc = CBM_NOT_FOUND;
-    }
+    rc = run_extraction_phase(p, &ctx, files, file_count);
     if (rc != 0) {
         goto cleanup;
     }
 
-    /* Post-extraction passes */
-    cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-    CBM_PROF_START(t_tests);
-    rc = cbm_pipeline_pass_tests(&ctx, files, file_count);
-    CBM_PROF_END_N("pipeline", "pass_tests", t_tests, file_count);
-    cbm_log_info("pass.timing", "pass", "tests", "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
-    if (rc == 0 && !check_cancel(p)) {
-        CBM_PROF_START(t_gh);
-        rc = run_githistory(p, &ctx);
-        CBM_PROF_END("pipeline", "pass_githistory", t_gh);
-    }
-    if (check_cancel(p)) {
-        rc = CBM_NOT_FOUND;
-    }
-    if (rc != 0) {
-        goto cleanup;
-    }
-
-    /* Pre-dump passes (operate on graph buffer, not store) */
-    CBM_PROF_START(t_predump);
-    run_predump_passes(p, &ctx);
-    CBM_PROF_END("pipeline", "3_predump_passes_total", t_predump);
-
-    /* Dump + persist */
-    if (!check_cancel(p)) {
-        CBM_PROF_START(t_dump);
-        rc = dump_and_persist_hashes(p, files, file_count, &t);
-        CBM_PROF_END("pipeline", "4_dump_and_persist", t_dump);
-    }
+    rc = run_post_extraction(p, &ctx, files, file_count);
     if (rc != 0) {
         goto cleanup;
     }

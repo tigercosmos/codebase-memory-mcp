@@ -86,6 +86,16 @@ char *cbm_pipeline_fqn_module(const char *project, const char *rel_path);
 /* Folder QN: project.dir.parts. Caller must free(). */
 char *cbm_pipeline_fqn_folder(const char *project, const char *rel_dir);
 
+/* Resolve an import specifier that uses a relative path (./foo, ../bar, .foo,
+ * or an unqualified local name like "foo.h") against the importing file's
+ * path.  Returns a malloc'd normalized relative path without extension
+ * (e.g. "src/api/helpers") suitable for passing to cbm_pipeline_fqn_module,
+ * or NULL if the specifier is not a relative path (bare module names like
+ * "lodash", "django", "github.com/foo/bar" return NULL — the caller should
+ * treat those as external/unresolvable). Handles ".", "..", and leading
+ * dot-only segments used by Python relative imports. */
+char *cbm_pipeline_resolve_relative_import(const char *source_rel, const char *module_path);
+
 /* Derive project name from an absolute path.
  * Replaces / and : with -, collapses --, trims leading -.
  * Caller must free() the returned string. */

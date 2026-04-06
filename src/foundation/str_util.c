@@ -7,6 +7,12 @@
 #include <string.h>
 #include <ctype.h>
 
+enum {
+    JSON_ESC_LEN = 2,       /* escaped char takes 2 bytes (backslash + char) */
+    JSON_NUL_RESERVE = 1,   /* reserve 1 byte for NUL terminator */
+    JSON_CTRL_LIMIT = 0x20, /* ASCII control character upper bound */
+};
+
 char *cbm_path_join(CBMArena *a, const char *base, const char *name) {
     if (!base || !name) {
         return NULL;
@@ -262,25 +268,41 @@ bool cbm_validate_shell_arg(const char *s) {
 }
 
 int cbm_json_escape(char *buf, int bufsize, const char *src) {
-    if (!buf || bufsize <= 0) return 0;
-    if (!src) { buf[0] = '\0'; return 0; }
+    if (!buf || bufsize <= 0) {
+        return 0;
+    }
+    if (!src) {
+        buf[0] = '\0';
+        return 0;
+    }
     int pos = 0;
-    for (int i = 0; src[i] && pos < bufsize - 1; i++) {
+    for (int i = 0; src[i] && pos < bufsize - JSON_NUL_RESERVE; i++) {
         unsigned char c = (unsigned char)src[i];
         if (c == '"' || c == '\\') {
-            if (pos + 2 > bufsize - 1) break;
+            if (pos + JSON_ESC_LEN > bufsize - JSON_NUL_RESERVE) {
+                break;
+            }
             buf[pos++] = '\\';
             buf[pos++] = (char)c;
         } else if (c == '\n') {
-            if (pos + 2 > bufsize - 1) break;
-            buf[pos++] = '\\'; buf[pos++] = 'n';
+            if (pos + JSON_ESC_LEN > bufsize - JSON_NUL_RESERVE) {
+                break;
+            }
+            buf[pos++] = '\\';
+            buf[pos++] = 'n';
         } else if (c == '\r') {
-            if (pos + 2 > bufsize - 1) break;
-            buf[pos++] = '\\'; buf[pos++] = 'r';
+            if (pos + JSON_ESC_LEN > bufsize - JSON_NUL_RESERVE) {
+                break;
+            }
+            buf[pos++] = '\\';
+            buf[pos++] = 'r';
         } else if (c == '\t') {
-            if (pos + 2 > bufsize - 1) break;
-            buf[pos++] = '\\'; buf[pos++] = 't';
-        } else if (c < 0x20) {
+            if (pos + JSON_ESC_LEN > bufsize - JSON_NUL_RESERVE) {
+                break;
+            }
+            buf[pos++] = '\\';
+            buf[pos++] = 't';
+        } else if (c < JSON_CTRL_LIMIT) {
             /* Other control chars: skip */
             continue;
         } else {

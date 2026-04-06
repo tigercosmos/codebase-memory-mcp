@@ -48,6 +48,13 @@ enum { CBM_SEM_WINDOW = 5 };
 /* Maximum SEMANTICALLY_RELATED edges per node. */
 enum { CBM_SEM_MAX_EDGES = 10 };
 
+/* AST structural profile: 25 float features per function (control flow,
+ * nesting, expression types, literals, data flow, Halstead). */
+enum { CBM_SEM_AST_PROFILE_DIMS = 25 };
+
+/* MinHash fingerprint length (must match simhash/minhash.h CBM_MINHASH_K). */
+enum { CBM_SEM_MINHASH_K = 64 };
+
 /* Signal weights (sum to ~1.0, proximity is a multiplier). */
 typedef struct {
     float w_tfidf;
@@ -123,11 +130,11 @@ typedef struct {
     cbm_sem_vec_t deco_vec;
 
     /* AST profile as float vector (decoded from "sp" property). */
-    float struct_profile[25];
+    float struct_profile[CBM_SEM_AST_PROFILE_DIMS];
 
     /* MinHash fingerprint (decoded from "fp" property). */
     bool has_minhash;
-    uint32_t minhash[64];
+    uint32_t minhash[CBM_SEM_MINHASH_K];
 } cbm_sem_func_t;
 
 /* ── Corpus-level data ───────────────────────────────────────────── */
@@ -146,8 +153,7 @@ void cbm_sem_corpus_add_doc(cbm_sem_corpus_t *corpus, const char **tokens, int c
  * `token_counts[f]` = number of tokens in document f.
  * This replaces a loop of cbm_sem_corpus_add_doc() calls. */
 void cbm_sem_corpus_add_docs_batch(cbm_sem_corpus_t *corpus, char **all_tokens,
-                                    const int *token_counts, int doc_count,
-                                    int max_tokens_per_doc);
+                                   const int *token_counts, int doc_count, int max_tokens_per_doc);
 
 /* Finalize: compute IDF, build enriched token vectors via co-occurrence. */
 void cbm_sem_corpus_finalize(cbm_sem_corpus_t *corpus);

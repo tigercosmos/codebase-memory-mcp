@@ -1042,8 +1042,38 @@ static void enrich_connected(yyjson_mut_doc *doc, yyjson_mut_val *item, cbm_stor
  * anything that isn't alnum or underscore is dropped, so the caller can't
  * inject FTS5 operators or double-quoted phrases.  Returns the number of
  * tokens emitted (0 if the query contained no usable terms). */
+enum {
+    BM25_MIN_BUF = 2, /* minimum buffer size: at least NUL + one char */
+    BM25_SEP_RESERVE = 1,
+    BM25_QUERY_BUF = 1024,
+    BM25_DEFAULT_LIMIT = 100,
+    BM25_COL_ID = 0,
+    BM25_COL_LABEL = 1,
+    BM25_COL_NAME = 2,
+    BM25_COL_QN = 3,
+    BM25_COL_FILE = 4,
+    BM25_COL_START = 5,
+    BM25_COL_END = 6,
+    BM25_COL_RANK = 7,
+    BM25_BIND_QUERY = 1,
+    BM25_BIND_PROJECT = 2,
+    BM25_BIND_LIMIT = 3,
+    BM25_BIND_OFFSET = 4,
+    BM25_SQL_AUTO_LEN = -1,
+};
+
+/* Module-local SQLITE_TRANSIENT wrapper to dodge performance-no-int-to-ptr.
+ * See the matching helper in src/store/store.c for the same pattern. */
+static sqlite3_destructor_type mcp_sqlite_transient(void) {
+    static const volatile intptr_t raw = -1;
+    sqlite3_destructor_type dtor = NULL;
+    memcpy(&dtor, (const void *)&raw, sizeof(dtor));
+    return dtor;
+}
+#define MCP_SQLITE_TRANSIENT (mcp_sqlite_transient())
+
 static int bm25_build_match(const char *query, char *out, size_t out_size) {
-    if (!query || !out || out_size < 2) {
+    if (!query || !out || out_size < BM25_MIN_BUF) {
         return 0;
     }
     size_t pos = 0;
@@ -1068,7 +1098,7 @@ static int bm25_build_match(const char *query, char *out, size_t out_size) {
         }
         const char *sep = (tokens > 0) ? " OR " : "";
         size_t sep_len = strlen(sep);
-        if (pos + sep_len + tok_len + 1 >= out_size) {
+        if (pos + sep_len + tok_len + BM25_SEP_RESERVE >= out_size) {
             break; /* out of room — stop cleanly, keep what we have */
         }
         memcpy(out + pos, sep, sep_len);
@@ -1090,7 +1120,7 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
     if (!db) {
         return NULL;
     }
-    char fts_query[1024];
+    char fts_query[BM25_QUERY_BUF];
     int tok_count = bm25_build_match(query, fts_query, sizeof(fts_query));
     if (tok_count == 0) {
         return NULL;
@@ -1116,13 +1146,13 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
         "LIMIT ?3 OFFSET ?4";
 
     sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(db, sql, -1, &stmt, NULL) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, sql, BM25_SQL_AUTO_LEN, &stmt, NULL) != SQLITE_OK) {
         return NULL;
     }
-    sqlite3_bind_text(stmt, 1, fts_query, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, project, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 3, limit > 0 ? limit : 100);
-    sqlite3_bind_int(stmt, 4, offset > 0 ? offset : 0);
+    sqlite3_bind_text(stmt, BM25_BIND_QUERY, fts_query, BM25_SQL_AUTO_LEN, MCP_SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, BM25_BIND_PROJECT, project, BM25_SQL_AUTO_LEN, MCP_SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, BM25_BIND_LIMIT, limit > 0 ? limit : BM25_DEFAULT_LIMIT);
+    sqlite3_bind_int(stmt, BM25_BIND_OFFSET, offset > 0 ? offset : 0);
 
     /* Count total hits (for pagination) in a separate cheap query. */
     int total = 0;
@@ -1132,9 +1162,11 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
             "WHERE nodes_fts MATCH ?1 AND n.project = ?2 "
             "  AND n.label NOT IN ('File','Folder','Module','Section','Variable','Project')";
         sqlite3_stmt *cs = NULL;
-        if (sqlite3_prepare_v2(db, count_sql, -1, &cs, NULL) == SQLITE_OK) {
-            sqlite3_bind_text(cs, 1, fts_query, -1, SQLITE_TRANSIENT);
-            sqlite3_bind_text(cs, 2, project, -1, SQLITE_TRANSIENT);
+        if (sqlite3_prepare_v2(db, count_sql, BM25_SQL_AUTO_LEN, &cs, NULL) == SQLITE_OK) {
+            sqlite3_bind_text(cs, BM25_BIND_QUERY, fts_query, BM25_SQL_AUTO_LEN,
+                              MCP_SQLITE_TRANSIENT);
+            sqlite3_bind_text(cs, BM25_BIND_PROJECT, project, BM25_SQL_AUTO_LEN,
+                              MCP_SQLITE_TRANSIENT);
             if (sqlite3_step(cs) == SQLITE_ROW) {
                 total = sqlite3_column_int(cs, 0);
             }
@@ -1153,16 +1185,16 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         yyjson_mut_val *item = yyjson_mut_obj(doc);
         yyjson_mut_obj_add_strcpy(doc, item, "name",
-                                  (const char *)sqlite3_column_text(stmt, 2));
+                                  (const char *)sqlite3_column_text(stmt, BM25_COL_NAME));
         yyjson_mut_obj_add_strcpy(doc, item, "qualified_name",
-                                  (const char *)sqlite3_column_text(stmt, 3));
+                                  (const char *)sqlite3_column_text(stmt, BM25_COL_QN));
         yyjson_mut_obj_add_strcpy(doc, item, "label",
-                                  (const char *)sqlite3_column_text(stmt, 1));
+                                  (const char *)sqlite3_column_text(stmt, BM25_COL_LABEL));
         yyjson_mut_obj_add_strcpy(doc, item, "file_path",
-                                  (const char *)sqlite3_column_text(stmt, 4));
-        yyjson_mut_obj_add_int(doc, item, "start_line", sqlite3_column_int(stmt, 5));
-        yyjson_mut_obj_add_int(doc, item, "end_line", sqlite3_column_int(stmt, 6));
-        yyjson_mut_obj_add_real(doc, item, "rank", sqlite3_column_double(stmt, 7));
+                                  (const char *)sqlite3_column_text(stmt, BM25_COL_FILE));
+        yyjson_mut_obj_add_int(doc, item, "start_line", sqlite3_column_int(stmt, BM25_COL_START));
+        yyjson_mut_obj_add_int(doc, item, "end_line", sqlite3_column_int(stmt, BM25_COL_END));
+        yyjson_mut_obj_add_real(doc, item, "rank", sqlite3_column_double(stmt, BM25_COL_RANK));
         yyjson_mut_arr_add_val(results, item);
         emitted++;
     }
@@ -1174,6 +1206,98 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
     char *json = yy_doc_to_str(doc);
     yyjson_mut_doc_free(doc);
     return json;
+}
+
+/* Emit the cbm_store_search results as a JSON "results" array on the doc. */
+static void emit_search_results(yyjson_mut_doc *doc, yyjson_mut_val *root,
+                                const cbm_search_output_t *out, cbm_store_t *store,
+                                const char *relationship, bool include_connected, int offset) {
+    yyjson_mut_obj_add_int(doc, root, "total", out->total);
+    yyjson_mut_val *results = yyjson_mut_arr(doc);
+    for (int i = 0; i < out->count; i++) {
+        cbm_search_result_t *sr = &out->results[i];
+        yyjson_mut_val *item = yyjson_mut_obj(doc);
+        yyjson_mut_obj_add_str(doc, item, "name", sr->node.name ? sr->node.name : "");
+        yyjson_mut_obj_add_str(doc, item, "qualified_name",
+                               sr->node.qualified_name ? sr->node.qualified_name : "");
+        yyjson_mut_obj_add_str(doc, item, "label", sr->node.label ? sr->node.label : "");
+        yyjson_mut_obj_add_str(doc, item, "file_path",
+                               sr->node.file_path ? sr->node.file_path : "");
+        yyjson_mut_obj_add_int(doc, item, "in_degree", sr->in_degree);
+        yyjson_mut_obj_add_int(doc, item, "out_degree", sr->out_degree);
+        if (include_connected && sr->node.id > 0) {
+            enrich_connected(doc, item, store, sr->node.id, relationship);
+        }
+        yyjson_mut_arr_add_val(results, item);
+    }
+    yyjson_mut_obj_add_val(doc, root, "results", results);
+    yyjson_mut_obj_add_bool(doc, root, "has_more", out->total > offset + out->count);
+}
+
+/* Extract keyword strings from a yyjson array into `keywords`.  Returns the
+ * number of strings copied (capped at `max_out`). */
+static int extract_semantic_keywords(yyjson_val *sq_val, const char **keywords, int max_out) {
+    int kw_count = (int)yyjson_arr_size(sq_val);
+    if (kw_count > max_out) {
+        kw_count = max_out;
+    }
+    size_t kw_idx = 0;
+    size_t kw_max = 0;
+    yyjson_val *kw_val;
+    int ki = 0;
+    yyjson_arr_foreach(sq_val, kw_idx, kw_max, kw_val) {
+        if (ki < kw_count && yyjson_is_str(kw_val)) {
+            keywords[ki++] = yyjson_get_str(kw_val);
+        }
+    }
+    return ki;
+}
+
+/* Emit cbm_vector_result_t entries as a "semantic_results" array on the doc. */
+static void emit_semantic_results(yyjson_mut_doc *doc, yyjson_mut_val *root,
+                                  cbm_vector_result_t *vresults, int vcount) {
+    yyjson_mut_val *sem_results = yyjson_mut_arr(doc);
+    for (int v = 0; v < vcount; v++) {
+        yyjson_mut_val *vitem = yyjson_mut_obj(doc);
+        yyjson_mut_obj_add_strcpy(doc, vitem, "name", vresults[v].name);
+        yyjson_mut_obj_add_strcpy(doc, vitem, "qualified_name", vresults[v].qualified_name);
+        yyjson_mut_obj_add_strcpy(doc, vitem, "label", vresults[v].label);
+        yyjson_mut_obj_add_strcpy(doc, vitem, "file_path", vresults[v].file_path);
+        yyjson_mut_obj_add_real(doc, vitem, "score", vresults[v].score);
+        yyjson_mut_arr_add_val(sem_results, vitem);
+    }
+    yyjson_mut_obj_add_val(doc, root, "semantic_results", sem_results);
+}
+
+/* Append the semantic_query vector-search results onto the doc.  Returns
+ * true if semantic_query was provided as a non-array (type error — caller
+ * should surface to the user). */
+static bool run_semantic_query(yyjson_mut_doc *doc, yyjson_mut_val *root, const char *args,
+                               cbm_store_t *store, const char *project, int limit) {
+    enum { MAX_KW_SEARCH = 32 };
+    yyjson_doc *args_doc = yyjson_read(args, strlen(args), 0);
+    yyjson_val *args_root = args_doc ? yyjson_doc_get_root(args_doc) : NULL;
+    yyjson_val *sq_val = args_root ? yyjson_obj_get(args_root, "semantic_query") : NULL;
+    bool type_error = false;
+    if (sq_val && !yyjson_is_arr(sq_val)) {
+        type_error = true;
+    } else if (sq_val && yyjson_arr_size(sq_val) > 0) {
+        const char *keywords[MAX_KW_SEARCH];
+        int ki = extract_semantic_keywords(sq_val, keywords, MAX_KW_SEARCH);
+        cbm_vector_result_t *vresults = NULL;
+        int vcount = 0;
+        int sem_limit = limit > 0 ? limit : CBM_SZ_16;
+        if (cbm_store_vector_search(store, project, keywords, ki, sem_limit, &vresults, &vcount) ==
+                CBM_STORE_OK &&
+            vcount > 0) {
+            emit_semantic_results(doc, root, vresults, vcount);
+            cbm_store_free_vector_results(vresults, vcount);
+        }
+    }
+    if (args_doc) {
+        yyjson_doc_free(args_doc);
+    }
+    return type_error;
 }
 
 static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
@@ -1193,7 +1317,7 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
      * tokenization, fall through to the regex path. */
     char *query = cbm_mcp_get_string_arg(args, "query");
     if (query && query[0]) {
-        int q_limit = cbm_mcp_get_int_arg(args, "limit", 100);
+        int q_limit = cbm_mcp_get_int_arg(args, "limit", BM25_DEFAULT_LIMIT);
         int q_offset = cbm_mcp_get_int_arg(args, "offset", 0);
         char *bm25_json = bm25_search(store, project, query, q_limit, q_offset);
         if (bm25_json) {
@@ -1250,85 +1374,8 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
     yyjson_mut_val *root = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root);
 
-    yyjson_mut_obj_add_int(doc, root, "total", out.total);
-
-    yyjson_mut_val *results = yyjson_mut_arr(doc);
-    for (int i = 0; i < out.count; i++) {
-        cbm_search_result_t *sr = &out.results[i];
-        yyjson_mut_val *item = yyjson_mut_obj(doc);
-        yyjson_mut_obj_add_str(doc, item, "name", sr->node.name ? sr->node.name : "");
-        yyjson_mut_obj_add_str(doc, item, "qualified_name",
-                               sr->node.qualified_name ? sr->node.qualified_name : "");
-        yyjson_mut_obj_add_str(doc, item, "label", sr->node.label ? sr->node.label : "");
-        yyjson_mut_obj_add_str(doc, item, "file_path",
-                               sr->node.file_path ? sr->node.file_path : "");
-        yyjson_mut_obj_add_int(doc, item, "in_degree", sr->in_degree);
-        yyjson_mut_obj_add_int(doc, item, "out_degree", sr->out_degree);
-
-        if (include_connected && sr->node.id > 0) {
-            enrich_connected(doc, item, store, sr->node.id, relationship);
-        }
-
-        yyjson_mut_arr_add_val(results, item);
-    }
-    yyjson_mut_obj_add_val(doc, root, "results", results);
-    yyjson_mut_obj_add_bool(doc, root, "has_more", out.total > offset + out.count);
-
-    /* Semantic vector search: parse semantic_query array and run vector search.
-     * Strict validation: if the key is present it MUST be an array of strings.
-     * A plain string (e.g. "send pubsub publish") is rejected with a clear error
-     * so callers notice the mistake instead of silently getting an unranked list. */
-    bool sq_type_error = false;
-    {
-        yyjson_doc *args_doc = yyjson_read(args, strlen(args), 0);
-        yyjson_val *args_root = args_doc ? yyjson_doc_get_root(args_doc) : NULL;
-        yyjson_val *sq_val = args_root ? yyjson_obj_get(args_root, "semantic_query") : NULL;
-        if (sq_val && !yyjson_is_arr(sq_val)) {
-            sq_type_error = true;
-        } else if (sq_val) {
-            int kw_count = (int)yyjson_arr_size(sq_val);
-            if (kw_count > 0) {
-                enum { MAX_KW = 32 };
-                const char *keywords[MAX_KW];
-                if (kw_count > MAX_KW) {
-                    kw_count = MAX_KW;
-                }
-                size_t kw_idx = 0;
-                size_t kw_max = 0;
-                yyjson_val *kw_val;
-                int ki = 0;
-                yyjson_arr_foreach(sq_val, kw_idx, kw_max, kw_val) {
-                    if (ki < kw_count && yyjson_is_str(kw_val)) {
-                        keywords[ki++] = yyjson_get_str(kw_val);
-                    }
-                }
-
-                cbm_vector_result_t *vresults = NULL;
-                int vcount = 0;
-                int sem_limit = limit > 0 ? limit : CBM_SZ_16;
-                if (cbm_store_vector_search(store, project, keywords, ki, sem_limit, &vresults,
-                                            &vcount) == CBM_STORE_OK &&
-                    vcount > 0) {
-                    yyjson_mut_val *sem_results = yyjson_mut_arr(doc);
-                    for (int v = 0; v < vcount; v++) {
-                        yyjson_mut_val *vitem = yyjson_mut_obj(doc);
-                        yyjson_mut_obj_add_strcpy(doc, vitem, "name", vresults[v].name);
-                        yyjson_mut_obj_add_strcpy(doc, vitem, "qualified_name",
-                                                  vresults[v].qualified_name);
-                        yyjson_mut_obj_add_strcpy(doc, vitem, "label", vresults[v].label);
-                        yyjson_mut_obj_add_strcpy(doc, vitem, "file_path", vresults[v].file_path);
-                        yyjson_mut_obj_add_real(doc, vitem, "score", vresults[v].score);
-                        yyjson_mut_arr_add_val(sem_results, vitem);
-                    }
-                    yyjson_mut_obj_add_val(doc, root, "semantic_results", sem_results);
-                    cbm_store_free_vector_results(vresults, vcount);
-                }
-            }
-        }
-        if (args_doc) {
-            yyjson_doc_free(args_doc);
-        }
-    }
+    emit_search_results(doc, root, &out, store, relationship, include_connected, offset);
+    bool sq_type_error = run_semantic_query(doc, root, args, store, project, limit);
 
     if (sq_type_error) {
         yyjson_mut_doc_free(doc);
@@ -2817,7 +2864,7 @@ static bool write_pattern_file(char *tmpfile, int tmpfile_sz, const char *patter
 #ifdef _WIN32
     snprintf(tmpfile, tmpfile_sz, "/tmp/cbm_search_%d.pat", (int)_getpid());
 #else
-    snprintf(tmpfile, tmpfile_sz, "/tmp/cbm_search_%d.pat", (int)getpid());
+    snprintf(tmpfile, tmpfile_sz, "/tmp/cbm_search_%d.pat", getpid());
 #endif
     FILE *tf = fopen(tmpfile, "w");
     if (!tf) {

@@ -12,7 +12,9 @@
 #include "foundation/constants.h"
 #include "tree_sitter/api.h"
 
-#include <math.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -24,6 +26,8 @@ enum {
     HALSTEAD_SET_MASK = 511,
     PROFILE_FIELD_COUNT = 25,
     DEPTH_SCALE = 10,
+    BASE_DECIMAL_AST = 10,
+    HALSTEAD_HASH_MUL = 31,
 };
 
 typedef struct {
@@ -105,7 +109,7 @@ static bool is_identifier(const char *k) {
 static bool halstead_insert(uint32_t *set, const char *key) {
     uint32_t h = 0;
     for (const char *p = key; *p; p++) {
-        h = h * 31 + (uint32_t)*p;
+        h = (h * HALSTEAD_HASH_MUL) + (uint32_t)*p;
     }
     uint32_t idx = h & HALSTEAD_SET_MASK;
     for (int probe = 0; probe < HALSTEAD_SET_SIZE; probe++) {
@@ -136,6 +140,105 @@ static bool is_param_name(const char *ident, const char *source, const char **pa
 }
 
 /* ── Main computation ────────────────────────────────────────────── */
+
+/* Count control-flow statement kinds (if/for/while/switch/try/return). */
+static void accumulate_control_flow(const char *kind, cbm_ast_profile_t *out, bool *in_return) {
+    if (is_control_if(kind)) {
+        out->if_count++;
+    }
+    if (is_control_for(kind)) {
+        out->for_count++;
+    }
+    if (is_control_while(kind)) {
+        out->while_count++;
+    }
+    if (is_control_switch(kind)) {
+        out->switch_count++;
+    }
+    if (is_control_try(kind)) {
+        out->try_count++;
+    }
+    if (is_return(kind)) {
+        out->return_count++;
+        *in_return = true;
+    }
+}
+
+/* Count expression- and literal-class counters for one node. */
+static void accumulate_expressions(const char *kind, cbm_ast_profile_t *out) {
+    if (is_comparison(kind)) {
+        out->comparison_ops++;
+    }
+    if (is_arithmetic(kind)) {
+        out->arithmetic_ops++;
+    }
+    if (strcmp(kind, "not_operator") == 0 || strcmp(kind, "boolean_operator") == 0) {
+        out->logical_ops++;
+    }
+    if (is_assignment(kind)) {
+        out->assignment_count++;
+        out->variable_reassigns++;
+    }
+    if (is_string_lit(kind)) {
+        out->string_literals++;
+    }
+    if (is_number_lit(kind)) {
+        out->number_literals++;
+    }
+    if (is_bool_lit(kind)) {
+        out->bool_literals++;
+    }
+}
+
+/* Accumulate Halstead operator/operand counts.  Leaf identifiers, literals,
+ * and booleans are "operands"; recognized statement/expression kinds are
+ * "operators".  Uses an open-addressed hash set for unique counting. */
+static void accumulate_halstead(const char *kind, uint32_t child_count, uint32_t *op_set,
+                                uint32_t *operand_set, cbm_ast_profile_t *out) {
+    if (is_operator_node(kind)) {
+        out->total_operators++;
+        if (halstead_insert(op_set, kind)) {
+            out->unique_operators++;
+        }
+    }
+    if (child_count == 0 &&
+        (is_identifier(kind) || is_string_lit(kind) || is_number_lit(kind) || is_bool_lit(kind))) {
+        out->total_operands++;
+        if (halstead_insert(operand_set, kind)) {
+            out->unique_operands++;
+        }
+        out->body_tokens++;
+    }
+}
+
+/* Data-flow counter update: bump params_in_returns / params_in_conditions
+ * when the current leaf identifier names a parameter and we're inside the
+ * corresponding syntactic scope. */
+static void accumulate_data_flow(TSNode node, const char *kind, uint32_t child_count,
+                                 const char *source, const char **param_names, int param_count,
+                                 bool in_return, bool in_condition, cbm_ast_profile_t *out) {
+    if (!(child_count == 0 && is_identifier(kind) && source)) {
+        return;
+    }
+    uint32_t start = ts_node_start_byte(node);
+    uint32_t end = ts_node_end_byte(node);
+    if (end <= start || (end - start) >= CBM_SZ_128) {
+        return;
+    }
+    char ident_buf[CBM_SZ_128];
+    int ilen = (int)(end - start);
+    memcpy(ident_buf, source + start, (size_t)ilen);
+    ident_buf[ilen] = '\0';
+    if (!is_param_name(ident_buf, source, param_names, param_count)) {
+        return;
+    }
+    if (in_return) {
+        out->params_in_returns++;
+    }
+    if (in_condition) {
+        out->params_in_conditions++;
+    }
+}
 
 bool cbm_ast_profile_compute(TSNode func_body, const char *source, const char **param_names,
                              int param_count, cbm_ast_profile_t *out) {
@@ -179,89 +282,11 @@ bool cbm_ast_profile_compute(TSNode func_body, const char *source, const char **
             out->max_nesting_depth = (uint16_t)depth;
         }
 
-        /* Signal 8: Control flow */
-        if (is_control_if(kind)) {
-            out->if_count++;
-        }
-        if (is_control_for(kind)) {
-            out->for_count++;
-        }
-        if (is_control_while(kind)) {
-            out->while_count++;
-        }
-        if (is_control_switch(kind)) {
-            out->switch_count++;
-        }
-        if (is_control_try(kind)) {
-            out->try_count++;
-        }
-        if (is_return(kind)) {
-            out->return_count++;
-            in_return = true;
-        }
-
-        /* Signal 8: Expression types */
-        if (is_comparison(kind)) {
-            out->comparison_ops++;
-        }
-        if (is_arithmetic(kind)) {
-            out->arithmetic_ops++;
-        }
-        if (strcmp(kind, "not_operator") == 0 || strcmp(kind, "boolean_operator") == 0) {
-            out->logical_ops++;
-        }
-        if (is_assignment(kind)) {
-            out->assignment_count++;
-            out->variable_reassigns++;
-        }
-
-        /* Signal 8: Literals */
-        if (is_string_lit(kind)) {
-            out->string_literals++;
-        }
-        if (is_number_lit(kind)) {
-            out->number_literals++;
-        }
-        if (is_bool_lit(kind)) {
-            out->bool_literals++;
-        }
-
-        /* Signal 11: Halstead — operators vs operands */
-        if (is_operator_node(kind)) {
-            out->total_operators++;
-            if (halstead_insert(op_set, kind)) {
-                out->unique_operators++;
-            }
-        }
-        if (child_count == 0 && (is_identifier(kind) || is_string_lit(kind) ||
-                                 is_number_lit(kind) || is_bool_lit(kind))) {
-            out->total_operands++;
-            /* For unique operands, use the node type (normalized) not the text */
-            if (halstead_insert(operand_set, kind)) {
-                out->unique_operands++;
-            }
-            out->body_tokens++;
-        }
-
-        /* Signal 9: Approximate data flow — track if we're inside a return or condition */
-        if (child_count == 0 && is_identifier(kind) && source) {
-            uint32_t start = ts_node_start_byte(node);
-            uint32_t end = ts_node_end_byte(node);
-            if (end > start && (end - start) < CBM_SZ_128) {
-                char ident_buf[CBM_SZ_128];
-                int ilen = (int)(end - start);
-                memcpy(ident_buf, source + start, (size_t)ilen);
-                ident_buf[ilen] = '\0';
-                if (is_param_name(ident_buf, source, param_names, param_count)) {
-                    if (in_return) {
-                        out->params_in_returns++;
-                    }
-                    if (in_condition) {
-                        out->params_in_conditions++;
-                    }
-                }
-            }
-        }
+        accumulate_control_flow(kind, out, &in_return);
+        accumulate_expressions(kind, out);
+        accumulate_halstead(kind, child_count, op_set, operand_set, out);
+        accumulate_data_flow(node, kind, child_count, source, param_names, param_count, in_return,
+                             in_condition, out);
 
         /* Track context for data flow: are we inside a condition? */
         if (is_control_if(kind) || is_control_while(kind)) {
@@ -321,45 +346,39 @@ bool cbm_ast_profile_from_str(const char *str, cbm_ast_profile_t *out) {
         return false;
     }
     memset(out, 0, sizeof(*out));
-    unsigned v[PROFILE_FIELD_COUNT];
-    int n = sscanf(str,
-                   "%u,%u,%u,%u,%u,%u,%u,%u,"
-                   "%u,%u,%u,%u,"
-                   "%u,%u,%u,"
-                   "%u,%u,%u,%u,"
-                   "%u,%u,%u,%u,"
-                   "%u,%u",
-                   &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8], &v[9], &v[10],
-                   &v[11], &v[12], &v[13], &v[14], &v[15], &v[16], &v[17], &v[18], &v[19], &v[20],
-                   &v[21], &v[22], &v[23], &v[24]);
-    if (n != PROFILE_FIELD_COUNT) {
-        return false;
+    /* Field layout must match cbm_ast_profile_to_str() exactly. */
+    uint16_t *fields[PROFILE_FIELD_COUNT] = {
+        &out->if_count,           &out->for_count,
+        &out->while_count,        &out->switch_count,
+        &out->try_count,          &out->return_count,
+        &out->max_nesting_depth,  &out->avg_nesting_depth_x10,
+        &out->comparison_ops,     &out->arithmetic_ops,
+        &out->logical_ops,        &out->assignment_count,
+        &out->string_literals,    &out->number_literals,
+        &out->bool_literals,      &out->param_count,
+        &out->params_in_returns,  &out->params_in_conditions,
+        &out->variable_reassigns, &out->unique_operators,
+        &out->unique_operands,    &out->total_operators,
+        &out->total_operands,     &out->body_lines,
+        &out->body_tokens,
+    };
+    const char *p = str;
+    for (int i = 0; i < PROFILE_FIELD_COUNT; i++) {
+        char *end = NULL;
+        unsigned long parsed = strtoul(p, &end, BASE_DECIMAL_AST);
+        if (end == p) {
+            return false;
+        }
+        *fields[i] = (uint16_t)parsed;
+        p = end;
+        /* Skip the comma separator between fields. */
+        if (i + SKIP_ONE < PROFILE_FIELD_COUNT) {
+            if (*p != ',') {
+                return false;
+            }
+            p++;
+        }
     }
-    out->if_count = (uint16_t)v[0];
-    out->for_count = (uint16_t)v[1];
-    out->while_count = (uint16_t)v[2];
-    out->switch_count = (uint16_t)v[3];
-    out->try_count = (uint16_t)v[4];
-    out->return_count = (uint16_t)v[5];
-    out->max_nesting_depth = (uint16_t)v[6];
-    out->avg_nesting_depth_x10 = (uint16_t)v[7];
-    out->comparison_ops = (uint16_t)v[8];
-    out->arithmetic_ops = (uint16_t)v[9];
-    out->logical_ops = (uint16_t)v[10];
-    out->assignment_count = (uint16_t)v[11];
-    out->string_literals = (uint16_t)v[12];
-    out->number_literals = (uint16_t)v[13];
-    out->bool_literals = (uint16_t)v[14];
-    out->param_count = (uint16_t)v[15];
-    out->params_in_returns = (uint16_t)v[16];
-    out->params_in_conditions = (uint16_t)v[17];
-    out->variable_reassigns = (uint16_t)v[18];
-    out->unique_operators = (uint16_t)v[19];
-    out->unique_operands = (uint16_t)v[20];
-    out->total_operators = (uint16_t)v[21];
-    out->total_operands = (uint16_t)v[22];
-    out->body_lines = (uint16_t)v[23];
-    out->body_tokens = (uint16_t)v[24];
     return true;
 }
 

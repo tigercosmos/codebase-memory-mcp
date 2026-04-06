@@ -625,7 +625,8 @@ typedef struct {
  * the cbm_cosine_i8 SQL function joined with the nodes table.
  * Returns results sorted by score DESC. Caller must free with cbm_store_free_vector_results. */
 int cbm_store_vector_search(cbm_store_t *s, const char *project, const char **keywords,
-                            int keyword_count, int limit, cbm_vector_result_t **out, int *out_count);
+                            int keyword_count, int limit, cbm_vector_result_t **out,
+                            int *out_count);
 
 /* Free vector search results. */
 void cbm_store_free_vector_results(cbm_vector_result_t *results, int count);

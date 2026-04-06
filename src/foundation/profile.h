@@ -32,26 +32,27 @@ void cbm_profile_now(struct timespec *ts);
 
 /* Log elapsed time since `start` for the given phase/subphase.
  * `items` = optional count to compute rate (pass 0 to skip). */
-void cbm_profile_log_elapsed(const char *phase, const char *sub,
-                             const struct timespec *start, long items);
+void cbm_profile_log_elapsed(const char *phase, const char *sub, const struct timespec *start,
+                             long items);
 
 /* Zero-overhead macros: a single runtime check gates everything. */
 #define CBM_PROF_START(var) \
-    struct timespec var; \
-    if (cbm_profile_active) cbm_profile_now(&(var))
+    struct timespec var;    \
+    if (cbm_profile_active) \
+    cbm_profile_now(&(var))
 
-#define CBM_PROF_END(phase, sub, start_var) \
-    do { \
-        if (cbm_profile_active) { \
+#define CBM_PROF_END(phase, sub, start_var)                           \
+    do {                                                              \
+        if (cbm_profile_active) {                                     \
             cbm_profile_log_elapsed((phase), (sub), &(start_var), 0); \
-        } \
+        }                                                             \
     } while (0)
 
-#define CBM_PROF_END_N(phase, sub, start_var, items) \
-    do { \
-        if (cbm_profile_active) { \
+#define CBM_PROF_END_N(phase, sub, start_var, items)                              \
+    do {                                                                          \
+        if (cbm_profile_active) {                                                 \
             cbm_profile_log_elapsed((phase), (sub), &(start_var), (long)(items)); \
-        } \
+        }                                                                         \
     } while (0)
 
 #endif /* CBM_PROFILE_H */

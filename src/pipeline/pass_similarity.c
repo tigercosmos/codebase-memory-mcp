@@ -18,6 +18,11 @@
 
 #include "foundation/profile.h"
 #include "foundation/platform.h"
+
+enum {
+    SIM_EDGE_INIT_CAP = 256,
+    SIM_EDGE_GROW = 2,
+};
 #include "pipeline/worker_pool.h"
 
 #include <stdatomic.h>
@@ -142,18 +147,19 @@ typedef struct {
     int cap;
 } sim_edge_buf_t;
 
-static void sim_edge_buf_push(sim_edge_buf_t *buf, int64_t src, int64_t tgt,
-                               double jaccard, bool same_file) {
+static void sim_edge_buf_push(sim_edge_buf_t *buf, int64_t src, int64_t tgt, double jaccard,
+                              bool same_file) {
     if (buf->count >= buf->cap) {
-        int nc = buf->cap < 256 ? 256 : buf->cap * 2;
+        int nc = buf->cap < SIM_EDGE_INIT_CAP ? SIM_EDGE_INIT_CAP : buf->cap * SIM_EDGE_GROW;
         sim_deferred_edge_t *grown = realloc(buf->edges, (size_t)nc * sizeof(sim_deferred_edge_t));
-        if (!grown) return;
+        if (!grown) {
+            return;
+        }
         buf->edges = grown;
         buf->cap = nc;
     }
     buf->edges[buf->count++] = (sim_deferred_edge_t){
-        .source_id = src, .target_id = tgt, .jaccard = jaccard, .same_file = same_file
-    };
+        .source_id = src, .target_id = tgt, .jaccard = jaccard, .same_file = same_file};
 }
 
 typedef struct {
@@ -174,12 +180,16 @@ static void sim_query_worker(int worker_id, void *ctx_ptr) {
     /* Thread-local candidate buffer (stack-allocated) */
     const cbm_lsh_entry_t *cands[SIM_CAND_CAP];
 
-    while (1) {
-        int i = atomic_fetch_add_explicit(&sc->next_idx, 1, memory_order_relaxed);
-        if (i >= sc->entry_count) break;
+    while (true) {
+        int i = atomic_fetch_add_explicit(&sc->next_idx, SKIP_ONE, memory_order_relaxed);
+        if (i >= sc->entry_count) {
+            break;
+        }
 
         int ec = atomic_load_explicit(&sc->edge_counts[i], memory_order_relaxed);
-        if (ec >= CBM_MINHASH_MAX_EDGES_PER_NODE) continue;
+        if (ec >= CBM_MINHASH_MAX_EDGES_PER_NODE) {
+            continue;
+        }
 
         const fp_entry_t *src = &sc->entries[i];
         int cand_count = cbm_lsh_query_into(sc->lsh, &src->fp, cands, SIM_CAND_CAP);
@@ -187,18 +197,28 @@ static void sim_query_worker(int worker_id, void *ctx_ptr) {
         int emitted = 0;
         for (int c = 0; c < cand_count; c++) {
             const cbm_lsh_entry_t *cand = cands[c];
-            if (cand->node_id == src->node_id) continue;
-            if (strcmp(src->ext, cand->file_ext) != 0) continue;
-            if (src->node_id >= cand->node_id) continue;
+            if (cand->node_id == src->node_id) {
+                continue;
+            }
+            if (strcmp(src->ext, cand->file_ext) != 0) {
+                continue;
+            }
+            if (src->node_id >= cand->node_id) {
+                continue;
+            }
 
             int cur = atomic_load_explicit(&sc->edge_counts[i], memory_order_relaxed);
-            if (cur + emitted >= CBM_MINHASH_MAX_EDGES_PER_NODE) break;
+            if (cur + emitted >= CBM_MINHASH_MAX_EDGES_PER_NODE) {
+                break;
+            }
 
             double jaccard = cbm_minhash_jaccard(&src->fp, cand->fingerprint);
-            if (jaccard < CBM_MINHASH_JACCARD_THRESHOLD) continue;
+            if (jaccard < CBM_MINHASH_JACCARD_THRESHOLD) {
+                continue;
+            }
 
-            bool same_file = src->file_path && cand->file_path &&
-                             strcmp(src->file_path, cand->file_path) == 0;
+            bool same_file =
+                src->file_path && cand->file_path && strcmp(src->file_path, cand->file_path) == 0;
             sim_edge_buf_push(my_buf, src->node_id, cand->node_id, jaccard, same_file);
             emitted++;
         }
@@ -206,6 +226,24 @@ static void sim_query_worker(int worker_id, void *ctx_ptr) {
             atomic_fetch_add_explicit(&sc->edge_counts[i], emitted, memory_order_relaxed);
         }
     }
+}
+
+/* Merge worker edge buffers into gbuf. Returns total edge count. Frees worker buffers. */
+static int merge_sim_edges(cbm_gbuf_t *gbuf, sim_edge_buf_t *worker_bufs, int worker_count) {
+    int total = 0;
+    for (int w = 0; w < worker_count; w++) {
+        for (int e = 0; e < worker_bufs[w].count; e++) {
+            sim_deferred_edge_t *de = &worker_bufs[w].edges[e];
+            char props[PROPS_BUF_LEN];
+            snprintf(props, sizeof(props), "{\"jaccard\":%.3f,\"same_file\":%s}", de->jaccard,
+                     de->same_file ? "true" : "false");
+            cbm_gbuf_insert_edge(gbuf, de->source_id, de->target_id, "SIMILAR_TO", props);
+            total++;
+        }
+        free(worker_bufs[w].edges);
+    }
+    free(worker_bufs);
+    return total;
 }
 
 /* ── Pass entry point ────────────────────────────────────────────── */
@@ -273,21 +311,8 @@ int cbm_pipeline_pass_similarity(cbm_pipeline_ctx_t *ctx) {
     }
     CBM_PROF_END_N("similarity", "3_query_parallel", t_query_emit, entry_count);
 
-    /* Merge deferred edges into gbuf (SEQUENTIAL — gbuf not thread-safe). */
     CBM_PROF_START(t_merge);
-    int total_edges = 0;
-    for (int w = 0; w < worker_count; w++) {
-        for (int e = 0; e < worker_bufs[w].count; e++) {
-            sim_deferred_edge_t *de = &worker_bufs[w].edges[e];
-            char props[PROPS_BUF_LEN];
-            snprintf(props, sizeof(props), "{\"jaccard\":%.3f,\"same_file\":%s}", de->jaccard,
-                     de->same_file ? "true" : "false");
-            cbm_gbuf_insert_edge(gbuf, de->source_id, de->target_id, "SIMILAR_TO", props);
-            total_edges++;
-        }
-        free(worker_bufs[w].edges);
-    }
-    free(worker_bufs);
+    int total_edges = merge_sim_edges(gbuf, worker_bufs, worker_count);
     CBM_PROF_END_N("similarity", "4_edge_merge_seq", t_merge, total_edges);
 
     cbm_log_info("pass.done", "pass", "similarity", "edges", itoa_log(total_edges));

@@ -283,11 +283,10 @@ static void dump_and_persist(cbm_gbuf_t *gbuf, const char *db_path, const char *
          * rebuild from the nodes table here.  See the full-dump path in
          * pipeline.c for the matching logic. */
         cbm_store_exec(hash_store, "INSERT INTO nodes_fts(nodes_fts) VALUES('delete-all');");
-        if (cbm_store_exec(
-                hash_store,
-                "INSERT INTO nodes_fts(rowid, name, qualified_name, label, file_path) "
-                "SELECT id, cbm_camel_split(name), qualified_name, label, file_path "
-                "FROM nodes;") != CBM_STORE_OK) {
+        if (cbm_store_exec(hash_store,
+                           "INSERT INTO nodes_fts(rowid, name, qualified_name, label, file_path) "
+                           "SELECT id, cbm_camel_split(name), qualified_name, label, file_path "
+                           "FROM nodes;") != CBM_STORE_OK) {
             cbm_store_exec(hash_store,
                            "INSERT INTO nodes_fts(rowid, name, qualified_name, label, file_path) "
                            "SELECT id, name, qualified_name, label, file_path FROM nodes;");

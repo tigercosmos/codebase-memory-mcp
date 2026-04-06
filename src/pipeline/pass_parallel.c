@@ -673,6 +673,84 @@ static int register_and_link_def(cbm_pipeline_ctx_t *ctx, const CBMDefinition *d
     return edges;
 }
 
+/* Create IMPORTS edges for one file's imports (parallel path). */
+static int create_imports_edges(cbm_pipeline_ctx_t *ctx, const CBMFileResult *result,
+                                const char *rel) {
+    int count = 0;
+    for (int j = 0; j < result->imports.count; j++) {
+        CBMImport *imp = &result->imports.items[j];
+        if (!imp->module_path) {
+            continue;
+        }
+        char *target_qn = NULL;
+        char *resolved = cbm_pipeline_resolve_relative_import(rel, imp->module_path);
+        if (resolved) {
+            target_qn = cbm_pipeline_fqn_module(ctx->project_name, resolved);
+            free(resolved);
+        } else {
+            target_qn = cbm_pipeline_fqn_module(ctx->project_name, imp->module_path);
+        }
+        const cbm_gbuf_node_t *target = cbm_gbuf_find_by_qn(ctx->gbuf, target_qn);
+        char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
+        const cbm_gbuf_node_t *source_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
+        if (source_node && target) {
+            char esc_ln[CBM_SZ_128];
+            cbm_json_escape(esc_ln, sizeof(esc_ln), imp->local_name ? imp->local_name : "");
+            char imp_props[CBM_SZ_256];
+            snprintf(imp_props, sizeof(imp_props), "{\"local_name\":\"%s\"}", esc_ln);
+            cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, target->id, "IMPORTS", imp_props);
+            count++;
+        }
+        free(target_qn);
+        free(file_qn);
+    }
+    return count;
+}
+
+/* Find channel source node (enclosing function or file). */
+static const cbm_gbuf_node_t *find_channel_src(cbm_pipeline_ctx_t *ctx, const CBMChannel *ch,
+                                               const char *rel) {
+    const cbm_gbuf_node_t *node = NULL;
+    if (ch->enclosing_func_qn && ch->enclosing_func_qn[0]) {
+        node = cbm_gbuf_find_by_qn(ctx->gbuf, ch->enclosing_func_qn);
+    }
+    if (!node) {
+        char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
+        node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
+        free(file_qn);
+    }
+    return node;
+}
+
+/* Create Channel nodes + EMITS/LISTENS_ON edges for one file. */
+static void create_channel_edges(cbm_pipeline_ctx_t *ctx, const CBMFileResult *result,
+                                 const char *rel) {
+    for (int j = 0; j < result->channels.count; j++) {
+        CBMChannel *ch = &result->channels.items[j];
+        if (!ch->channel_name || !ch->channel_name[0]) {
+            continue;
+        }
+        char channel_qn[CBM_SZ_512];
+        snprintf(channel_qn, sizeof(channel_qn), "__channel__%s__%s",
+                 ch->transport ? ch->transport : "unknown", ch->channel_name);
+        char esc_cn[CBM_SZ_256];
+        cbm_json_escape(esc_cn, sizeof(esc_cn), ch->channel_name);
+        char channel_props[CBM_SZ_512];
+        snprintf(channel_props, sizeof(channel_props), "{\"transport\":\"%s\",\"name\":\"%s\"}",
+                 ch->transport ? ch->transport : "unknown", esc_cn);
+        int64_t channel_id = cbm_gbuf_upsert_node(ctx->gbuf, "Channel", ch->channel_name,
+                                                  channel_qn, "", 0, 0, channel_props);
+        const cbm_gbuf_node_t *src_node = find_channel_src(ctx, ch, rel);
+        if (src_node && channel_id > 0) {
+            const char *edge_type = ch->direction == CBM_CHANNEL_EMIT ? "EMITS" : "LISTENS_ON";
+            char edge_props[CBM_SZ_128];
+            snprintf(edge_props, sizeof(edge_props), "{\"transport\":\"%s\"}",
+                     ch->transport ? ch->transport : "unknown");
+            cbm_gbuf_insert_edge(ctx->gbuf, src_node->id, channel_id, edge_type, edge_props);
+        }
+    }
+}
+
 int cbm_build_registry_from_cache(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                                   int file_count, CBMFileResult **result_cache) {
     cbm_log_info("parallel.registry.start", "files", itoa_log(file_count));
@@ -698,30 +776,8 @@ int cbm_build_registry_from_cache(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t
             defines_edges += register_and_link_def(ctx, &result->defs.items[d], rel, &reg_entries);
         }
 
-        /* IMPORTS edges */
-        for (int j = 0; j < result->imports.count; j++) {
-            CBMImport *imp = &result->imports.items[j];
-            if (!imp->module_path) {
-                continue;
-            }
-
-            char *target_qn = cbm_pipeline_fqn_module(ctx->project_name, imp->module_path);
-            const cbm_gbuf_node_t *target = cbm_gbuf_find_by_qn(ctx->gbuf, target_qn);
-
-            char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
-            const cbm_gbuf_node_t *source_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);
-
-            if (source_node && target) {
-                char esc_ln[CBM_SZ_128];
-                cbm_json_escape(esc_ln, sizeof(esc_ln), imp->local_name ? imp->local_name : "");
-                char imp_props[CBM_SZ_256];
-                snprintf(imp_props, sizeof(imp_props), "{\"local_name\":\"%s\"}", esc_ln);
-                cbm_gbuf_insert_edge(ctx->gbuf, source_node->id, target->id, "IMPORTS", imp_props);
-                imports_edges++;
-            }
-            free(target_qn);
-            free(file_qn);
-        }
+        imports_edges += create_imports_edges(ctx, result, rel);
+        create_channel_edges(ctx, result, rel);
     }
 
     cbm_log_info("parallel.registry.done", "entries", itoa_log(reg_entries), "defines",
@@ -781,7 +837,9 @@ static void sanitize_expr(char *expr_buf, const char *expr) {
 
 /* Format one call arg as JSON. Returns snprintf result. */
 static int format_call_arg(char *buf, size_t bufsize, const CBMCallArg *a, const char *expr) {
-    char esc_k[CBM_SZ_128], esc_e[CBM_SZ_128], esc_v[CBM_SZ_128];
+    char esc_k[CBM_SZ_128];
+    char esc_e[CBM_SZ_128];
+    char esc_v[CBM_SZ_128];
     cbm_json_escape(esc_e, sizeof(esc_e), expr);
     if (a->keyword && a->value) {
         cbm_json_escape(esc_k, sizeof(esc_k), a->keyword);
@@ -928,12 +986,12 @@ static void emit_http_async_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t
 
     int64_t route_id = build_service_route(gbuf, arg, method, broker, svc);
 
-    char esc_c[CBM_SZ_256], esc_a[CBM_SZ_256];
+    char esc_c[CBM_SZ_256];
+    char esc_a[CBM_SZ_256];
     cbm_json_escape(esc_c, sizeof(esc_c), call->callee_name);
     cbm_json_escape(esc_a, sizeof(esc_a), arg);
     char props[CBM_SZ_2K];
-    int n = snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"url_path\":\"%s\"",
-                     esc_c, esc_a);
+    int n = snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"url_path\":\"%s\"", esc_c, esc_a);
     if (method) {
         n += snprintf(props + n, sizeof(props) - (size_t)n, ",\"method\":\"%s\"", method);
     }
@@ -947,7 +1005,8 @@ static void emit_http_async_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t
 static void emit_config_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
                              const cbm_gbuf_node_t *target, const CBMCall *call,
                              const cbm_resolution_t *res, const char *arg) {
-    char esc_c[CBM_SZ_256], esc_k[CBM_SZ_256];
+    char esc_c[CBM_SZ_256];
+    char esc_k[CBM_SZ_256];
     cbm_json_escape(esc_c, sizeof(esc_c), call->callee_name);
     cbm_json_escape(esc_k, sizeof(esc_k), arg ? arg : "");
     char props[CBM_SZ_2K];
@@ -1068,7 +1127,8 @@ static void detect_url_in_args(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
         snprintf(route_qn, sizeof(route_qn), "__route__ANY__%s", norm);
         int64_t route_id = cbm_gbuf_upsert_node(gbuf, "Route", norm, route_qn, "", 0, 0,
                                                 "{\"source\":\"arg_url\"}");
-        char esc_c[CBM_SZ_256], esc_n[CBM_SZ_256];
+        char esc_c[CBM_SZ_256];
+        char esc_n[CBM_SZ_256];
         cbm_json_escape(esc_c, sizeof(esc_c), call->callee_name);
         cbm_json_escape(esc_n, sizeof(esc_n), norm);
         char eprops[CBM_SZ_512];

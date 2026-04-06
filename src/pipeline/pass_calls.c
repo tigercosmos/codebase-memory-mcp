@@ -255,13 +255,14 @@ static void emit_http_async_edge(cbm_pipeline_ctx_t *ctx, const CBMCall *call,
     const char *broker =
         (svc == CBM_SVC_ASYNC) ? cbm_service_pattern_broker(res->qualified_name) : NULL;
     int64_t route_id = create_svc_route_node(ctx, url_or_topic, svc, method, broker);
-    char esc_callee[CBM_SZ_256], esc_url[CBM_SZ_256];
+    char esc_callee[CBM_SZ_256];
+    char esc_url[CBM_SZ_256];
     cbm_json_escape(esc_callee, sizeof(esc_callee), call->callee_name);
     cbm_json_escape(esc_url, sizeof(esc_url), url_or_topic);
     char props[CBM_SZ_512];
-    snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"url_path\":\"%s\"%s%s%s%s%s}",
-             esc_callee, esc_url, method ? ",\"method\":\"" : "", method ? method : "",
-             method ? "\"" : "", broker ? ",\"broker\":\"" : "", broker ? broker : "");
+    snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"url_path\":\"%s\"%s%s%s%s%s}", esc_callee,
+             esc_url, method ? ",\"method\":\"" : "", method ? method : "", method ? "\"" : "",
+             broker ? ",\"broker\":\"" : "", broker ? broker : "");
     if (broker) {
         size_t plen = strlen(props);
         if (plen > 0 && props[plen - SKIP_ONE] != '}') {
@@ -286,7 +287,8 @@ static void emit_classified_edge(cbm_pipeline_ctx_t *ctx, const CBMCall *call,
         return;
     }
     if (svc == CBM_SVC_CONFIG) {
-        char esc_c[CBM_SZ_256], esc_k[CBM_SZ_256];
+        char esc_c[CBM_SZ_256];
+        char esc_k[CBM_SZ_256];
         cbm_json_escape(esc_c, sizeof(esc_c), call->callee_name);
         cbm_json_escape(esc_k, sizeof(esc_k), call->first_string_arg ? call->first_string_arg : "");
         char props[CBM_SZ_512];

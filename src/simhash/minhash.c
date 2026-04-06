@@ -513,7 +513,9 @@ int cbm_lsh_query_into(const cbm_lsh_index_t *idx, const cbm_minhash_t *fp,
             }
             out_buf[count++] = candidate;
         }
-        if (count >= out_cap) break;
+        if (count >= out_cap) {
+            break;
+        }
     }
 
     seen_set_free(&seen);

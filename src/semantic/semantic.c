@@ -1476,6 +1476,12 @@ const char *cbm_sem_corpus_token_at(const cbm_sem_corpus_t *corpus, int index,
     return corpus->entries[index].token;
 }
 
+static void free_ht_kv(const char *key, void *value, void *userdata) {
+    (void)userdata;
+    free((void *)key);
+    free(value);
+}
+
 void cbm_sem_corpus_free(cbm_sem_corpus_t *corpus) {
     if (!corpus) {
         return;
@@ -1490,6 +1496,7 @@ void cbm_sem_corpus_free(cbm_sem_corpus_t *corpus) {
     free(corpus->doc_token_ids);
     free(corpus->doc_token_counts);
     if (corpus->token_map) {
+        cbm_ht_foreach(corpus->token_map, free_ht_kv, NULL);
         cbm_ht_free(corpus->token_map);
     }
     free(corpus);

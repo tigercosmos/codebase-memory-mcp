@@ -657,10 +657,13 @@ enum {
     SEM_MAX_CANDIDATES = 200,
 };
 
+/* Row of a hyperplane matrix: float[CBM_SEM_DIM]. */
+typedef float hyperplane_row_t[CBM_SEM_DIM];
+
 typedef struct {
     cbm_sem_func_t *funcs;
     uint64_t *signatures;
-    float (*hyperplanes)[CBM_SEM_DIM];
+    hyperplane_row_t *hyperplanes;
     int func_count;
     _Atomic int next_idx;
 } sig_build_ctx_t;
@@ -975,8 +978,8 @@ static void phase3c_export_token_vectors(cbm_gbuf_t *gbuf, cbm_sem_corpus_t *cor
 
 /* Phase 5a: generate NUM_HYPERPLANES × CBM_SEM_DIM deterministic random
  * float hyperplanes seeded from XXH3 so signatures are reproducible. */
-static float (*phase5a_build_hyperplanes(void)) [CBM_SEM_DIM] {
-    float (*hyperplanes)[CBM_SEM_DIM] = malloc(sizeof(float[NUM_HYPERPLANES][CBM_SEM_DIM]));
+static hyperplane_row_t *phase5a_build_hyperplanes(void) {
+    hyperplane_row_t *hyperplanes = malloc(sizeof(hyperplane_row_t) * NUM_HYPERPLANES);
     if (!hyperplanes) {
         return NULL;
     }
@@ -1058,7 +1061,7 @@ static void phase4_build_and_store_vectors(cbm_gbuf_t *gbuf, cbm_sem_func_t *fun
  * caller frees both. */
 static void phase5_lsh_build(cbm_sem_func_t *funcs, int func_count, int worker_count,
                              uint64_t **out_signatures, sem_bucket_t ***out_buckets) {
-    float (*hyperplanes)[CBM_SEM_DIM] = phase5a_build_hyperplanes();
+    hyperplane_row_t *hyperplanes = phase5a_build_hyperplanes();
     uint64_t *signatures = calloc((size_t)func_count, sizeof(uint64_t));
     if (hyperplanes && signatures) {
         sig_build_ctx_t sc = {

@@ -997,12 +997,7 @@ cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
         }
     }
 #else
-    {
-        const char *zed_cfg = cbm_app_config_dir();
-        if (zed_cfg) {
-            snprintf(path, sizeof(path), "%s/zed", zed_cfg);
-        }
-    }
+    snprintf(path, sizeof(path), "%s/.config/zed", home_dir);
 #endif
     agents.zed = dir_exists(path);
 
@@ -1020,24 +1015,14 @@ cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
     snprintf(path, sizeof(path),
              "%s/Library/Application Support/Code/User/globalStorage/kilocode.kilo-code", home_dir);
 #else
-    {
-        const char *kc_cfg = cbm_app_config_dir();
-        if (kc_cfg) {
-            snprintf(path, sizeof(path), "%s/Code/User/globalStorage/kilocode.kilo-code", kc_cfg);
-        }
-    }
+    snprintf(path, sizeof(path), "%s/.config/Code/User/globalStorage/kilocode.kilo-code", home_dir);
 #endif
     agents.kilocode = dir_exists(path);
 
 #ifdef __APPLE__
     snprintf(path, sizeof(path), "%s/Library/Application Support/Code/User", home_dir);
 #else
-    {
-        const char *vs_cfg = cbm_app_config_dir();
-        if (vs_cfg) {
-            snprintf(path, sizeof(path), "%s/Code/User", vs_cfg);
-        }
-    }
+    snprintf(path, sizeof(path), "%s/.config/Code/User", home_dir);
 #endif
     agents.vscode = dir_exists(path);
 

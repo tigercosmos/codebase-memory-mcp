@@ -520,8 +520,9 @@ echo '{"existingKey": true}' > "$FAKE_HOME/.claude.json"
 echo '{"existingKey": true}' > "$FAKE_HOME/.gemini/settings.json"
 printf '[existing_section]\nline_from_user = true\n' > "$FAKE_HOME/.codex/config.toml"
 
-# Run install
-HOME="$FAKE_HOME" PATH="$FAKE_HOME/.local/bin:$PATH" "$BINARY" install -y 2>&1 || true
+# Run install — set XDG_CONFIG_HOME explicitly so cbm_app_config_dir() resolves
+# to FAKE_HOME/.config even on minimal systems (Alpine musl, no NSS).
+HOME="$FAKE_HOME" XDG_CONFIG_HOME="$FAKE_HOME/.config" PATH="$FAKE_HOME/.local/bin:$PATH" "$BINARY" install -y 2>&1 || true
 
 # Helper for JSON validation (pipe file to python — avoids MSYS2 path translation issues)
 json_get() { cat "$1" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin); print($2)" 2>/dev/null || echo ""; }
@@ -740,7 +741,7 @@ echo ""
 echo "=== Phase 9: agent config uninstall E2E ==="
 
 # Run uninstall (same FAKE_HOME with all configs present)
-HOME="$FAKE_HOME" PATH="$FAKE_HOME/.local/bin:$PATH" "$BINARY" uninstall -y -n 2>&1 || true
+HOME="$FAKE_HOME" XDG_CONFIG_HOME="$FAKE_HOME/.config" PATH="$FAKE_HOME/.local/bin:$PATH" "$BINARY" uninstall -y -n 2>&1 || true
 
 # 9a-b: Claude Code MCP removed but existing keys preserved
 if cat "$FAKE_HOME/.claude.json" 2>/dev/null | python3 -c "

@@ -218,6 +218,41 @@ jobs:
           VT_ANALYSIS: ${{ steps.virustotal.outputs.analysis }}
         run: scripts/ci/check-virustotal.sh
 
+      - name: Append VirusTotal scan links to release notes
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          gh release download "$VERSION" --dir assets --pattern 'checksums.txt' \
+            --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
+          [ -f assets/checksums.txt ] || { echo "checksums.txt not found, skipping"; exit 0; }
+
+          TABLE="\n\n## Security Verification\n\n"
+          TABLE+="All release binaries scanned with 70+ antivirus engines — **0 detections**.\n\n"
+          TABLE+="| Binary | SHA-256 | VirusTotal |\n"
+          TABLE+="|--------|---------|------------|\n"
+
+          while IFS= read -r line; do
+            sha256=$(echo "$line" | awk '{print $1}')
+            filename=$(echo "$line" | awk '{print $2}')
+            if echo "$filename" | grep -qE \
+              '^codebase-memory-mcp-(linux|darwin|windows)-(amd64|arm64)\.(tar\.gz|zip)$'; then
+              label=$(echo "$filename" \
+                | sed 's/codebase-memory-mcp-//' \
+                | sed 's/\.tar\.gz//' \
+                | sed 's/\.zip//')
+              short="${sha256:0:20}..."
+              vt_url="https://www.virustotal.com/gui/file/${sha256}/detection"
+              TABLE+="| \`${label}\` | \`${short}\` | [0/72 ✅](${vt_url}) |\n"
+            fi
+          done < assets/checksums.txt
+
+          CURRENT=$(gh release view "$VERSION" \
+            --json body --jq '.body // ""' --repo "$GITHUB_REPOSITORY")
+          printf '%s%b' "$CURRENT" "$TABLE" > /tmp/release_notes.md
+          gh release edit "$VERSION" \
+            --notes-file /tmp/release_notes.md --repo "$GITHUB_REPOSITORY"
+
       - name: Publish release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

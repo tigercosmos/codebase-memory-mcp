@@ -34,6 +34,7 @@
   "cpu": ["x64", "arm64"],
   "files": [
     "bin.js",
-    "install.js"
+    "install.js",
+    "README.md"
   ]
 }

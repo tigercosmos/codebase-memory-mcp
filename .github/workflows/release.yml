@@ -223,29 +223,27 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ inputs.version }}
         run: |
-          gh release download "$VERSION" --dir assets --pattern 'checksums.txt' \
-            --repo "$GITHUB_REPOSITORY" 2>/dev/null || true
-          [ -f assets/checksums.txt ] || { echo "checksums.txt not found, skipping"; exit 0; }
-
+          # Hash the extracted binaries (not the archives — VT indexes binary hashes)
           TABLE="\n\n## Security Verification\n\n"
           TABLE+="All release binaries scanned with 70+ antivirus engines — **0 detections**.\n\n"
           TABLE+="| Binary | SHA-256 | VirusTotal |\n"
           TABLE+="|--------|---------|------------|\n"
 
-          while IFS= read -r line; do
-            sha256=$(echo "$line" | awk '{print $1}')
-            filename=$(echo "$line" | awk '{print $2}')
-            if echo "$filename" | grep -qE \
-              '^codebase-memory-mcp-(linux|darwin|windows)-(amd64|arm64)\.(tar\.gz|zip)$'; then
-              label=$(echo "$filename" \
-                | sed 's/codebase-memory-mcp-//' \
-                | sed 's/\.tar\.gz//' \
-                | sed 's/\.zip//')
-              short="${sha256:0:20}..."
-              vt_url="https://www.virustotal.com/gui/file/${sha256}/detection"
-              TABLE+="| \`${label}\` | \`${short}\` | [0/72 ✅](${vt_url}) |\n"
-            fi
-          done < assets/checksums.txt
+          for bin in binaries/codebase-memory-mcp-*; do
+            [ -f "$bin" ] || continue
+            name=$(basename "$bin")
+            # Skip UI variants and non-binary files
+            echo "$name" | grep -qE \
+              '^codebase-memory-mcp-(linux|darwin|windows)-(amd64|arm64)(\.exe)?$' || continue
+            sha256=$(sha256sum "$bin" 2>/dev/null | awk '{print $1}' \
+              || shasum -a 256 "$bin" | awk '{print $1}')
+            label=$(echo "$name" \
+              | sed 's/^codebase-memory-mcp-//' \
+              | sed 's/\.exe$//')
+            short="${sha256:0:20}..."
+            vt_url="https://www.virustotal.com/gui/file/${sha256}/detection"
+            TABLE+="| \`${label}\` | \`${short}\` | [0/72 ✅](${vt_url}) |\n"
+          done
 
           CURRENT=$(gh release view "$VERSION" \
             --json body --jq '.body // ""' --repo "$GITHUB_REPOSITORY")

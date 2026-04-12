@@ -10,7 +10,7 @@
 [![Platform](https://img.shields.io/badge/macOS_%7C_Linux_%7C_Windows-supported-lightgrey)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
 [![OpenSSF Scorecard](https://api.scorecard.dev/projects/github.com/DeusData/codebase-memory-mcp/badge)](https://scorecard.dev/viewer/?uri=github.com/DeusData/codebase-memory-mcp)
 [![SLSA 3](https://slsa.dev/images/gh-badge-level3.svg)](https://slsa.dev)
-[![VirusTotal](https://img.shields.io/badge/VirusTotal-0%2F72_engines-brightgreen?logo=virustotal)](https://www.virustotal.com/gui/file/0dfd70f73337219925f3ec6a572fe776dbbe1c4c8c6ab546ab214fe16e56a426/detection)
+[![VirusTotal](https://img.shields.io/badge/VirusTotal-0%2F72_engines-brightgreen?logo=virustotal)](https://www.virustotal.com/gui/file/dcbe9a951a2b1f7ec6d003edce2f38b586f74bf8cf98faeedec36f1dd3444b06/detection)
 
 **The fastest and most efficient code intelligence engine for AI coding agents.** Full-indexes an average repository in milliseconds, the Linux kernel (28M LOC, 75K files) in 3 minutes. Answers structural queries in under 1ms. Ships as a single static binary for macOS, Linux, and Windows — download, run `install`, done.
 
@@ -440,11 +440,11 @@ Every release binary is verified through a multi-layer pipeline before publicati
 
 | Binary | SHA-256 | VirusTotal |
 |--------|---------|-----------|
-| `linux-amd64` | `0dfd70f73337219925f3...` | [0/72 ✅](https://www.virustotal.com/gui/file/0dfd70f73337219925f3ec6a572fe776dbbe1c4c8c6ab546ab214fe16e56a426/detection) |
-| `linux-arm64` | `f1fad27262fe7af4a356...` | [0/72 ✅](https://www.virustotal.com/gui/file/f1fad27262fe7af4a356af128e43942355cb2189491079b6790ecc5ae3af069c/detection) |
-| `darwin-arm64` | `a1d3f8a4c353ab94ea8f...` | [0/72 ✅](https://www.virustotal.com/gui/file/a1d3f8a4c353ab94ea8fe1fb60159758020f2f256c9652699a0bd6725189a439/detection) |
-| `darwin-amd64` | `a4d09d97fe1f47e1a0a2...` | [0/72 ✅](https://www.virustotal.com/gui/file/a4d09d97fe1f47e1a0a23309bc34d9937f74c61950bed3259f9576800cc78727/detection) |
-| `windows-amd64` | `da3d7d7bd6f687b69714...` | [0/72 ✅](https://www.virustotal.com/gui/file/da3d7d7bd6f687b697145457ff9d113ecf6daffe173d236457a43223e89a5e9c/detection) |
+| `linux-amd64` | `dcbe9a951a2b1f7ec6d0...` | [0/72 ✅](https://www.virustotal.com/gui/file/dcbe9a951a2b1f7ec6d003edce2f38b586f74bf8cf98faeedec36f1dd3444b06/detection) |
+| `linux-arm64` | `3dc702d2ff2b5a7e9094...` | [0/72 ✅](https://www.virustotal.com/gui/file/3dc702d2ff2b5a7e909409337a8a24ba3f724e7e47d6b159b3c9dedf70117fe2/detection) |
+| `darwin-arm64` | `61d543c9c795471702...` | [0/72 ✅](https://www.virustotal.com/gui/file/61d543c9c79547170296badddcdfe117b145471361d86606c7094d41aea2644f/detection) |
+| `darwin-amd64` | `eea862d705ac9b44a7bd...` | [0/72 ✅](https://www.virustotal.com/gui/file/eea862d705ac9b44a7bd595bfcd1c5c36aa3409ae6e7f0a2454308024c205e40/detection) |
+| `windows-amd64` | `dd828ee0d790f9d81c9b...` | [0/72 ✅](https://www.virustotal.com/gui/file/dd828ee0d790f9d81c9bde348db8d5681d624f786bba0e1b5e6c9409534c7a28/detection) |
 
 Scan links for every release are also included in the GitHub Release notes automatically.
 

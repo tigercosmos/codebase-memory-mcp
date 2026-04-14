@@ -11,6 +11,12 @@ set -euo pipefail
 # Environment:
 #   CBM_DOWNLOAD_URL  Override base URL for downloads (for testing)
 
+# Wrap in main() to prevent partial execution from piped downloads.
+# If curl|bash is interrupted mid-transfer, bash would execute the partial
+# script. With this wrapper, the function is defined but main() is never
+# called because the final line hasn't arrived yet.
+main() {
+
 REPO="DeusData/codebase-memory-mcp"
 INSTALL_DIR="$HOME/.local/bin"
 VARIANT="standard"
@@ -202,3 +208,7 @@ fi
 
 echo ""
 echo "Done! Restart your coding agent to start using codebase-memory-mcp."
+
+} # end main()
+
+main "$@"

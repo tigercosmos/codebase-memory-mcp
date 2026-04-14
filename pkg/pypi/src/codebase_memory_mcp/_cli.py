@@ -1,5 +1,6 @@
 """Downloads the codebase-memory-mcp binary on first run, then exec's it."""
 
+import hashlib
 import os
 import sys
 import platform
@@ -36,16 +37,12 @@ def _safe_extract_tar(tf, dest: str) -> None:
     manual per-member path validation on older Pythons. Mitigates the
     classic tar-slip / Zip Slip vulnerability (CWE-22).
     """
-    # Python 3.12+: use the built-in 'data' filter which rejects absolute
-    # paths, '..' components, symlinks pointing outside dest, etc.
     if hasattr(tf, "extraction_filter") or sys.version_info >= (3, 12):
         tf.extractall(dest, filter="data")
         return
 
-    # Fallback for Python <3.12: validate each member before extracting.
     dest_abs = os.path.abspath(dest)
     for member in tf.getmembers():
-        # Reject symlinks and hardlinks outright (they can escape dest).
         if member.issym() or member.islnk():
             sys.exit(
                 f"codebase-memory-mcp: refusing unsafe tar entry "
@@ -61,11 +58,7 @@ def _safe_extract_tar(tf, dest: str) -> None:
 
 
 def _safe_extract_zip(zf, dest: str) -> None:
-    """Extract a zipfile to dest, rejecting path-traversal entries.
-
-    zipfile.ZipFile has no built-in extraction filter; mirrors the tar
-    fallback logic — validate each member before extracting.
-    """
+    """Extract a zipfile to dest, rejecting path-traversal entries."""
     dest_abs = os.path.abspath(dest)
     for name in zf.namelist():
         member_abs = os.path.abspath(os.path.join(dest_abs, name))
@@ -75,6 +68,42 @@ def _safe_extract_zip(zf, dest: str) -> None:
                 f"(escapes dest: {name!r})"
             )
     zf.extractall(dest)
+
+
+def _verify_checksum(archive_path: str, archive_name: str, version: str) -> None:
+    """Verify SHA256 checksum against checksums.txt from the release."""
+    url = f"https://github.com/{REPO}/releases/download/v{version}/checksums.txt"
+    try:
+        _validate_url_scheme(url)
+        with tempfile.NamedTemporaryFile(suffix=".txt", delete=False) as tmp:
+            tmp_path = tmp.name
+        urllib.request.urlretrieve(url, tmp_path)  # noqa: S310 — scheme validated above
+        with open(tmp_path) as f:
+            for line in f:
+                if archive_name in line:
+                    expected = line.split()[0]
+                    h = hashlib.sha256()
+                    with open(archive_path, "rb") as af:
+                        for chunk in iter(lambda: af.read(65536), b""):
+                            h.update(chunk)
+                    actual = h.hexdigest()
+                    if expected != actual:
+                        sys.exit(
+                            f"codebase-memory-mcp: CHECKSUM MISMATCH for {archive_name}\n"
+                            f"  expected: {expected}\n"
+                            f"  actual:   {actual}"
+                        )
+                    print("codebase-memory-mcp: checksum verified.", file=sys.stderr)
+                    break
+    except SystemExit:
+        raise
+    except Exception:
+        pass  # Non-fatal: checksum unavailable
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except Exception:
+            pass
 
 
 def _version() -> str:
@@ -124,10 +153,8 @@ def _download(version: str) -> Path:
     os_name = _os_name()
     arch = _arch()
     ext = "zip" if os_name == "windows" else "tar.gz"
-    url = (
-        f"https://github.com/{REPO}/releases/download/v{version}"
-        f"/codebase-memory-mcp-{os_name}-{arch}.{ext}"
-    )
+    archive = f"codebase-memory-mcp-{os_name}-{arch}.{ext}"
+    url = f"https://github.com/{REPO}/releases/download/v{version}/{archive}"
     _validate_url_scheme(url)
 
     dest = _bin_path(version)
@@ -149,6 +176,8 @@ def _download(version: str) -> Path:
                 f"See https://github.com/{REPO}/releases for available versions."
             )
 
+        _verify_checksum(tmp_archive, archive, version)
+
         if ext == "tar.gz":
             import tarfile
             with tarfile.open(tmp_archive) as tf:
@@ -161,7 +190,7 @@ def _download(version: str) -> Path:
         bin_name = "codebase-memory-mcp.exe" if os_name == "windows" else "codebase-memory-mcp"
         extracted = os.path.join(tmp, bin_name)
         if not os.path.exists(extracted):
-            sys.exit(f"codebase-memory-mcp: binary not found after extraction")
+            sys.exit("codebase-memory-mcp: binary not found after extraction")
 
         shutil.copy2(extracted, dest)
         current = dest.stat().st_mode

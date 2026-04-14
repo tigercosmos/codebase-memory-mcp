@@ -17,6 +17,12 @@ VARIANT="standard"
 SKIP_CONFIG=false
 CBM_DOWNLOAD_URL="${CBM_DOWNLOAD_URL:-https://github.com/${REPO}/releases/latest/download}"
 
+# Security: reject non-HTTPS download URLs (defense-in-depth)
+case "$CBM_DOWNLOAD_URL" in
+    https://*|http://localhost*|http://127.0.0.1*) ;;
+    *) echo "error: refusing non-HTTPS download URL: $CBM_DOWNLOAD_URL" >&2; exit 1 ;;
+esac
+
 for arg in "$@"; do
     case "$arg" in
         --ui)           VARIANT="ui" ;;

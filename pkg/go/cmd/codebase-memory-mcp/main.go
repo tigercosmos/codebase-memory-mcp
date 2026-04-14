@@ -173,8 +173,19 @@ func download(dest string) error {
 	return nil
 }
 
-func httpGet(url, dest string) error {
-	resp, err := http.Get(url) //nolint:gosec
+// validateURLScheme rejects non-https URLs before any fetch (defense-in-depth).
+func validateURLScheme(rawURL string) error {
+	if !strings.HasPrefix(rawURL, "https://") {
+		return fmt.Errorf("refusing non-https URL: %s", rawURL)
+	}
+	return nil
+}
+
+func httpGet(rawURL, dest string) error {
+	if err := validateURLScheme(rawURL); err != nil {
+		return err
+	}
+	resp, err := http.Get(rawURL) //nolint:gosec
 	if err != nil {
 		return err
 	}
@@ -192,6 +203,9 @@ func httpGet(url, dest string) error {
 }
 
 func fetchChecksums(url string) (map[string]string, error) {
+	if err := validateURLScheme(url); err != nil {
+		return nil, err
+	}
 	resp, err := http.Get(url) //nolint:gosec
 	if err != nil {
 		return nil, err

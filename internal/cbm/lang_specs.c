@@ -167,7 +167,7 @@ static const char *empty_types[] = {NULL};
 
 // ==================== GO ====================
 static const char *go_func_types[] = {"function_declaration", "method_declaration", "method_elem",
-                                      NULL};
+                                      "func_literal", NULL};
 static const char *go_class_types[] = {"type_spec", "type_alias", "type_declaration", NULL};
 static const char *go_field_types[] = {"field_declaration", NULL};
 static const char *go_module_types[] = {"source_file", NULL};
@@ -175,10 +175,15 @@ static const char *go_call_types[] = {"call_expression", NULL};
 static const char *go_import_types[] = {"import_declaration", "import", NULL};
 static const char *go_branch_types[] = {"if_statement",
                                         "for_statement",
-                                        "switch_expression",
+                                        "expression_switch_statement",
+                                        "type_switch_statement",
                                         "select_statement",
-                                        "case_clause",
-                                        "default_clause",
+                                        "expression_case",
+                                        "type_case",
+                                        "communication_case",
+                                        "default_case",
+                                        "defer_statement",
+                                        "go_statement",
                                         NULL};
 static const char *go_var_types[] = {"var_declaration", "const_declaration", NULL};
 static const char *go_assign_types[] = {"assignment_statement", "short_var_declaration", NULL};

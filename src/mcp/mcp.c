@@ -55,6 +55,7 @@ enum {
 #include "foundation/log.h"
 #include "foundation/str_util.h"
 #include "foundation/compat_regex.h"
+#include "pipeline/artifact.h"
 
 #ifdef _WIN32
 #include <process.h> /* _getpid */
@@ -271,7 +272,10 @@ static const tool_def_t TOOLS[] = {
      "fast: structure only. cross-repo-intelligence: match Routes/Channels across projects.\"},"
      "\"target_projects\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},"
      "\"description\":\"Projects to search for cross-repo links (cross-repo-intelligence mode). "
-     "Use [\\\"*\\\"] for all indexed projects. Run list_projects to see available projects.\"}"
+     "Use [\\\"*\\\"] for all indexed projects. Run list_projects to see available projects.\"},"
+     "\"persistence\":{\"type\":\"boolean\",\"default\":false,\"description\":"
+     "\"Write compressed artifact to .codebase-memory/graph.db.zst for team sharing. "
+     "Teammates can bootstrap from the artifact instead of full re-indexing.\"}"
      "},\"required\":[\"repo_path\"]}"},
 
     {"search_graph",
@@ -2137,6 +2141,52 @@ static char *handle_cross_repo_mode(const char *repo_path, const char *args) {
     return out;
 }
 
+/* Bootstrap from artifact if no local DB exists for this project. */
+static void try_artifact_bootstrap(const char *project_name, const char *repo_path) {
+    char db_buf[CBM_SZ_1K];
+    project_db_path(project_name, db_buf, sizeof(db_buf));
+    struct stat db_st;
+    if (stat(db_buf, &db_st) != 0 && cbm_artifact_exists(repo_path)) {
+        cbm_log_info("index.artifact_bootstrap", "project", project_name);
+        cbm_artifact_import(repo_path, db_buf);
+    }
+}
+
+/* Build the success portion of the index_repository response. */
+static void build_index_success_response(cbm_mcp_server_t *srv, yyjson_mut_doc *doc,
+                                         yyjson_mut_val *root, const char *project_name,
+                                         const char *repo_path, bool persistence) {
+    cbm_store_t *store = resolve_store(srv, project_name);
+    if (!store) {
+        return;
+    }
+    int nodes = cbm_store_count_nodes(store, project_name);
+    int edges = cbm_store_count_edges(store, project_name);
+    yyjson_mut_obj_add_int(doc, root, "nodes", nodes);
+    yyjson_mut_obj_add_int(doc, root, "edges", edges);
+
+    char adr_path[CBM_SZ_4K];
+    snprintf(adr_path, sizeof(adr_path), "%s/.codebase-memory/adr.md", repo_path);
+    struct stat adr_st;
+    bool adr_exists = (stat(adr_path, &adr_st) == 0);
+    yyjson_mut_obj_add_bool(doc, root, "adr_present", adr_exists);
+    if (!adr_exists) {
+        yyjson_mut_obj_add_str(
+            doc, root, "adr_hint",
+            "Project indexed. Consider creating an Architecture Decision Record: "
+            "explore the codebase with get_architecture(aspects=['all']), then use "
+            "manage_adr(mode='store') to persist architectural insights across sessions.");
+    }
+
+    bool has_artifact = cbm_artifact_exists(repo_path);
+    yyjson_mut_obj_add_bool(doc, root, "artifact_present", has_artifact);
+    if (persistence && has_artifact) {
+        yyjson_mut_obj_add_str(doc, root, "artifact_hint",
+                               "Persistent artifact written to .codebase-memory/graph.db.zst. "
+                               "Commit this file to share the index with teammates.");
+    }
+}
+
 static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     char *repo_path = cbm_mcp_get_string_arg(args, "repo_path");
     char *mode_str = cbm_mcp_get_string_arg(args, "mode");
@@ -2162,13 +2212,19 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     }
     free(mode_str);
 
+    bool persistence = cbm_mcp_get_bool_arg(args, "persistence");
+
     cbm_pipeline_t *p = cbm_pipeline_new(repo_path, NULL, mode);
     if (!p) {
         free(repo_path);
         return cbm_mcp_text_result("failed to create pipeline", true);
     }
+    cbm_pipeline_set_persistence(p, persistence);
 
     char *project_name = heap_strdup(cbm_pipeline_project_name(p));
+
+    /* Bootstrap from artifact if no local DB exists */
+    try_artifact_bootstrap(project_name, repo_path);
 
     /* Close cached store — pipeline will delete + recreate the .db file */
     if (srv->owns_store && srv->store) {
@@ -2212,27 +2268,7 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     }
 
     if (rc == 0) {
-        cbm_store_t *store = resolve_store(srv, project_name);
-        if (store) {
-            int nodes = cbm_store_count_nodes(store, project_name);
-            int edges = cbm_store_count_edges(store, project_name);
-            yyjson_mut_obj_add_int(doc, root, "nodes", nodes);
-            yyjson_mut_obj_add_int(doc, root, "edges", edges);
-
-            /* Check ADR presence and suggest creation if missing */
-            char adr_path[CBM_SZ_4K];
-            snprintf(adr_path, sizeof(adr_path), "%s/.codebase-memory/adr.md", repo_path);
-            struct stat adr_st;
-            bool adr_exists = (stat(adr_path, &adr_st) == 0);
-            yyjson_mut_obj_add_bool(doc, root, "adr_present", adr_exists);
-            if (!adr_exists) {
-                yyjson_mut_obj_add_str(
-                    doc, root, "adr_hint",
-                    "Project indexed. Consider creating an Architecture Decision Record: "
-                    "explore the codebase with get_architecture(aspects=['all']), then use "
-                    "manage_adr(mode='store') to persist architectural insights across sessions.");
-            }
-        }
+        build_index_success_response(srv, doc, root, project_name, repo_path, persistence);
     }
 
     char *json = yy_doc_to_str(doc);

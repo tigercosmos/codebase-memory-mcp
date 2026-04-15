@@ -1029,6 +1029,10 @@ cbm_detected_agents_t cbm_detect_agents(const char *home_dir) {
     snprintf(path, sizeof(path), "%s/.openclaw", home_dir);
     agents.openclaw = dir_exists(path);
 
+    /* Kiro: ~/.kiro/ */
+    snprintf(path, sizeof(path), "%s/.kiro", home_dir);
+    agents.kiro = dir_exists(path);
+
     return agents;
 }
 
@@ -2602,6 +2606,7 @@ static void print_detected_agents(const cbm_detected_agents_t *a) {
         {a->kilocode, "KiloCode"},
         {a->vscode, "VS-Code"},
         {a->openclaw, "OpenClaw"},
+        {a->kiro, "Kiro"},
     };
     printf("Detected agents:");
     bool any = false;
@@ -2775,6 +2780,17 @@ static void install_editor_agent_configs(const cbm_detected_agents_t *agents, co
         char cp[CLI_BUF_1K];
         snprintf(cp, sizeof(cp), "%s/.openclaw/openclaw.json", home);
         install_generic_agent_config("OpenClaw", binary_path, cp, NULL, dry_run,
+                                     cbm_install_editor_mcp);
+    }
+    if (agents->kiro) {
+        char cp[CLI_BUF_1K];
+        char sd[CLI_BUF_1K];
+        snprintf(cp, sizeof(cp), "%s/.kiro/settings/mcp.json", home);
+        snprintf(sd, sizeof(sd), "%s/.kiro/settings", home);
+        if (!dry_run) {
+            cbm_mkdir_p(sd, CLI_OCTAL_PERM);
+        }
+        install_generic_agent_config("Kiro", binary_path, cp, NULL, dry_run,
                                      cbm_install_editor_mcp);
     }
 }
@@ -3079,6 +3095,12 @@ static void uninstall_editor_agents(const cbm_detected_agents_t *agents, const c
         char cp[CLI_BUF_1K];
         snprintf(cp, sizeof(cp), "%s/.openclaw/openclaw.json", home);
         uninstall_agent_mcp_instr((mcp_uninstall_args_t){"OpenClaw", cp, NULL}, dry_run,
+                                  cbm_remove_editor_mcp);
+    }
+    if (agents->kiro) {
+        char cp[CLI_BUF_1K];
+        snprintf(cp, sizeof(cp), "%s/.kiro/settings/mcp.json", home);
+        uninstall_agent_mcp_instr((mcp_uninstall_args_t){"Kiro", cp, NULL}, dry_run,
                                   cbm_remove_editor_mcp);
     }
 }

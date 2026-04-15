@@ -71,6 +71,97 @@ extern const TSLanguage *tree_sitter_form(void);
 extern const TSLanguage *tree_sitter_magma(void);
 extern const TSLanguage *tree_sitter_wolfram(void);
 
+// New languages
+extern const TSLanguage *tree_sitter_solidity(void);
+extern const TSLanguage *tree_sitter_typst(void);
+extern const TSLanguage *tree_sitter_gdscript(void);
+extern const TSLanguage *tree_sitter_gleam(void);
+extern const TSLanguage *tree_sitter_powershell(void);
+extern const TSLanguage *tree_sitter_pascal(void);
+extern const TSLanguage *tree_sitter_d(void);
+extern const TSLanguage *tree_sitter_nim(void);
+extern const TSLanguage *tree_sitter_scheme(void);
+extern const TSLanguage *tree_sitter_fennel(void);
+extern const TSLanguage *tree_sitter_fish(void);
+extern const TSLanguage *tree_sitter_awk(void);
+extern const TSLanguage *tree_sitter_zsh(void);
+extern const TSLanguage *tree_sitter_tcl(void);
+extern const TSLanguage *tree_sitter_ada(void);
+extern const TSLanguage *tree_sitter_agda(void);
+extern const TSLanguage *tree_sitter_racket(void);
+extern const TSLanguage *tree_sitter_odin(void);
+extern const TSLanguage *tree_sitter_rescript(void);
+extern const TSLanguage *tree_sitter_purescript(void);
+extern const TSLanguage *tree_sitter_nickel(void);
+extern const TSLanguage *tree_sitter_crystal(void);
+extern const TSLanguage *tree_sitter_teal(void);
+extern const TSLanguage *tree_sitter_hare(void);
+extern const TSLanguage *tree_sitter_pony(void);
+extern const TSLanguage *tree_sitter_luau(void);
+extern const TSLanguage *tree_sitter_janet_simple(void);
+extern const TSLanguage *tree_sitter_sway(void);
+extern const TSLanguage *tree_sitter_nasm(void);
+extern const TSLanguage *tree_sitter_asm(void);
+extern const TSLanguage *tree_sitter_astro(void);
+extern const TSLanguage *tree_sitter_blade(void);
+extern const TSLanguage *tree_sitter_just(void);
+extern const TSLanguage *tree_sitter_gotmpl(void);
+extern const TSLanguage *tree_sitter_templ(void);
+extern const TSLanguage *tree_sitter_liquid(void);
+extern const TSLanguage *tree_sitter_jinja2(void);
+extern const TSLanguage *tree_sitter_prisma(void);
+extern const TSLanguage *tree_sitter_hyprlang(void);
+extern const TSLanguage *tree_sitter_dotenv(void);
+extern const TSLanguage *tree_sitter_diff(void);
+extern const TSLanguage *tree_sitter_wgsl(void);
+extern const TSLanguage *tree_sitter_kdl(void);
+extern const TSLanguage *tree_sitter_json5(void);
+extern const TSLanguage *tree_sitter_jsonnet(void);
+extern const TSLanguage *tree_sitter_ron(void);
+extern const TSLanguage *tree_sitter_thrift(void);
+extern const TSLanguage *tree_sitter_capnp(void);
+extern const TSLanguage *tree_sitter_properties(void);
+extern const TSLanguage *tree_sitter_ssh_config(void);
+extern const TSLanguage *tree_sitter_bibtex(void);
+extern const TSLanguage *tree_sitter_starlark(void);
+extern const TSLanguage *tree_sitter_bicep(void);
+extern const TSLanguage *tree_sitter_csv(void);
+extern const TSLanguage *tree_sitter_requirements(void);
+extern const TSLanguage *tree_sitter_hlsl(void);
+extern const TSLanguage *tree_sitter_vhdl(void);
+extern const TSLanguage *tree_sitter_systemverilog(void);
+extern const TSLanguage *tree_sitter_devicetree(void);
+extern const TSLanguage *tree_sitter_linkerscript(void);
+extern const TSLanguage *tree_sitter_gn(void);
+extern const TSLanguage *tree_sitter_kconfig(void);
+extern const TSLanguage *tree_sitter_bitbake(void);
+extern const TSLanguage *tree_sitter_smali(void);
+extern const TSLanguage *tree_sitter_tablegen(void);
+extern const TSLanguage *tree_sitter_ispc(void);
+extern const TSLanguage *tree_sitter_cairo(void);
+extern const TSLanguage *tree_sitter_move(void);
+extern const TSLanguage *tree_sitter_squirrel(void);
+extern const TSLanguage *tree_sitter_func(void);
+extern const TSLanguage *tree_sitter_regex(void);
+extern const TSLanguage *tree_sitter_jsdoc(void);
+extern const TSLanguage *tree_sitter_rst(void);
+extern const TSLanguage *tree_sitter_beancount(void);
+extern const TSLanguage *tree_sitter_mermaid(void);
+extern const TSLanguage *tree_sitter_puppet(void);
+extern const TSLanguage *tree_sitter_po(void);
+extern const TSLanguage *tree_sitter_gitattributes(void);
+extern const TSLanguage *tree_sitter_gitignore(void);
+extern const TSLanguage *tree_sitter_slang(void);
+extern const TSLanguage *tree_sitter_llvm(void);
+extern const TSLanguage *tree_sitter_smithy(void);
+extern const TSLanguage *tree_sitter_wit(void);
+extern const TSLanguage *tree_sitter_tlaplus(void);
+extern const TSLanguage *tree_sitter_pkl(void);
+extern const TSLanguage *tree_sitter_gomod(void);
+extern const TSLanguage *tree_sitter_apex(void);
+extern const TSLanguage *tree_sitter_soql(void);
+extern const TSLanguage *tree_sitter_sosl(void);
+
 // -- Empty sentinel --
 static const char *empty_types[] = {NULL};
 
@@ -715,6 +806,97 @@ static const char *nix_env_funcs[] = {"builtins.getEnv", NULL};
 static const char *fortran_env_funcs[] = {"get_environment_variable", NULL};
 static const char *fsharp_env_funcs[] = {"Environment.GetEnvironmentVariable", NULL};
 
+// ==================== NEW LANGUAGE MODULE TYPES ====================
+static const char *solidity_module_types[] = {"source_file", NULL};
+static const char *typst_module_types[] = {"source_file", NULL};
+static const char *gdscript_module_types[] = {"source_file", NULL};
+static const char *gleam_module_types[] = {"source_file", NULL};
+static const char *powershell_module_types[] = {"program", NULL};
+static const char *pascal_module_types[] = {"source_file", NULL};
+static const char *d_module_types[] = {"source_file", NULL};
+static const char *nim_module_types[] = {"source_file", NULL};
+static const char *scheme_module_types[] = {"program", NULL};
+static const char *fennel_module_types[] = {"program", NULL};
+static const char *fish_module_types[] = {"program", NULL};
+static const char *awk_module_types[] = {"program", NULL};
+static const char *zsh_module_types[] = {"program", NULL};
+static const char *tcl_module_types[] = {"source_file", NULL};
+static const char *ada_module_types[] = {"compilation", NULL};
+static const char *agda_module_types[] = {"source_file", NULL};
+static const char *racket_module_types[] = {"program", NULL};
+static const char *odin_module_types[] = {"source_file", NULL};
+static const char *rescript_module_types[] = {"source_file", NULL};
+static const char *purescript_module_types[] = {"module", NULL};
+static const char *nickel_module_types[] = {"source_file", NULL};
+static const char *crystal_module_types[] = {"program", NULL};
+static const char *teal_module_types[] = {"program", NULL};
+static const char *hare_module_types[] = {"source_file", NULL};
+static const char *pony_module_types[] = {"source_file", NULL};
+static const char *luau_module_types[] = {"program", NULL};
+static const char *janet_module_types[] = {"source", NULL};
+static const char *sway_module_types[] = {"source_file", NULL};
+static const char *nasm_module_types[] = {"source_file", NULL};
+static const char *assembly_module_types[] = {"program", NULL};
+static const char *astro_module_types[] = {"document", NULL};
+static const char *blade_module_types[] = {"document", NULL};
+static const char *just_module_types[] = {"source_file", NULL};
+static const char *gotemplate_module_types[] = {"template", NULL};
+static const char *templ_module_types[] = {"source_file", NULL};
+static const char *liquid_module_types[] = {"template", NULL};
+static const char *jinja2_module_types[] = {"source_file", NULL};
+static const char *prisma_module_types[] = {"program", NULL};
+static const char *hyprlang_module_types[] = {"source_file", NULL};
+static const char *dotenv_module_types[] = {"source_file", NULL};
+static const char *diff_module_types[] = {"source", NULL};
+static const char *wgsl_module_types[] = {"translation_unit", NULL};
+static const char *kdl_module_types[] = {"document", NULL};
+static const char *json5_module_types[] = {"document", NULL};
+static const char *jsonnet_module_types[] = {"document", NULL};
+static const char *ron_module_types[] = {"source_file", NULL};
+static const char *thrift_module_types[] = {"document", NULL};
+static const char *capnp_module_types[] = {"source", NULL};
+static const char *properties_module_types[] = {"source_file", NULL};
+static const char *sshconfig_module_types[] = {"source_file", NULL};
+static const char *bibtex_module_types[] = {"document", NULL};
+static const char *starlark_module_types[] = {"module", NULL};
+static const char *bicep_module_types[] = {"program", NULL};
+static const char *csv_module_types[] = {"document", NULL};
+static const char *requirements_module_types[] = {"file", NULL};
+static const char *hlsl_module_types[] = {"translation_unit", NULL};
+static const char *vhdl_module_types[] = {"design_file", NULL};
+static const char *systemverilog_module_types[] = {"source_file", NULL};
+static const char *devicetree_module_types[] = {"document", NULL};
+static const char *linkerscript_module_types[] = {"source_file", NULL};
+static const char *gn_module_types[] = {"source_file", NULL};
+static const char *kconfig_module_types[] = {"source", NULL};
+static const char *bitbake_module_types[] = {"source_file", NULL};
+static const char *smali_module_types[] = {"source_file", NULL};
+static const char *tablegen_module_types[] = {"source_file", NULL};
+static const char *ispc_module_types[] = {"translation_unit", NULL};
+static const char *cairo_module_types[] = {"source_file", NULL};
+static const char *move_module_types[] = {"source_file", NULL};
+static const char *squirrel_module_types[] = {"source_file", NULL};
+static const char *func_module_types[] = {"source_file", NULL};
+static const char *regex_module_types[] = {"pattern", NULL};
+static const char *jsdoc_module_types[] = {"document", NULL};
+static const char *rst_module_types[] = {"document", NULL};
+static const char *beancount_module_types[] = {"file", NULL};
+static const char *mermaid_module_types[] = {"source_file", NULL};
+static const char *puppet_module_types[] = {"source_file", NULL};
+static const char *po_module_types[] = {"source_file", NULL};
+static const char *gitattributes_module_types[] = {"source", NULL};
+static const char *gitignore_module_types[] = {"document", NULL};
+static const char *slang_module_types[] = {"source_file", NULL};
+static const char *llvm_module_types[] = {"source_file", NULL};
+static const char *smithy_module_types[] = {"source_file", NULL};
+static const char *wit_module_types[] = {"source_file", NULL};
+static const char *tlaplus_module_types[] = {"source_file", NULL};
+static const char *pkl_module_types[] = {"module", NULL};
+static const char *gomod_module_types[] = {"source_file", NULL};
+static const char *apex_module_types[] = {"parser_output", NULL};
+static const char *soql_module_types[] = {"source_file", NULL};
+static const char *sosl_module_types[] = {"source_file", NULL};
+
 // ==================== SPEC TABLE ====================
 
 static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
@@ -1098,6 +1280,492 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
                           wolfram_module_types, wolfram_call_types, wolfram_import_types,
                           empty_types, empty_types, empty_types, empty_types, empty_types, NULL,
                           empty_types, NULL, NULL, tree_sitter_wolfram},
+
+    // CBM_LANG_SOLIDITY
+    [CBM_LANG_SOLIDITY] = {CBM_LANG_SOLIDITY, empty_types, empty_types, empty_types,
+                           solidity_module_types, empty_types, empty_types, empty_types,
+                           empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                           NULL, NULL, tree_sitter_solidity},
+
+    // CBM_LANG_TYPST
+    [CBM_LANG_TYPST] = {CBM_LANG_TYPST, empty_types, empty_types, empty_types, typst_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_typst},
+
+    // CBM_LANG_GDSCRIPT
+    [CBM_LANG_GDSCRIPT] = {CBM_LANG_GDSCRIPT, empty_types, empty_types, empty_types,
+                           gdscript_module_types, empty_types, empty_types, empty_types,
+                           empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                           NULL, NULL, tree_sitter_gdscript},
+
+    // CBM_LANG_GLEAM
+    [CBM_LANG_GLEAM] = {CBM_LANG_GLEAM, empty_types, empty_types, empty_types, gleam_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_gleam},
+
+    // CBM_LANG_POWERSHELL
+    [CBM_LANG_POWERSHELL] = {CBM_LANG_POWERSHELL, empty_types, empty_types, empty_types,
+                             powershell_module_types, empty_types, empty_types, empty_types,
+                             empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                             NULL, NULL, tree_sitter_powershell},
+
+    // CBM_LANG_PASCAL
+    [CBM_LANG_PASCAL] = {CBM_LANG_PASCAL, empty_types, empty_types, empty_types,
+                         pascal_module_types, empty_types, empty_types, empty_types, empty_types,
+                         empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                         tree_sitter_pascal},
+
+    // CBM_LANG_DLANG
+    [CBM_LANG_DLANG] = {CBM_LANG_DLANG, empty_types, empty_types, empty_types, d_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_d},
+
+    // CBM_LANG_NIM
+    [CBM_LANG_NIM] = {CBM_LANG_NIM, empty_types, empty_types, empty_types, nim_module_types,
+                      empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                      empty_types, NULL, empty_types, NULL, NULL, tree_sitter_nim},
+
+    // CBM_LANG_SCHEME
+    [CBM_LANG_SCHEME] = {CBM_LANG_SCHEME, empty_types, empty_types, empty_types,
+                         scheme_module_types, empty_types, empty_types, empty_types, empty_types,
+                         empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                         tree_sitter_scheme},
+
+    // CBM_LANG_FENNEL
+    [CBM_LANG_FENNEL] = {CBM_LANG_FENNEL, empty_types, empty_types, empty_types,
+                         fennel_module_types, empty_types, empty_types, empty_types, empty_types,
+                         empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                         tree_sitter_fennel},
+
+    // CBM_LANG_FISH
+    [CBM_LANG_FISH] = {CBM_LANG_FISH, empty_types, empty_types, empty_types, fish_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_fish},
+
+    // CBM_LANG_AWK
+    [CBM_LANG_AWK] = {CBM_LANG_AWK, empty_types, empty_types, empty_types, awk_module_types,
+                      empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                      empty_types, NULL, empty_types, NULL, NULL, tree_sitter_awk},
+
+    // CBM_LANG_ZSH
+    [CBM_LANG_ZSH] = {CBM_LANG_ZSH, empty_types, empty_types, empty_types, zsh_module_types,
+                      empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                      empty_types, NULL, empty_types, NULL, NULL, tree_sitter_zsh},
+
+    // CBM_LANG_TCL
+    [CBM_LANG_TCL] = {CBM_LANG_TCL, empty_types, empty_types, empty_types, tcl_module_types,
+                      empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                      empty_types, NULL, empty_types, NULL, NULL, tree_sitter_tcl},
+
+    // CBM_LANG_ADA
+    [CBM_LANG_ADA] = {CBM_LANG_ADA, empty_types, empty_types, empty_types, ada_module_types,
+                      empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                      empty_types, NULL, empty_types, NULL, NULL, tree_sitter_ada},
+
+    // CBM_LANG_AGDA
+    [CBM_LANG_AGDA] = {CBM_LANG_AGDA, empty_types, empty_types, empty_types, agda_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_agda},
+
+    // CBM_LANG_RACKET
+    [CBM_LANG_RACKET] = {CBM_LANG_RACKET, empty_types, empty_types, empty_types,
+                         racket_module_types, empty_types, empty_types, empty_types, empty_types,
+                         empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                         tree_sitter_racket},
+
+    // CBM_LANG_ODIN
+    [CBM_LANG_ODIN] = {CBM_LANG_ODIN, empty_types, empty_types, empty_types, odin_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_odin},
+
+    // CBM_LANG_RESCRIPT
+    [CBM_LANG_RESCRIPT] = {CBM_LANG_RESCRIPT, empty_types, empty_types, empty_types,
+                           rescript_module_types, empty_types, empty_types, empty_types,
+                           empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                           NULL, NULL, tree_sitter_rescript},
+
+    // CBM_LANG_PURESCRIPT
+    [CBM_LANG_PURESCRIPT] = {CBM_LANG_PURESCRIPT, empty_types, empty_types, empty_types,
+                             purescript_module_types, empty_types, empty_types, empty_types,
+                             empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                             NULL, NULL, tree_sitter_purescript},
+
+    // CBM_LANG_NICKEL
+    [CBM_LANG_NICKEL] = {CBM_LANG_NICKEL, empty_types, empty_types, empty_types,
+                         nickel_module_types, empty_types, empty_types, empty_types, empty_types,
+                         empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                         tree_sitter_nickel},
+
+    // CBM_LANG_CRYSTAL
+    [CBM_LANG_CRYSTAL] = {CBM_LANG_CRYSTAL, empty_types, empty_types, empty_types,
+                          crystal_module_types, empty_types, empty_types, empty_types, empty_types,
+                          empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                          tree_sitter_crystal},
+
+    // CBM_LANG_TEAL
+    [CBM_LANG_TEAL] = {CBM_LANG_TEAL, empty_types, empty_types, empty_types, teal_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_teal},
+
+    // CBM_LANG_HARE
+    [CBM_LANG_HARE] = {CBM_LANG_HARE, empty_types, empty_types, empty_types, hare_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_hare},
+
+    // CBM_LANG_PONY
+    [CBM_LANG_PONY] = {CBM_LANG_PONY, empty_types, empty_types, empty_types, pony_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_pony},
+
+    // CBM_LANG_LUAU
+    [CBM_LANG_LUAU] = {CBM_LANG_LUAU, empty_types, empty_types, empty_types, luau_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_luau},
+
+    // CBM_LANG_JANET
+    [CBM_LANG_JANET] = {CBM_LANG_JANET, empty_types, empty_types, empty_types, janet_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                        tree_sitter_janet_simple},
+
+    // CBM_LANG_SWAY
+    [CBM_LANG_SWAY] = {CBM_LANG_SWAY, empty_types, empty_types, empty_types, sway_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_sway},
+
+    // CBM_LANG_NASM
+    [CBM_LANG_NASM] = {CBM_LANG_NASM, empty_types, empty_types, empty_types, nasm_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_nasm},
+
+    // CBM_LANG_ASSEMBLY
+    [CBM_LANG_ASSEMBLY] = {CBM_LANG_ASSEMBLY, empty_types, empty_types, empty_types,
+                           assembly_module_types, empty_types, empty_types, empty_types,
+                           empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                           NULL, NULL, tree_sitter_asm},
+
+    // CBM_LANG_ASTRO
+    [CBM_LANG_ASTRO] = {CBM_LANG_ASTRO, empty_types, empty_types, empty_types, astro_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_astro},
+
+    // CBM_LANG_BLADE
+    [CBM_LANG_BLADE] = {CBM_LANG_BLADE, empty_types, empty_types, empty_types, blade_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_blade},
+
+    // CBM_LANG_JUST
+    [CBM_LANG_JUST] = {CBM_LANG_JUST, empty_types, empty_types, empty_types, just_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_just},
+
+    // CBM_LANG_GOTEMPLATE
+    [CBM_LANG_GOTEMPLATE] = {CBM_LANG_GOTEMPLATE, empty_types, empty_types, empty_types,
+                             gotemplate_module_types, empty_types, empty_types, empty_types,
+                             empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                             NULL, NULL, tree_sitter_gotmpl},
+
+    // CBM_LANG_TEMPL
+    [CBM_LANG_TEMPL] = {CBM_LANG_TEMPL, empty_types, empty_types, empty_types, templ_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_templ},
+
+    // CBM_LANG_LIQUID
+    [CBM_LANG_LIQUID] = {CBM_LANG_LIQUID, empty_types, empty_types, empty_types,
+                         liquid_module_types, empty_types, empty_types, empty_types, empty_types,
+                         empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                         tree_sitter_liquid},
+
+    // CBM_LANG_JINJA2
+    [CBM_LANG_JINJA2] = {CBM_LANG_JINJA2, empty_types, empty_types, empty_types,
+                         jinja2_module_types, empty_types, empty_types, empty_types, empty_types,
+                         empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                         tree_sitter_jinja2},
+
+    // CBM_LANG_PRISMA
+    [CBM_LANG_PRISMA] = {CBM_LANG_PRISMA, empty_types, empty_types, empty_types,
+                         prisma_module_types, empty_types, empty_types, empty_types, empty_types,
+                         empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                         tree_sitter_prisma},
+
+    // CBM_LANG_HYPRLANG
+    [CBM_LANG_HYPRLANG] = {CBM_LANG_HYPRLANG, empty_types, empty_types, empty_types,
+                           hyprlang_module_types, empty_types, empty_types, empty_types,
+                           empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                           NULL, NULL, tree_sitter_hyprlang},
+
+    // CBM_LANG_DOTENV
+    [CBM_LANG_DOTENV] = {CBM_LANG_DOTENV, empty_types, empty_types, empty_types,
+                         dotenv_module_types, empty_types, empty_types, empty_types, empty_types,
+                         empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                         tree_sitter_dotenv},
+
+    // CBM_LANG_DIFF
+    [CBM_LANG_DIFF] = {CBM_LANG_DIFF, empty_types, empty_types, empty_types, diff_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_diff},
+
+    // CBM_LANG_WGSL
+    [CBM_LANG_WGSL] = {CBM_LANG_WGSL, empty_types, empty_types, empty_types, wgsl_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_wgsl},
+
+    // CBM_LANG_KDL
+    [CBM_LANG_KDL] = {CBM_LANG_KDL, empty_types, empty_types, empty_types, kdl_module_types,
+                      empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                      empty_types, NULL, empty_types, NULL, NULL, tree_sitter_kdl},
+
+    // CBM_LANG_JSON5
+    [CBM_LANG_JSON5] = {CBM_LANG_JSON5, empty_types, empty_types, empty_types, json5_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_json5},
+
+    // CBM_LANG_JSONNET
+    [CBM_LANG_JSONNET] = {CBM_LANG_JSONNET, empty_types, empty_types, empty_types,
+                          jsonnet_module_types, empty_types, empty_types, empty_types, empty_types,
+                          empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                          tree_sitter_jsonnet},
+
+    // CBM_LANG_RON
+    [CBM_LANG_RON] = {CBM_LANG_RON, empty_types, empty_types, empty_types, ron_module_types,
+                      empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                      empty_types, NULL, empty_types, NULL, NULL, tree_sitter_ron},
+
+    // CBM_LANG_THRIFT
+    [CBM_LANG_THRIFT] = {CBM_LANG_THRIFT, empty_types, empty_types, empty_types,
+                         thrift_module_types, empty_types, empty_types, empty_types, empty_types,
+                         empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                         tree_sitter_thrift},
+
+    // CBM_LANG_CAPNP
+    [CBM_LANG_CAPNP] = {CBM_LANG_CAPNP, empty_types, empty_types, empty_types, capnp_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_capnp},
+
+    // CBM_LANG_PROPERTIES
+    [CBM_LANG_PROPERTIES] = {CBM_LANG_PROPERTIES, empty_types, empty_types, empty_types,
+                             properties_module_types, empty_types, empty_types, empty_types,
+                             empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                             NULL, NULL, tree_sitter_properties},
+
+    // CBM_LANG_SSHCONFIG
+    [CBM_LANG_SSHCONFIG] = {CBM_LANG_SSHCONFIG, empty_types, empty_types, empty_types,
+                            sshconfig_module_types, empty_types, empty_types, empty_types,
+                            empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                            NULL, NULL, tree_sitter_ssh_config},
+
+    // CBM_LANG_BIBTEX
+    [CBM_LANG_BIBTEX] = {CBM_LANG_BIBTEX, empty_types, empty_types, empty_types,
+                         bibtex_module_types, empty_types, empty_types, empty_types, empty_types,
+                         empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                         tree_sitter_bibtex},
+
+    // CBM_LANG_STARLARK
+    [CBM_LANG_STARLARK] = {CBM_LANG_STARLARK, empty_types, empty_types, empty_types,
+                           starlark_module_types, empty_types, empty_types, empty_types,
+                           empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                           NULL, NULL, tree_sitter_starlark},
+
+    // CBM_LANG_BICEP
+    [CBM_LANG_BICEP] = {CBM_LANG_BICEP, empty_types, empty_types, empty_types, bicep_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_bicep},
+
+    // CBM_LANG_CSV
+    [CBM_LANG_CSV] = {CBM_LANG_CSV, empty_types, empty_types, empty_types, csv_module_types,
+                      empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                      empty_types, NULL, empty_types, NULL, NULL, tree_sitter_csv},
+
+    // CBM_LANG_REQUIREMENTS
+    [CBM_LANG_REQUIREMENTS] = {CBM_LANG_REQUIREMENTS, empty_types, empty_types, empty_types,
+                               requirements_module_types, empty_types, empty_types, empty_types,
+                               empty_types, empty_types, empty_types, empty_types, NULL,
+                               empty_types, NULL, NULL, tree_sitter_requirements},
+
+    // CBM_LANG_HLSL
+    [CBM_LANG_HLSL] = {CBM_LANG_HLSL, empty_types, empty_types, empty_types, hlsl_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_hlsl},
+
+    // CBM_LANG_VHDL
+    [CBM_LANG_VHDL] = {CBM_LANG_VHDL, empty_types, empty_types, empty_types, vhdl_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_vhdl},
+
+    // CBM_LANG_SYSTEMVERILOG
+    [CBM_LANG_SYSTEMVERILOG] = {CBM_LANG_SYSTEMVERILOG, empty_types, empty_types, empty_types,
+                                systemverilog_module_types, empty_types, empty_types, empty_types,
+                                empty_types, empty_types, empty_types, empty_types, NULL,
+                                empty_types, NULL, NULL, tree_sitter_systemverilog},
+
+    // CBM_LANG_DEVICETREE
+    [CBM_LANG_DEVICETREE] = {CBM_LANG_DEVICETREE, empty_types, empty_types, empty_types,
+                             devicetree_module_types, empty_types, empty_types, empty_types,
+                             empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                             NULL, NULL, tree_sitter_devicetree},
+
+    // CBM_LANG_LINKERSCRIPT
+    [CBM_LANG_LINKERSCRIPT] = {CBM_LANG_LINKERSCRIPT, empty_types, empty_types, empty_types,
+                               linkerscript_module_types, empty_types, empty_types, empty_types,
+                               empty_types, empty_types, empty_types, empty_types, NULL,
+                               empty_types, NULL, NULL, tree_sitter_linkerscript},
+
+    // CBM_LANG_GN
+    [CBM_LANG_GN] = {CBM_LANG_GN, empty_types, empty_types, empty_types, gn_module_types,
+                     empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                     empty_types, NULL, empty_types, NULL, NULL, tree_sitter_gn},
+
+    // CBM_LANG_KCONFIG
+    [CBM_LANG_KCONFIG] = {CBM_LANG_KCONFIG, empty_types, empty_types, empty_types,
+                          kconfig_module_types, empty_types, empty_types, empty_types, empty_types,
+                          empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                          tree_sitter_kconfig},
+
+    // CBM_LANG_BITBAKE
+    [CBM_LANG_BITBAKE] = {CBM_LANG_BITBAKE, empty_types, empty_types, empty_types,
+                          bitbake_module_types, empty_types, empty_types, empty_types, empty_types,
+                          empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                          tree_sitter_bitbake},
+
+    // CBM_LANG_SMALI
+    [CBM_LANG_SMALI] = {CBM_LANG_SMALI, empty_types, empty_types, empty_types, smali_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_smali},
+
+    // CBM_LANG_TABLEGEN
+    [CBM_LANG_TABLEGEN] = {CBM_LANG_TABLEGEN, empty_types, empty_types, empty_types,
+                           tablegen_module_types, empty_types, empty_types, empty_types,
+                           empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                           NULL, NULL, tree_sitter_tablegen},
+
+    // CBM_LANG_ISPC
+    [CBM_LANG_ISPC] = {CBM_LANG_ISPC, empty_types, empty_types, empty_types, ispc_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_ispc},
+
+    // CBM_LANG_CAIRO
+    [CBM_LANG_CAIRO] = {CBM_LANG_CAIRO, empty_types, empty_types, empty_types, cairo_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_cairo},
+
+    // CBM_LANG_MOVE
+    [CBM_LANG_MOVE] = {CBM_LANG_MOVE, empty_types, empty_types, empty_types, move_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_move},
+
+    // CBM_LANG_SQUIRREL
+    [CBM_LANG_SQUIRREL] = {CBM_LANG_SQUIRREL, empty_types, empty_types, empty_types,
+                           squirrel_module_types, empty_types, empty_types, empty_types,
+                           empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                           NULL, NULL, tree_sitter_squirrel},
+
+    // CBM_LANG_FUNC
+    [CBM_LANG_FUNC] = {CBM_LANG_FUNC, empty_types, empty_types, empty_types, func_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_func},
+
+    // CBM_LANG_REGEX
+    [CBM_LANG_REGEX] = {CBM_LANG_REGEX, empty_types, empty_types, empty_types, regex_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_regex},
+
+    // CBM_LANG_JSDOC
+    [CBM_LANG_JSDOC] = {CBM_LANG_JSDOC, empty_types, empty_types, empty_types, jsdoc_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_jsdoc},
+
+    // CBM_LANG_RST
+    [CBM_LANG_RST] = {CBM_LANG_RST, empty_types, empty_types, empty_types, rst_module_types,
+                      empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                      empty_types, NULL, empty_types, NULL, NULL, tree_sitter_rst},
+
+    // CBM_LANG_BEANCOUNT
+    [CBM_LANG_BEANCOUNT] = {CBM_LANG_BEANCOUNT, empty_types, empty_types, empty_types,
+                            beancount_module_types, empty_types, empty_types, empty_types,
+                            empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                            NULL, NULL, tree_sitter_beancount},
+
+    // CBM_LANG_MERMAID
+    [CBM_LANG_MERMAID] = {CBM_LANG_MERMAID, empty_types, empty_types, empty_types,
+                          mermaid_module_types, empty_types, empty_types, empty_types, empty_types,
+                          empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                          tree_sitter_mermaid},
+
+    // CBM_LANG_PUPPET
+    [CBM_LANG_PUPPET] = {CBM_LANG_PUPPET, empty_types, empty_types, empty_types,
+                         puppet_module_types, empty_types, empty_types, empty_types, empty_types,
+                         empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                         tree_sitter_puppet},
+
+    // CBM_LANG_PO
+    [CBM_LANG_PO] = {CBM_LANG_PO, empty_types, empty_types, empty_types, po_module_types,
+                     empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                     empty_types, NULL, empty_types, NULL, NULL, tree_sitter_po},
+
+    // CBM_LANG_GITATTRIBUTES
+    [CBM_LANG_GITATTRIBUTES] = {CBM_LANG_GITATTRIBUTES, empty_types, empty_types, empty_types,
+                                gitattributes_module_types, empty_types, empty_types, empty_types,
+                                empty_types, empty_types, empty_types, empty_types, NULL,
+                                empty_types, NULL, NULL, tree_sitter_gitattributes},
+
+    // CBM_LANG_GITIGNORE
+    [CBM_LANG_GITIGNORE] = {CBM_LANG_GITIGNORE, empty_types, empty_types, empty_types,
+                            gitignore_module_types, empty_types, empty_types, empty_types,
+                            empty_types, empty_types, empty_types, empty_types, NULL, empty_types,
+                            NULL, NULL, tree_sitter_gitignore},
+
+    // CBM_LANG_SLANG
+    [CBM_LANG_SLANG] = {CBM_LANG_SLANG, empty_types, empty_types, empty_types, slang_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_slang},
+
+    // CBM_LANG_LLVM_IR
+    [CBM_LANG_LLVM_IR] = {CBM_LANG_LLVM_IR, empty_types, empty_types, empty_types,
+                          llvm_module_types, empty_types, empty_types, empty_types, empty_types,
+                          empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                          tree_sitter_llvm},
+
+    // CBM_LANG_SMITHY
+    [CBM_LANG_SMITHY] = {CBM_LANG_SMITHY, empty_types, empty_types, empty_types,
+                         smithy_module_types, empty_types, empty_types, empty_types, empty_types,
+                         empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                         tree_sitter_smithy},
+
+    // CBM_LANG_WIT
+    [CBM_LANG_WIT] = {CBM_LANG_WIT, empty_types, empty_types, empty_types, wit_module_types,
+                      empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                      empty_types, NULL, empty_types, NULL, NULL, tree_sitter_wit},
+
+    // CBM_LANG_TLAPLUS
+    [CBM_LANG_TLAPLUS] = {CBM_LANG_TLAPLUS, empty_types, empty_types, empty_types,
+                          tlaplus_module_types, empty_types, empty_types, empty_types, empty_types,
+                          empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
+                          tree_sitter_tlaplus},
+
+    // CBM_LANG_PKL
+    [CBM_LANG_PKL] = {CBM_LANG_PKL, empty_types, empty_types, empty_types, pkl_module_types,
+                      empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                      empty_types, NULL, empty_types, NULL, NULL, tree_sitter_pkl},
+
+    // CBM_LANG_GOMOD
+    [CBM_LANG_GOMOD] = {CBM_LANG_GOMOD, empty_types, empty_types, empty_types, gomod_module_types,
+                        empty_types, empty_types, empty_types, empty_types, empty_types,
+                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_gomod},
+
+    // CBM_LANG_APEX
+    [CBM_LANG_APEX] = {CBM_LANG_APEX, empty_types, empty_types, empty_types, apex_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_apex},
+
+    // CBM_LANG_SOQL
+    [CBM_LANG_SOQL] = {CBM_LANG_SOQL, empty_types, empty_types, empty_types, soql_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_soql},
+
+    // CBM_LANG_SOSL
+    [CBM_LANG_SOSL] = {CBM_LANG_SOSL, empty_types, empty_types, empty_types, sosl_module_types,
+                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
+                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_sosl},
 
     // CBM_LANG_KUSTOMIZE — reuses YAML grammar; semantic extraction via cbm_extract_k8s()
     [CBM_LANG_KUSTOMIZE] = {CBM_LANG_KUSTOMIZE, empty_types, empty_types, empty_types,

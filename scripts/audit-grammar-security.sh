@@ -33,8 +33,12 @@ SAFE_INCLUDES='string\.h|stdint\.h|stdbool\.h|stdlib\.h|wctype\.h|stdio\.h|stdde
 # Dangerous includes
 DANGER_INCLUDES='unistd\.h|sys/|netdb\.h|dlfcn\.h|signal\.h|spawn\.h|pthread\.h|fcntl\.h|dirent\.h|termios\.h|arpa/|netinet/'
 
-# Dangerous function calls
-DANGER_CALLS='system\s*\(|exec[lvpe]+\s*\(|popen\s*\(|fopen\s*\(|fwrite\s*\(|socket\s*\(|getenv\s*\(|fork\s*\(|dlopen\s*\(|connect\s*\(|bind\s*\(|listen\s*\(|accept\s*\(|sendto\s*\(|recvfrom\s*\(|mmap\s*\(|mprotect\s*\('
+# Dangerous function calls (word-boundary \b to avoid matching lex_accept, etc.)
+# getenv("TREE_SITTER_DEBUG") is a standard tree-sitter pattern, excluded.
+DANGER_CALLS='\bsystem\s*\(|\bexec[lvpe]+\s*\(|\bpopen\s*\(|\bfopen\s*\(|\bfwrite\s*\(|\bsocket\s*\(|\bfork\s*\(|\bdlopen\s*\(|\bconnect\s*\(|\bbind\s*\(|\blisten\s*\(|\bsendto\s*\(|\brecvfrom\s*\(|\bmmap\s*\(|\bmprotect\s*\('
+# getenv is only dangerous for non-debug uses
+DANGER_GETENV='\bgetenv\s*\('
+SAFE_GETENV='TREE_SITTER_DEBUG'
 
 # Suspicious patterns
 SUSPICIOUS='__attribute__\s*\(\s*\(\s*constructor|__attribute__\s*\(\s*\(\s*destructor|asm\s*\(|__asm__|__asm\b'
@@ -62,6 +66,13 @@ for grammar_dir in "$GRAMMAR_DIR"/*/; do
         while IFS= read -r line; do
             issues="${issues}  BLOCK $basename_src: dangerous call: $line\n"
         done < <(grep -nE "$DANGER_CALLS" "$src" 2>/dev/null || true)
+
+        # Check getenv separately (allow TREE_SITTER_DEBUG)
+        while IFS= read -r line; do
+            if ! echo "$line" | grep -qF "$SAFE_GETENV"; then
+                issues="${issues}  BLOCK $basename_src: dangerous call: $line\n"
+            fi
+        done < <(grep -nE "$DANGER_GETENV" "$src" 2>/dev/null || true)
 
         # Check suspicious patterns
         while IFS= read -r line; do

@@ -1217,9 +1217,18 @@ static void emit_grpc_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source, cons
                            const cbm_resolution_t *res) {
     char service[CBM_SZ_256];
     char method[CBM_SZ_256];
+    /* Try callee_name first (e.g., "pb.NewCartServiceClient.GetCart") */
     if (!extract_grpc_service_method(call->callee_name, service, sizeof(service), method,
                                      sizeof(method))) {
-        return;
+        /* Fallback: try the resolved QN for Go chained calls.
+         * Go pattern: pb.NewCartServiceClient(conn).GetCart(ctx, req)
+         * callee_name = "GetCart", QN = "...CartServiceClient.GetCart"
+         * The QN contains the full ServiceClient.Method pattern. */
+        if (!res->qualified_name ||
+            !extract_grpc_service_method(res->qualified_name, service, sizeof(service), method,
+                                         sizeof(method))) {
+            return;
+        }
     }
 
     char route_qn[CBM_SZ_512];
@@ -1324,6 +1333,18 @@ static void emit_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
      * local variables like app.include_router where QN resolution fails). */
     if (svc == CBM_SVC_NONE && cbm_service_pattern_route_method(call->callee_name) != NULL) {
         svc = CBM_SVC_ROUTE_REG;
+    }
+
+    /* Detect gRPC stub method calls by resolved QN.
+     * Go pattern: pb.NewCartServiceClient(conn).GetCart(ctx, req)
+     * Tree-sitter extracts GetCart as the callee, which resolves to the
+     * generated pb interface method (QN contains "ServiceClient"). */
+    if (svc == CBM_SVC_NONE && res->qualified_name) {
+        if (strstr(res->qualified_name, "ServiceClient") != NULL ||
+            strstr(res->qualified_name, "ServiceGrpc") != NULL ||
+            strstr(res->qualified_name, "Servicer") != NULL) {
+            svc = CBM_SVC_GRPC;
+        }
     }
 
     if (svc == CBM_SVC_ROUTE_REG) {

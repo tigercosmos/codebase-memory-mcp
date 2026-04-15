@@ -216,9 +216,17 @@ static const char *js_import_types[] = {"import_statement",
                                         "extends",
                                         "require",
                                         NULL};
-static const char *js_branch_types[] = {"if_statement",    "for_statement",    "for_in_statement",
-                                        "while_statement", "switch_statement", "case_clause",
-                                        "try_statement",   "catch_clause",     NULL};
+static const char *js_branch_types[] = {"if_statement",
+                                        "for_statement",
+                                        "for_in_statement",
+                                        "while_statement",
+                                        "switch_statement",
+                                        "switch_case",
+                                        "switch_default",
+                                        "try_statement",
+                                        "catch_clause",
+                                        "do_statement",
+                                        NULL};
 static const char *js_var_types[] = {"lexical_declaration", "variable_declaration", NULL};
 static const char *js_throw_types[] = {"throw_statement", NULL};
 

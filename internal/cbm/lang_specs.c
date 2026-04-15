@@ -188,7 +188,7 @@ static const char *py_func_types[] = {"function_definition", NULL};
 static const char *py_class_types[] = {"class_definition", NULL};
 static const char *py_module_types[] = {"module", NULL};
 static const char *py_call_types[] = {"call", "with_statement", NULL};
-static const char *py_import_types[] = {"import_statement", NULL};
+static const char *py_import_types[] = {"import_statement", "import", NULL};
 static const char *py_import_from_types[] = {"import_from_statement", NULL};
 static const char *py_branch_types[] = {
     "if_statement",  "for_statement",  "while_statement", "try_statement",
@@ -203,9 +203,14 @@ static const char *js_func_types[] = {"function_declaration", "generator_functio
                                       "method_definition",    NULL};
 static const char *js_class_types[] = {"class_declaration", "class", NULL};
 static const char *js_module_types[] = {"program", NULL};
-static const char *js_call_types[] = {"call_expression", NULL};
-static const char *js_import_types[] = {"import_statement", "lexical_declaration",
-                                        "export_statement", NULL};
+static const char *js_call_types[] = {"call_expression", "new_expression", NULL};
+static const char *js_import_types[] = {"import_statement",
+                                        "lexical_declaration",
+                                        "export_statement",
+                                        "import",
+                                        "extends",
+                                        "require",
+                                        NULL};
 static const char *js_branch_types[] = {"if_statement",    "for_statement",    "for_in_statement",
                                         "while_statement", "switch_statement", "case_clause",
                                         "try_statement",   "catch_clause",     NULL};
@@ -299,11 +304,17 @@ static const char *cs_func_types[] = {"destructor_declaration",      "local_func
                                       "function_pointer_type",       "constructor_declaration",
                                       "anonymous_method_expression", "lambda_expression",
                                       "method_declaration",          NULL};
-static const char *cs_class_types[] = {"class_declaration", "struct_declaration",
-                                       "enum_declaration", "interface_declaration", NULL};
+static const char *cs_class_types[] = {"class_declaration",
+                                       "struct_declaration",
+                                       "enum_declaration",
+                                       "interface_declaration",
+                                       "record_declaration",
+                                       "type_declaration",
+                                       NULL};
 static const char *cs_module_types[] = {"compilation_unit", NULL};
 static const char *cs_call_types[] = {"invocation_expression", NULL};
-static const char *cs_import_types[] = {"using_directive", NULL};
+static const char *cs_import_types[] = {"using_directive", "namespace_use_declaration",
+                                        "using_statement", "namespace_declaration", NULL};
 static const char *cs_branch_types[] = {"if_statement",    "for_statement",    "foreach_statement",
                                         "while_statement", "switch_statement", "case_switch_label",
                                         "try_statement",   "catch_clause",     NULL};
@@ -743,10 +754,10 @@ static const char *markdown_module_types[] = {"document", NULL};
 static const char *markdown_class_types[] = {"atx_heading", "setext_heading", NULL};
 
 // ==================== MAKEFILE ====================
-static const char *makefile_func_types[] = {"rule", NULL};
+static const char *makefile_func_types[] = {"rule", "recipe", NULL};
 static const char *makefile_module_types[] = {"makefile", NULL};
-static const char *makefile_call_types[] = {"function_call", NULL};
-static const char *makefile_import_types[] = {"include_directive", NULL};
+static const char *makefile_call_types[] = {"function_call", "call", NULL};
+static const char *makefile_import_types[] = {"include_directive", "include", NULL};
 static const char *makefile_var_types[] = {"variable_assignment", NULL};
 
 // ==================== CMAKE ====================
@@ -2367,13 +2378,13 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
                        empty_types, empty_types, NULL, empty_types, NULL, NULL, tree_sitter_sosl},
 
     // CBM_LANG_KUSTOMIZE — reuses YAML grammar; semantic extraction via cbm_extract_k8s()
-    [CBM_LANG_KUSTOMIZE] = {CBM_LANG_KUSTOMIZE, empty_types, empty_types, empty_types,
+    [CBM_LANG_KUSTOMIZE] = {CBM_LANG_KUSTOMIZE, yaml_var_types, empty_types, empty_types,
                             yaml_module_types, empty_types, empty_types, empty_types, empty_types,
                             empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL,
                             tree_sitter_yaml},
 
     // CBM_LANG_K8S — reuses YAML grammar; semantic extraction via cbm_extract_k8s()
-    [CBM_LANG_K8S] = {CBM_LANG_K8S, empty_types, empty_types, empty_types, yaml_module_types,
+    [CBM_LANG_K8S] = {CBM_LANG_K8S, yaml_var_types, empty_types, empty_types, yaml_module_types,
                       empty_types, empty_types, empty_types, empty_types, empty_types, empty_types,
                       empty_types, NULL, empty_types, NULL, NULL, tree_sitter_yaml},
 

@@ -304,13 +304,7 @@ static int create_import_edges_for_file(cbm_pipeline_ctx_t *ctx, const CBMFileRe
             continue;
         }
         char *target_qn = NULL;
-        char *resolved = cbm_pipeline_resolve_relative_import(rel, imp->module_path);
-        if (resolved) {
-            target_qn = cbm_pipeline_fqn_module(ctx->project_name, resolved);
-            free(resolved);
-        } else {
-            target_qn = cbm_pipeline_fqn_module(ctx->project_name, imp->module_path);
-        }
+        target_qn = cbm_pipeline_resolve_module(ctx, rel, imp->module_path);
         const cbm_gbuf_node_t *target = cbm_gbuf_find_by_qn(ctx->gbuf, target_qn);
         char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
         const cbm_gbuf_node_t *source_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);

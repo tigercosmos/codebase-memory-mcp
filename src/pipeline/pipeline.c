@@ -84,6 +84,18 @@ struct cbm_pipeline {
     cbm_userconfig_t *userconfig;
 };
 
+/* ── Global pkgmap (one active pipeline at a time) ─────────────── */
+
+static CBMHashTable *g_pkgmap = NULL;
+
+CBMHashTable *cbm_pipeline_get_pkgmap(void) {
+    return g_pkgmap;
+}
+
+void cbm_pipeline_set_pkgmap(CBMHashTable *map) {
+    g_pkgmap = map;
+}
+
 /* ── Timing helper ──────────────────────────────────────────────── */
 
 static double elapsed_ms(struct timespec start) {
@@ -464,6 +476,11 @@ static int run_sequential_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
                                    const cbm_file_info_t *files, int file_count,
                                    struct timespec *t) {
     cbm_log_info("pipeline.mode", "mode", "sequential", "files", itoa_buf(file_count));
+
+    /* Build package map from manifest files (sequential: read manifests directly) */
+    /* Build package map from manifest files (sequential: read manifests directly) */
+    cbm_pipeline_set_pkgmap(cbm_pkgmap_build_from_files(files, file_count, ctx->project_name));
+
     CBMFileResult **seq_cache = (CBMFileResult **)calloc(file_count, sizeof(CBMFileResult *));
     if (seq_cache) {
         ctx->result_cache = seq_cache;
@@ -869,6 +886,8 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
     CBM_PROF_END("pipeline", "TOTAL", t_pipeline_total);
 
 cleanup:
+    cbm_pkgmap_free(cbm_pipeline_get_pkgmap());
+    cbm_pipeline_set_pkgmap(NULL);
     cbm_discover_free(files, file_count);
     cbm_gbuf_free(p->gbuf);
     p->gbuf = NULL;

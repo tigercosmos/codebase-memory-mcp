@@ -399,6 +399,8 @@ typedef struct {
     _Atomic int64_t *shared_ids;
     _Atomic int *cancelled;
     _Atomic int next_file_idx;
+
+    cbm_pkg_entries_t *pkg_entries; /* per-worker manifest arrays (separate allocation) */
 } extract_ctx_t;
 
 /* Insert one definition node (and its route if present) into the local gbuf. */
@@ -506,6 +508,13 @@ static void extract_worker(int worker_id, void *ctx_ptr) {
          * are released before the slab is bulk-reclaimed. */
         cbm_free_tree(result);
 
+        /* Detect and parse manifest files for package map */
+        {
+            const char *bn = strrchr(fi->rel_path, '/');
+            cbm_pkgmap_try_parse(bn ? bn + SKIP_ONE : fi->rel_path, fi->rel_path, source,
+                                 source_len, &ec->pkg_entries[worker_id]);
+        }
+
         /* Free source buffer — extraction captured everything needed. */
         free_source(source);
 
@@ -537,6 +546,28 @@ static void extract_worker(int worker_id, void *ctx_ptr) {
 
     /* Final cleanup (parser already destroyed in loop, just slab state) */
     cbm_slab_destroy_thread();
+}
+
+static void merge_pkg_entries(cbm_pipeline_ctx_t *ctx, cbm_pkg_entries_t *pkg_entries,
+                              int worker_count) {
+    if (!pkg_entries) {
+        return;
+    }
+    cbm_pipeline_set_pkgmap(cbm_pkgmap_build(pkg_entries, worker_count, ctx->project_name));
+    for (int i = 0; i < worker_count; i++) {
+        cbm_pkg_entries_free(&pkg_entries[i]);
+    }
+    free(pkg_entries);
+}
+
+static void log_extract_mem_stats(int worker_count) {
+    if (cbm_mem_budget() > 0) {
+        size_t mb = (size_t)CBM_SZ_1K * CBM_SZ_1K;
+        cbm_log_info("parallel.extract.mem", "rss_mb", itoa_log((int)(cbm_mem_rss() / mb)),
+                     "peak_mb", itoa_log((int)(cbm_mem_peak_rss() / mb)), "budget_mb",
+                     itoa_log((int)(cbm_mem_budget() / mb)), "per_worker_mb",
+                     itoa_log((int)(cbm_mem_worker_budget(worker_count) / mb)));
+    }
 }
 
 int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count,
@@ -585,6 +616,9 @@ int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
     }
     memset(workers, 0, (size_t)worker_count * sizeof(extract_worker_state_t));
 
+    /* Per-worker manifest entry arrays (separate from cache-line-aligned worker state) */
+    cbm_pkg_entries_t *pkg_entries = calloc(worker_count, sizeof(cbm_pkg_entries_t));
+
     extract_ctx_t ec = {
         .files = files,
         .sorted = sorted,
@@ -596,6 +630,7 @@ int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
         .result_cache = result_cache,
         .shared_ids = shared_ids,
         .cancelled = ctx->cancelled,
+        .pkg_entries = pkg_entries,
     };
     atomic_init(&ec.next_worker_id, 0);
     atomic_init(&ec.next_file_idx, 0);
@@ -620,6 +655,8 @@ int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
     }
     CBM_PROF_END_N("parallel_extract", "4_merge_gbufs_seq", t_merge, total_nodes);
 
+    merge_pkg_entries(ctx, pkg_entries, worker_count);
+
     cbm_aligned_free(workers);
     free(sorted);
 
@@ -627,16 +664,7 @@ int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
         return CBM_NOT_FOUND;
     }
 
-    /* RSS-based memory stats after extraction */
-    if (cbm_mem_budget() > 0) {
-        size_t rss_mb = cbm_mem_rss() / ((size_t)CBM_SZ_1K * CBM_SZ_1K);
-        size_t peak_mb = cbm_mem_peak_rss() / ((size_t)CBM_SZ_1K * CBM_SZ_1K);
-        size_t budget_mb = cbm_mem_budget() / ((size_t)CBM_SZ_1K * CBM_SZ_1K);
-        size_t worker_mb = cbm_mem_worker_budget(worker_count) / ((size_t)CBM_SZ_1K * CBM_SZ_1K);
-        cbm_log_info("parallel.extract.mem", "rss_mb", itoa_log((int)rss_mb), "peak_mb",
-                     itoa_log((int)peak_mb), "budget_mb", itoa_log((int)budget_mb), "per_worker_mb",
-                     itoa_log((int)worker_mb));
-    }
+    log_extract_mem_stats(worker_count);
 
     cbm_log_info("parallel.extract.done", "nodes", itoa_log(total_nodes), "errors",
                  itoa_log(total_errors));
@@ -684,14 +712,7 @@ static int create_imports_edges(cbm_pipeline_ctx_t *ctx, const CBMFileResult *re
         if (!imp->module_path) {
             continue;
         }
-        char *target_qn = NULL;
-        char *resolved = cbm_pipeline_resolve_relative_import(rel, imp->module_path);
-        if (resolved) {
-            target_qn = cbm_pipeline_fqn_module(ctx->project_name, resolved);
-            free(resolved);
-        } else {
-            target_qn = cbm_pipeline_fqn_module(ctx->project_name, imp->module_path);
-        }
+        char *target_qn = cbm_pipeline_resolve_module(ctx, rel, imp->module_path);
         const cbm_gbuf_node_t *target = cbm_gbuf_find_by_qn(ctx->gbuf, target_qn);
         char *file_qn = cbm_pipeline_fqn_compute(ctx->project_name, rel, "__file__");
         const cbm_gbuf_node_t *source_node = cbm_gbuf_find_by_qn(ctx->gbuf, file_qn);

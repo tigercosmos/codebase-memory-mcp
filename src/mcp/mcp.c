@@ -1671,24 +1671,22 @@ static bool aspect_wanted(yyjson_doc *aspects_doc, yyjson_val *aspects_arr, cons
 /* Append cross_repo_links summary to architecture JSON if CROSS_* edges exist. */
 static void append_cross_repo_summary(yyjson_mut_doc *doc, yyjson_mut_val *root,
                                       const cbm_schema_info_t *schema) {
-    int cross_http = 0;
-    int cross_async = 0;
-    int cross_channel = 0;
-    for (int i = 0; i < schema->edge_type_count; i++) {
-        if (strcmp(schema->edge_types[i].type, "CROSS_HTTP_CALLS") == 0) {
-            cross_http = schema->edge_types[i].count;
-        } else if (strcmp(schema->edge_types[i].type, "CROSS_ASYNC_CALLS") == 0) {
-            cross_async = schema->edge_types[i].count;
-        } else if (strcmp(schema->edge_types[i].type, "CROSS_CHANNEL") == 0) {
-            cross_channel = schema->edge_types[i].count;
+    /* Scan edge types for any CROSS_* edges and sum them */
+    int cross_total = 0;
+    yyjson_mut_val *cr = yyjson_mut_obj(doc);
+    static const char *cross_types[] = {"CROSS_HTTP_CALLS",    "CROSS_ASYNC_CALLS",
+                                        "CROSS_CHANNEL",       "CROSS_GRPC_CALLS",
+                                        "CROSS_GRAPHQL_CALLS", "CROSS_TRPC_CALLS"};
+    for (int t = 0; t < (int)(sizeof(cross_types) / sizeof(cross_types[0])); t++) {
+        for (int i = 0; i < schema->edge_type_count; i++) {
+            if (strcmp(schema->edge_types[i].type, cross_types[t]) == 0) {
+                yyjson_mut_obj_add_int(doc, cr, cross_types[t], schema->edge_types[i].count);
+                cross_total += schema->edge_types[i].count;
+                break;
+            }
         }
     }
-    int cross_total = cross_http + cross_async + cross_channel;
     if (cross_total > 0) {
-        yyjson_mut_val *cr = yyjson_mut_obj(doc);
-        yyjson_mut_obj_add_int(doc, cr, "cross_http_calls", cross_http);
-        yyjson_mut_obj_add_int(doc, cr, "cross_async_calls", cross_async);
-        yyjson_mut_obj_add_int(doc, cr, "cross_channel", cross_channel);
         yyjson_mut_obj_add_int(doc, cr, "total", cross_total);
         yyjson_mut_obj_add_val(doc, root, "cross_repo_links", cr);
     }
@@ -2113,7 +2111,8 @@ static char *handle_cross_repo_mode(const char *repo_path, const char *args) {
     free(targets);
     yyjson_doc_free(jdoc);
 
-    int total = result.http_edges + result.async_edges + result.channel_edges;
+    int total = result.http_edges + result.async_edges + result.channel_edges + result.grpc_edges +
+                result.graphql_edges + result.trpc_edges;
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
     yyjson_mut_val *root = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root);
@@ -2124,6 +2123,9 @@ static char *handle_cross_repo_mode(const char *repo_path, const char *args) {
     yyjson_mut_obj_add_int(doc, root, "cross_http_calls", result.http_edges);
     yyjson_mut_obj_add_int(doc, root, "cross_async_calls", result.async_edges);
     yyjson_mut_obj_add_int(doc, root, "cross_channel", result.channel_edges);
+    yyjson_mut_obj_add_int(doc, root, "cross_grpc_calls", result.grpc_edges);
+    yyjson_mut_obj_add_int(doc, root, "cross_graphql_calls", result.graphql_edges);
+    yyjson_mut_obj_add_int(doc, root, "cross_trpc_calls", result.trpc_edges);
     yyjson_mut_obj_add_int(doc, root, "total_cross_edges", total);
     yyjson_mut_obj_add_real(doc, root, "elapsed_ms", result.elapsed_ms);
 

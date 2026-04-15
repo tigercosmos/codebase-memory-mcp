@@ -1141,6 +1141,156 @@ static void detect_url_in_args(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
     }
 }
 
+/* Extract gRPC service and method from a callee name.
+ * Handles patterns like: pb.NewFooServiceClient(conn).GetBar → Foo/GetBar
+ * Also: FooServiceGrpc.newBlockingStub(ch).getBar → FooService/getBar */
+static bool extract_grpc_service_method(const char *callee, char *service, size_t srv_sz,
+                                        char *method, size_t meth_sz) {
+    service[0] = '\0';
+    method[0] = '\0';
+    if (!callee) {
+        return false;
+    }
+    /* Find last dot to split service.Method */
+    const char *last_dot = strrchr(callee, '.');
+    if (!last_dot || !last_dot[SKIP_ONE]) {
+        return false;
+    }
+    snprintf(method, meth_sz, "%s", last_dot + SKIP_ONE);
+
+    /* Extract service name: everything before the last dot, stripped of prefixes/suffixes */
+    size_t prefix_len = (size_t)(last_dot - callee);
+    char raw[CBM_SZ_256];
+    if (prefix_len >= sizeof(raw)) {
+        prefix_len = sizeof(raw) - SKIP_ONE;
+    }
+    memcpy(raw, callee, prefix_len);
+    raw[prefix_len] = '\0';
+
+    /* Strip common prefixes: pb.New, New, pb. */
+    const char *s = raw;
+    if (strncmp(s, "pb.New", CBM_SZ_6) == 0) {
+        s += CBM_SZ_6;
+    } else if (strncmp(s, "pb.", CBM_SZ_3) == 0 || strncmp(s, "New", CBM_SZ_3) == 0) {
+        s += CBM_SZ_3;
+    }
+
+    /* Strip common suffixes: Client, ServiceClient, ServiceGrpc, Stub */
+    snprintf(service, srv_sz, "%s", s);
+    size_t slen = strlen(service);
+    static const char *suffixes[] = {"ServiceClient", "Client", "ServiceGrpc", "BlockingStub",
+                                     "FutureStub",    "Stub",   "Servicer",    NULL};
+    for (const char **sfx = suffixes; *sfx; sfx++) {
+        size_t flen = strlen(*sfx);
+        if (slen > flen && strcmp(service + slen - flen, *sfx) == 0) {
+            service[slen - flen] = '\0';
+            break;
+        }
+    }
+
+    return service[0] && method[0];
+}
+
+/* Emit GRPC_CALLS edge via gRPC Route node. */
+static void emit_grpc_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source, const CBMCall *call,
+                           const cbm_resolution_t *res) {
+    char service[CBM_SZ_256];
+    char method[CBM_SZ_256];
+    if (!extract_grpc_service_method(call->callee_name, service, sizeof(service), method,
+                                     sizeof(method))) {
+        return;
+    }
+
+    char route_qn[CBM_SZ_512];
+    snprintf(route_qn, sizeof(route_qn), "__grpc__%s/%s", service, method);
+
+    char route_name[CBM_SZ_256];
+    snprintf(route_name, sizeof(route_name), "%s/%s", service, method);
+
+    int64_t route_id = cbm_gbuf_upsert_node(gbuf, "Route", route_name, route_qn, "", 0, 0,
+                                            "{\"source\":\"grpc\"}");
+
+    char esc_c[CBM_SZ_256];
+    cbm_json_escape(esc_c, sizeof(esc_c), call->callee_name);
+    char props[CBM_SZ_1K];
+    snprintf(props, sizeof(props),
+             "{\"callee\":\"%s\",\"service\":\"%s\",\"method\":\"%s\",\"confidence\":%.2f}", esc_c,
+             service, method, res->confidence);
+    cbm_gbuf_insert_edge(gbuf, source->id, route_id, "GRPC_CALLS", props);
+}
+
+/* Emit GRAPHQL_CALLS edge. Extract operation from first string arg if available. */
+static void emit_graphql_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source, const CBMCall *call,
+                              const cbm_resolution_t *res) {
+    const char *op = call->first_string_arg;
+    if (!op || !op[0]) {
+        op = call->callee_name;
+    }
+    /* Try to extract a query/mutation name from the operation string */
+    char op_name[CBM_SZ_256];
+    snprintf(op_name, sizeof(op_name), "%s", op);
+    /* Trim leading whitespace and "query "/"mutation " prefix */
+    const char *p = op_name;
+    while (*p == ' ' || *p == '\t' || *p == '\n') {
+        p++;
+    }
+    if (strncmp(p, "query ", CBM_SZ_6) == 0) {
+        p += CBM_SZ_6;
+    } else if (strncmp(p, "mutation ", CBM_SZ_8) == 0) {
+        p += CBM_SZ_8;
+    }
+
+    char route_qn[CBM_SZ_512];
+    snprintf(route_qn, sizeof(route_qn), "__graphql__%s", p);
+
+    int64_t route_id =
+        cbm_gbuf_upsert_node(gbuf, "Route", p, route_qn, "", 0, 0, "{\"source\":\"graphql\"}");
+
+    char esc_c[CBM_SZ_256];
+    cbm_json_escape(esc_c, sizeof(esc_c), call->callee_name);
+    char props[CBM_SZ_1K];
+    snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"operation\":\"%s\",\"confidence\":%.2f}",
+             esc_c, p, res->confidence);
+    cbm_gbuf_insert_edge(gbuf, source->id, route_id, "GRAPHQL_CALLS", props);
+}
+
+/* Emit TRPC_CALLS edge. Extract procedure path from callee chain. */
+static void emit_trpc_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source, const CBMCall *call,
+                           const cbm_resolution_t *res) {
+    /* tRPC calls: trpc.user.getById.query() → extract "user.getById" */
+    const char *callee = call->callee_name;
+    if (!callee) {
+        return;
+    }
+    /* Strip trailing .query/.mutate/.subscribe */
+    char proc[CBM_SZ_256];
+    snprintf(proc, sizeof(proc), "%s", callee);
+    char *last_dot = strrchr(proc, '.');
+    if (last_dot && (strcmp(last_dot, ".query") == 0 || strcmp(last_dot, ".mutate") == 0 ||
+                     strcmp(last_dot, ".subscribe") == 0 || strcmp(last_dot, ".useQuery") == 0 ||
+                     strcmp(last_dot, ".useMutation") == 0)) {
+        *last_dot = '\0';
+    }
+    /* Strip leading trpc. */
+    const char *p = proc;
+    if (strncmp(p, "trpc.", CBM_SZ_5) == 0) {
+        p += CBM_SZ_5;
+    }
+
+    char route_qn[CBM_SZ_512];
+    snprintf(route_qn, sizeof(route_qn), "__trpc__%s", p);
+
+    int64_t route_id =
+        cbm_gbuf_upsert_node(gbuf, "Route", p, route_qn, "", 0, 0, "{\"source\":\"trpc\"}");
+
+    char esc_c[CBM_SZ_256];
+    cbm_json_escape(esc_c, sizeof(esc_c), call->callee_name);
+    char props[CBM_SZ_1K];
+    snprintf(props, sizeof(props), "{\"callee\":\"%s\",\"procedure\":\"%s\",\"confidence\":%.2f}",
+             esc_c, p, res->confidence);
+    cbm_gbuf_insert_edge(gbuf, source->id, route_id, "TRPC_CALLS", props);
+}
+
 static void emit_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
                               const cbm_gbuf_node_t *target, const CBMCall *call,
                               const cbm_resolution_t *res, const char *module_qn,
@@ -1171,6 +1321,12 @@ static void emit_service_edge(cbm_gbuf_t *gbuf, const cbm_gbuf_node_t *source,
 
     if ((svc == CBM_SVC_HTTP || svc == CBM_SVC_ASYNC) && (has_url || has_topic)) {
         emit_http_async_service_edge(gbuf, source, call, res, svc, arg);
+    } else if (svc == CBM_SVC_GRPC) {
+        emit_grpc_edge(gbuf, source, call, res);
+    } else if (svc == CBM_SVC_GRAPHQL) {
+        emit_graphql_edge(gbuf, source, call, res);
+    } else if (svc == CBM_SVC_TRPC) {
+        emit_trpc_edge(gbuf, source, call, res);
     } else if (svc == CBM_SVC_CONFIG) {
         emit_config_edge(gbuf, source, target, call, res, arg);
     } else {

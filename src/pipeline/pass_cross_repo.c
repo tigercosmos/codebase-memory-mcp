@@ -109,6 +109,9 @@ static void delete_cross_edges(cbm_store_t *store, const char *project) {
     cbm_store_delete_edges_by_type(store, project, "CROSS_HTTP_CALLS");
     cbm_store_delete_edges_by_type(store, project, "CROSS_ASYNC_CALLS");
     cbm_store_delete_edges_by_type(store, project, "CROSS_CHANNEL");
+    cbm_store_delete_edges_by_type(store, project, "CROSS_GRPC_CALLS");
+    cbm_store_delete_edges_by_type(store, project, "CROSS_GRAPHQL_CALLS");
+    cbm_store_delete_edges_by_type(store, project, "CROSS_TRPC_CALLS");
 }
 
 /* Insert a CROSS_* edge into a store. */
@@ -461,6 +464,90 @@ static int match_channels(cbm_store_t *src_store, const char *src_project, cbm_s
     return count;
 }
 
+/* ── Phase D: Generic route-type matcher (gRPC, GraphQL, tRPC) ──── */
+
+/* Look up a node's qualified_name by id. Returns true if found. */
+static bool lookup_node_qn(struct sqlite3 *db, int64_t node_id, char *out, size_t out_sz) {
+    out[0] = '\0';
+    sqlite3_stmt *st = NULL;
+    if (sqlite3_prepare_v2(db, "SELECT qualified_name FROM nodes WHERE id = ?1", CBM_NOT_FOUND, &st,
+                           NULL) != SQLITE_OK) {
+        return false;
+    }
+    sqlite3_bind_int64(st, SKIP_ONE, node_id);
+    bool found = false;
+    if (sqlite3_step(st) == SQLITE_ROW) {
+        const char *qn = (const char *)sqlite3_column_text(st, 0);
+        if (qn) {
+            snprintf(out, out_sz, "%s", qn);
+            found = true;
+        }
+    }
+    sqlite3_finalize(st);
+    return found;
+}
+
+/* Match edges of a given type against Route nodes with a given QN prefix.
+ * Reuses the same infrastructure as HTTP/async matching. */
+static int match_typed_routes(cbm_store_t *src_store, const char *src_project,
+                              cbm_store_t *tgt_store, const char *tgt_project,
+                              const char *edge_type, const char *svc_key, const char *method_key,
+                              const char *cross_edge_type) {
+    struct sqlite3 *src_db = cbm_store_get_db(src_store);
+    if (!src_db) {
+        return 0;
+    }
+
+    char sql[CBM_SZ_256];
+    snprintf(sql, sizeof(sql),
+             "SELECT e.source_id, e.target_id, e.properties FROM edges e "
+             "WHERE e.project = ?1 AND e.type = '%s'",
+             edge_type);
+
+    sqlite3_stmt *s = NULL;
+    if (sqlite3_prepare_v2(src_db, sql, CBM_NOT_FOUND, &s, NULL) != SQLITE_OK) {
+        return 0;
+    }
+    sqlite3_bind_text(s, SKIP_ONE, src_project, CBM_NOT_FOUND, SQLITE_STATIC);
+
+    int count = 0;
+    while (sqlite3_step(s) == SQLITE_ROW && count < CR_MAX_EDGES) {
+        int64_t caller_id = sqlite3_column_int64(s, 0);
+        int64_t route_id = sqlite3_column_int64(s, SKIP_ONE);
+        const char *props = (const char *)sqlite3_column_text(s, PAIR_LEN);
+
+        char svc_val[CBM_SZ_256] = {0};
+        char meth_val[CBM_SZ_256] = {0};
+        json_str_prop(props, svc_key, svc_val, sizeof(svc_val));
+        json_str_prop(props, method_key, meth_val, sizeof(meth_val));
+        if (!svc_val[0] && !meth_val[0]) {
+            continue;
+        }
+
+        /* Look up the Route QN from the target node (already points to the Route). */
+        char route_qn[CR_QN_BUF] = {0};
+        if (!lookup_node_qn(src_db, route_id, route_qn, sizeof(route_qn))) {
+            continue;
+        }
+
+        char handler_name[CBM_SZ_256] = {0};
+        char handler_file[CBM_SZ_512] = {0};
+        int64_t handler_id =
+            find_route_handler(tgt_store, route_qn, handler_name, sizeof(handler_name),
+                               handler_file, sizeof(handler_file));
+        if (handler_id == 0) {
+            continue;
+        }
+
+        emit_cross_route_bidirectional(src_store, src_project, src_db, caller_id, route_id,
+                                       tgt_store, tgt_project, handler_id, route_qn, handler_name,
+                                       handler_file, svc_val, svc_key, cross_edge_type);
+        count++;
+    }
+    sqlite3_finalize(s);
+    return count;
+}
+
 /* ── Collect target projects ─────────────────────────────────────── */
 
 /* When target_projects = ["*"], scan the cache directory for all .db files. */
@@ -566,6 +653,13 @@ cbm_cross_repo_result_t cbm_cross_repo_match(const char *project, const char **t
         result.http_edges += match_http_routes(src_store, project, tgt_store, tgt);
         result.async_edges += match_async_routes(src_store, project, tgt_store, tgt);
         result.channel_edges += match_channels(src_store, project, tgt_store, tgt);
+        result.grpc_edges += match_typed_routes(src_store, project, tgt_store, tgt, "GRPC_CALLS",
+                                                "service", "method", "CROSS_GRPC_CALLS");
+        result.graphql_edges +=
+            match_typed_routes(src_store, project, tgt_store, tgt, "GRAPHQL_CALLS", "operation",
+                               "operation", "CROSS_GRAPHQL_CALLS");
+        result.trpc_edges += match_typed_routes(src_store, project, tgt_store, tgt, "TRPC_CALLS",
+                                                "procedure", "procedure", "CROSS_TRPC_CALLS");
         result.projects_scanned++;
 
         cbm_store_close(tgt_store);
@@ -582,10 +676,9 @@ cbm_cross_repo_result_t cbm_cross_repo_match(const char *project, const char **t
     result.elapsed_ms = ((double)(t1.tv_sec - t0.tv_sec) * CR_MS_PER_SEC) +
                         ((double)(t1.tv_nsec - t0.tv_nsec) / CR_NS_PER_MS);
 
-    int total = result.http_edges + result.async_edges + result.channel_edges;
-    cbm_log_info("cross_repo.done", "project", project, "http", cr_itoa(result.http_edges), "async",
-                 cr_itoa(result.async_edges), "channel", cr_itoa(result.channel_edges), "total",
-                 cr_itoa(total));
+    int total = result.http_edges + result.async_edges + result.channel_edges + result.grpc_edges +
+                result.graphql_edges + result.trpc_edges;
+    cbm_log_info("cross_repo.done", "project", project, "total", cr_itoa(total));
 
     return result;
 }

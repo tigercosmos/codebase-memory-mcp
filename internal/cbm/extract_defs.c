@@ -188,7 +188,12 @@ static void extract_elixir_call(CBMExtractCtx *ctx, TSNode node, const CBMLangSp
 
 // Get "name" field from a node
 static TSNode func_name_node(TSNode node) {
-    return ts_node_child_by_field_name(node, TS_FIELD("name"));
+    TSNode name = ts_node_child_by_field_name(node, TS_FIELD("name"));
+    if (ts_node_is_null(name)) {
+        /* Protobuf rpc: name is in rpc_name child, not "name" field */
+        name = cbm_find_child_by_kind(node, "rpc_name");
+    }
+    return name;
 }
 
 // Lua: resolve anonymous function assignment name from parent assignment_statement.
@@ -1819,6 +1824,16 @@ static void extract_class_def(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec
     // Swift: class name is type_identifier child (no "name" field)
     if (ts_node_is_null(name_node) && ctx->language == CBM_LANG_SWIFT) {
         name_node = cbm_find_child_by_kind(node, "type_identifier");
+    }
+    // Protobuf: service_name / message_name / enum_name children
+    if (ts_node_is_null(name_node) && ctx->language == CBM_LANG_PROTOBUF) {
+        name_node = cbm_find_child_by_kind(node, "service_name");
+        if (ts_node_is_null(name_node)) {
+            name_node = cbm_find_child_by_kind(node, "message_name");
+        }
+        if (ts_node_is_null(name_node)) {
+            name_node = cbm_find_child_by_kind(node, "enum_name");
+        }
     }
     if (ts_node_is_null(name_node)) {
         return;

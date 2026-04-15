@@ -627,7 +627,8 @@ static const char *cmake_module_types[] = {"source_file", NULL};
 static const char *cmake_call_types[] = {"normal_command", NULL};
 
 // ==================== PROTOBUF ====================
-static const char *protobuf_class_types[] = {"message", "enum", NULL};
+static const char *protobuf_class_types[] = {"message", "enum", "service", NULL};
+static const char *protobuf_func_types[] = {"rpc", NULL};
 static const char *protobuf_module_types[] = {"source_file", NULL};
 static const char *protobuf_field_types[] = {"field", "map_field", "oneof_field", NULL};
 static const char *protobuf_import_types[] = {"import", NULL};
@@ -983,7 +984,7 @@ static const CBMLangSpec lang_specs[CBM_LANG_COUNT] = {
      empty_types, NULL, NULL},
 
     // CBM_LANG_PROTOBUF
-    {CBM_LANG_PROTOBUF, empty_types, protobuf_class_types, protobuf_field_types,
+    {CBM_LANG_PROTOBUF, protobuf_func_types, protobuf_class_types, protobuf_field_types,
      protobuf_module_types, empty_types, protobuf_import_types, empty_types, empty_types,
      empty_types, empty_types, empty_types, NULL, empty_types, NULL, NULL},
 

@@ -12,6 +12,9 @@ typedef struct {
     int http_edges;    /* CROSS_HTTP_CALLS edges created */
     int async_edges;   /* CROSS_ASYNC_CALLS edges created */
     int channel_edges; /* CROSS_CHANNEL edges created */
+    int grpc_edges;    /* CROSS_GRPC_CALLS edges created */
+    int graphql_edges; /* CROSS_GRAPHQL_CALLS edges created */
+    int trpc_edges;    /* CROSS_TRPC_CALLS edges created */
     int projects_scanned;
     double elapsed_ms;
 } cbm_cross_repo_result_t;

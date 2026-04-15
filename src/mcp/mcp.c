@@ -43,6 +43,7 @@ enum {
 #include <sqlite3.h>
 #include "cypher/cypher.h"
 #include "pipeline/pipeline.h"
+#include "pipeline/pass_cross_repo.h"
 #include "cli/cli.h"
 #include "watcher/watcher.h"
 #include "foundation/mem.h"
@@ -257,13 +258,21 @@ typedef struct {
 } tool_def_t;
 
 static const tool_def_t TOOLS[] = {
-    {"index_repository", "Index a repository into the knowledge graph",
+    {"index_repository",
+     "Index a repository into the knowledge graph. "
+     "Special mode 'cross-repo-intelligence': skip extraction, only match Routes/Channels "
+     "across projects to create CROSS_HTTP_CALLS/CROSS_ASYNC_CALLS/CROSS_CHANNEL edges. "
+     "Requires target_projects param. Ensure target projects have fresh indexes first.",
      "{\"type\":\"object\",\"properties\":{\"repo_path\":{\"type\":\"string\",\"description\":"
-     "\"Path to the "
-     "repository\"},\"mode\":{\"type\":\"string\",\"enum\":[\"full\",\"moderate\",\"fast\"],"
-     "\"default\":\"full\",\"description\":\"full: all passes including semantic edges. "
-     "moderate: fast discovery + SIMILAR_TO + SEMANTICALLY_RELATED. fast: structure only."
-     "\"}},\"required\":[\"repo_path\"]}"},
+     "\"Path to the repository\"},"
+     "\"mode\":{\"type\":\"string\","
+     "\"enum\":[\"full\",\"moderate\",\"fast\",\"cross-repo-intelligence\"],"
+     "\"default\":\"full\",\"description\":\"full: all passes. moderate: fast + semantic. "
+     "fast: structure only. cross-repo-intelligence: match Routes/Channels across projects.\"},"
+     "\"target_projects\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},"
+     "\"description\":\"Projects to search for cross-repo links (cross-repo-intelligence mode). "
+     "Use [\\\"*\\\"] for all indexed projects. Run list_projects to see available projects.\"}"
+     "},\"required\":[\"repo_path\"]}"},
 
     {"search_graph",
      "Search the code knowledge graph for functions, classes, routes, and variables. Use INSTEAD "
@@ -2042,6 +2051,62 @@ static char *get_project_root(cbm_mcp_server_t *srv, const char *project) {
 
 /* ── index_repository ─────────────────────────────────────────── */
 
+/* Handle mode="cross-repo-intelligence" — extract to reduce complexity. */
+static char *handle_cross_repo_mode(const char *repo_path, const char *args) {
+    char *project = heap_strdup(cbm_project_name_from_path(repo_path));
+    if (!project) {
+        return cbm_mcp_text_result("cannot derive project name", true);
+    }
+
+    yyjson_doc *jdoc = yyjson_read(args, strlen(args), 0);
+    yyjson_val *jroot = jdoc ? yyjson_doc_get_root(jdoc) : NULL;
+    yyjson_val *tp_arr = jroot ? yyjson_obj_get(jroot, "target_projects") : NULL;
+
+    if (!tp_arr || !yyjson_is_arr(tp_arr) || yyjson_arr_size(tp_arr) == 0) {
+        yyjson_doc_free(jdoc);
+        free(project);
+        return cbm_mcp_text_result(
+            "{\"error\":\"target_projects is required for cross-repo-intelligence mode. "
+            "Use [\\\"*\\\"] for all projects. Run list_projects to see available.\"}",
+            true);
+    }
+
+    int tp_count = (int)yyjson_arr_size(tp_arr);
+    const char **targets = malloc((size_t)tp_count * sizeof(char *));
+    size_t idx;
+    size_t max;
+    yyjson_val *val;
+    int ti = 0;
+    yyjson_arr_foreach(tp_arr, idx, max, val) {
+        targets[ti++] = yyjson_get_str(val);
+    }
+
+    cbm_cross_repo_result_t result = cbm_cross_repo_match(project, targets, tp_count);
+    free(targets);
+    yyjson_doc_free(jdoc);
+
+    int total = result.http_edges + result.async_edges + result.channel_edges;
+    yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
+    yyjson_mut_val *root = yyjson_mut_obj(doc);
+    yyjson_mut_doc_set_root(doc, root);
+    yyjson_mut_obj_add_str(doc, root, "status", "success");
+    yyjson_mut_obj_add_str(doc, root, "mode", "cross-repo-intelligence");
+    yyjson_mut_obj_add_strcpy(doc, root, "project", project);
+    yyjson_mut_obj_add_int(doc, root, "projects_scanned", result.projects_scanned);
+    yyjson_mut_obj_add_int(doc, root, "cross_http_calls", result.http_edges);
+    yyjson_mut_obj_add_int(doc, root, "cross_async_calls", result.async_edges);
+    yyjson_mut_obj_add_int(doc, root, "cross_channel", result.channel_edges);
+    yyjson_mut_obj_add_int(doc, root, "total_cross_edges", total);
+    yyjson_mut_obj_add_real(doc, root, "elapsed_ms", result.elapsed_ms);
+
+    char *json = yy_doc_to_str(doc);
+    yyjson_mut_doc_free(doc);
+    free(project);
+    char *out = cbm_mcp_text_result(json, false);
+    free(json);
+    return out;
+}
+
 static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     char *repo_path = cbm_mcp_get_string_arg(args, "repo_path");
     char *mode_str = cbm_mcp_get_string_arg(args, "mode");
@@ -2050,6 +2115,13 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     if (!repo_path) {
         free(mode_str);
         return cbm_mcp_text_result("repo_path is required", true);
+    }
+
+    if (mode_str && strcmp(mode_str, "cross-repo-intelligence") == 0) {
+        free(mode_str);
+        char *result = handle_cross_repo_mode(repo_path, args);
+        free(repo_path);
+        return result;
     }
 
     cbm_index_mode_t mode = CBM_MODE_FULL;

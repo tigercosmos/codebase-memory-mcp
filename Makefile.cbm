@@ -189,7 +189,8 @@ PIPELINE_SRCS = \
     src/pipeline/pass_infrascan.c \
     src/pipeline/pass_k8s.c \
     src/pipeline/pass_similarity.c \
-    src/pipeline/pass_semantic_edges.c
+    src/pipeline/pass_semantic_edges.c \
+    src/pipeline/pass_cross_repo.c
 
 # SimHash / MinHash module
 SIMHASH_SRCS = src/simhash/minhash.c

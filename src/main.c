@@ -40,6 +40,7 @@ enum {
 #include "ui/config.h"
 #include "ui/http_server.h"
 #include "ui/embedded_assets.h"
+#include <yyjson/yyjson.h>
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -61,6 +62,17 @@ static atomic_int g_shutdown = 0;
 static void signal_handler(int sig) {
     (void)sig;
     atomic_store(&g_shutdown, 1);
+
+    /* Cancel any in-progress pipeline (async-signal-safe: only does atomic_store) */
+    if (g_server) {
+        cbm_pipeline_t *p = cbm_mcp_server_active_pipeline(g_server);
+        if (p) {
+            cbm_pipeline_cancel(p);
+        }
+    }
+    /* Release pipeline lock to prevent stale lock on restart */
+    cbm_pipeline_unlock();
+
     if (g_watcher) {
         cbm_watcher_stop(g_watcher);
     }
@@ -94,6 +106,11 @@ static void *http_thread(void *arg) {
 static int watcher_index_fn(const char *project_name, const char *root_path, void *user_data) {
     (void)user_data;
 
+    /* Skip indexing if shutdown is in progress */
+    if (atomic_load(&g_shutdown)) {
+        return 0;
+    }
+
     /* Non-blocking: skip if another pipeline is already running.
      * Watcher will retry on next poll cycle (5-60s). */
     if (!cbm_pipeline_try_lock()) {
@@ -117,29 +134,65 @@ static int watcher_index_fn(const char *project_name, const char *root_path, voi
 
 /* ── CLI mode ───────────────────────────────────────────────────── */
 
+#define CLI_USAGE "Usage: codebase-memory-mcp cli [--progress] [--json] <tool_name> [json_args]\n"
+
+/* Extract text content from MCP tool result envelope and print it.
+ * MCP results: {"content":[{"type":"text","text":"..."}],"isError":...}
+ * Returns 1 if the result was an error, 0 otherwise. */
+static int cli_print_mcp_result(const char *result) {
+    yyjson_doc *doc = yyjson_read(result, strlen(result), 0);
+    if (!doc) {
+        printf("%s\n", result);
+        return 0;
+    }
+
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *err_val = yyjson_obj_get(root, "isError");
+    bool is_error = err_val && yyjson_get_bool(err_val);
+
+    const char *text = NULL;
+    yyjson_val *content = yyjson_obj_get(root, "content");
+    if (yyjson_is_arr(content) && yyjson_arr_size(content) > 0) {
+        yyjson_val *tv = yyjson_obj_get(yyjson_arr_get_first(content), "text");
+        text = tv ? yyjson_get_str(tv) : NULL;
+    }
+
+    if (text) {
+        (void)fprintf(is_error ? stderr : stdout, "%s\n", text);
+    } else {
+        printf("%s\n", result);
+    }
+
+    yyjson_doc_free(doc);
+    return is_error ? SKIP_ONE : 0;
+}
+
+/* Strip a flag from argv, returning true if found. */
+static bool cli_strip_flag(int *argc, char **argv, const char *flag) {
+    for (int i = 0; i < *argc; i++) {
+        if (strcmp(argv[i], flag) != 0) {
+            continue;
+        }
+        for (int j = i; j < *argc - SKIP_ONE; j++) {
+            argv[j] = argv[j + SKIP_ONE];
+        }
+        (*argc)--;
+        return true;
+    }
+    return false;
+}
+
 static int run_cli(int argc, char **argv) {
     if (argc < MAIN_MIN_ARGC) {
-        (void)fprintf(stderr,
-                      "Usage: codebase-memory-mcp cli [--progress] <tool_name> [json_args]\n");
+        (void)fprintf(stderr, CLI_USAGE);
         return SKIP_ONE;
     }
 
-    /* Strip --progress flag from argv. */
-    bool progress = false;
-    for (int i = 0; i < argc; i++) {
-        if (strcmp(argv[i], "--progress") == 0) {
-            progress = true;
-            for (int j = i; j < argc - SKIP_ONE; j++) {
-                argv[j] = argv[j + SKIP_ONE];
-            }
-            argc--;
-            break;
-        }
-    }
+    bool progress = cli_strip_flag(&argc, argv, "--progress");
+    bool raw_json = cli_strip_flag(&argc, argv, "--json");
 
     if (argc < MAIN_MIN_ARGC) {
-        (void)fprintf(stderr,
-                      "Usage: codebase-memory-mcp cli [--progress] <tool_name> [json_args]\n");
+        (void)fprintf(stderr, CLI_USAGE);
         return SKIP_ONE;
     }
 
@@ -152,7 +205,7 @@ static int run_cli(int argc, char **argv) {
 
     cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
     if (!srv) {
-        (void)fprintf(stderr, "Failed to create server\n");
+        (void)fprintf(stderr, "error: failed to create server\n");
         if (progress) {
             cbm_progress_sink_fini();
         }
@@ -160,8 +213,14 @@ static int run_cli(int argc, char **argv) {
     }
 
     char *result = cbm_mcp_handle_tool(srv, tool_name, args_json);
+    int exit_code = 0;
+
     if (result) {
-        printf("%s\n", result);
+        if (raw_json) {
+            printf("%s\n", result);
+        } else {
+            exit_code = cli_print_mcp_result(result);
+        }
         free(result);
     }
 
@@ -169,7 +228,7 @@ static int run_cli(int argc, char **argv) {
     if (progress) {
         cbm_progress_sink_fini();
     }
-    return 0;
+    return exit_code;
 }
 
 /* ── Help ───────────────────────────────────────────────────────── */

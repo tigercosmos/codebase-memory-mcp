@@ -69,6 +69,7 @@ enum {
 #include <string.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <errno.h>
 
 /* ── Constants ────────────────────────────────────────────────── */
 
@@ -573,6 +574,10 @@ struct cbm_mcp_server {
     struct cbm_config *config;        /* external config ref (not owned) */
     cbm_thread_t autoindex_tid;
     bool autoindex_active; /* true if auto-index thread was started */
+
+    /* Active pipeline tracking for cancellation support */
+    cbm_pipeline_t *active_pipeline; /* non-NULL while index_repository runs */
+    int64_t active_request_id;       /* JSON-RPC id of the in-progress tool call */
 };
 
 cbm_mcp_server_t *cbm_mcp_server_new(const char *store_path) {
@@ -663,6 +668,10 @@ void cbm_mcp_server_evict_idle(cbm_mcp_server_t *srv, int timeout_s) {
 
 bool cbm_mcp_server_has_cached_store(cbm_mcp_server_t *srv) {
     return (srv && srv->store != NULL) != 0;
+}
+
+cbm_pipeline_t *cbm_mcp_server_active_pipeline(cbm_mcp_server_t *srv) {
+    return srv ? srv->active_pipeline : NULL;
 }
 
 /* ── Cache dir + project DB path helpers ───────────────────────── */
@@ -886,26 +895,40 @@ static char *handle_list_projects(cbm_mcp_server_t *srv, const char *args) {
     yyjson_mut_doc_set_root(doc, root);
     yyjson_mut_val *arr = yyjson_mut_arr(doc);
 
-    if (d) {
-        cbm_dirent_t *entry;
-        while ((entry = cbm_readdir(d)) != NULL) {
-            const char *name = entry->name;
-            size_t len = strlen(name);
-            if (!is_project_db_file(name, len)) {
-                continue;
-            }
-            char full_path[CBM_SZ_2K];
-            snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, name);
-            struct stat st;
-            if (stat(full_path, &st) != 0) {
-                continue;
-            }
-            build_project_json_entry(doc, arr, dir_path, name, len, &st);
-        }
-        cbm_closedir(d);
+    if (!d) {
+        char msg[CBM_SZ_1K];
+        snprintf(msg, sizeof(msg),
+                 "{\"error\":\"cannot read cache directory: %s\",\"hint\":"
+                 "\"Check directory permissions or run index_repository first.\"}",
+                 dir_path);
+        yyjson_mut_doc_free(doc);
+        return cbm_mcp_text_result(msg, true);
     }
 
+    cbm_dirent_t *entry;
+    while ((entry = cbm_readdir(d)) != NULL) {
+        const char *name = entry->name;
+        size_t len = strlen(name);
+        if (!is_project_db_file(name, len)) {
+            continue;
+        }
+        char full_path[CBM_SZ_2K];
+        snprintf(full_path, sizeof(full_path), "%s/%s", dir_path, name);
+        struct stat st;
+        if (stat(full_path, &st) != 0) {
+            continue;
+        }
+        build_project_json_entry(doc, arr, dir_path, name, len, &st);
+    }
+    cbm_closedir(d);
+
     yyjson_mut_obj_add_val(doc, root, "projects", arr);
+
+    /* Guide user when no projects are indexed */
+    if (yyjson_mut_arr_size(arr) == 0) {
+        yyjson_mut_obj_add_str(doc, root, "hint",
+                               "No projects indexed. Call index_repository(repo_path=...) first.");
+    }
 
     char *json = yy_doc_to_str(doc);
     yyjson_mut_doc_free(doc);
@@ -926,8 +949,10 @@ static char *handle_list_projects(cbm_mcp_server_t *srv, const char *args) {
 static char *verify_project_indexed(cbm_store_t *store, const char *project) {
     cbm_project_t proj_check = {0};
     if (cbm_store_get_project(store, project, &proj_check) != CBM_STORE_OK) {
-        return cbm_mcp_text_result(
-            "{\"error\":\"project not indexed — run index_repository first\"}", true);
+        char *err = build_project_list_error("project not indexed — run index_repository first");
+        char *res = cbm_mcp_text_result(err, true);
+        free(err);
+        return res;
     }
     cbm_project_free_fields(&proj_check);
     return NULL;
@@ -1379,6 +1404,25 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
     yyjson_mut_doc_set_root(doc, root);
 
     emit_search_results(doc, root, &out, store, relationship, include_connected, offset);
+
+    /* Add diagnostic hint when zero results */
+    if (out.total == 0) {
+        if (name_pattern && label) {
+            yyjson_mut_obj_add_str(
+                doc, root, "hint",
+                "No results. Try removing the label filter or broadening the name_pattern regex.");
+        } else if (name_pattern) {
+            yyjson_mut_obj_add_str(
+                doc, root, "hint",
+                "No nodes match this pattern. Check spelling or try a broader regex.");
+        } else if (label) {
+            yyjson_mut_obj_add_str(
+                doc, root, "hint",
+                "No nodes with this label. Available labels: Function, Method, Class, "
+                "Interface, Route, Variable, Module, Package, File, Folder.");
+        }
+    }
+
     bool sq_type_error = run_semantic_query(doc, root, args, store, project, limit);
 
     if (sq_type_error) {
@@ -1475,6 +1519,13 @@ static char *handle_query_graph(cbm_mcp_server_t *srv, const char *args) {
     yyjson_mut_obj_add_val(doc, root, "rows", rows);
     yyjson_mut_obj_add_int(doc, root, "total", result.row_count);
 
+    if (result.row_count == 0) {
+        yyjson_mut_obj_add_str(
+            doc, root, "hint",
+            "Query returned no results. Use get_graph_schema() to see available labels and "
+            "edge types.");
+    }
+
     char *json = yy_doc_to_str(doc);
     yyjson_mut_doc_free(doc);
     cbm_cypher_result_free(&result);
@@ -1502,6 +1553,11 @@ static char *handle_index_status(cbm_mcp_server_t *srv, const char *args) {
         yyjson_mut_obj_add_int(doc, root, "nodes", nodes);
         yyjson_mut_obj_add_int(doc, root, "edges", edges);
         yyjson_mut_obj_add_str(doc, root, "status", nodes > 0 ? "ready" : "empty");
+        if (nodes == 0) {
+            yyjson_mut_obj_add_str(
+                doc, root, "hint",
+                "Project is empty. Re-run index_repository(repo_path=...) to populate.");
+        }
     } else {
         yyjson_mut_obj_add_str(doc, root, "status", "no_project");
     }
@@ -1546,11 +1602,22 @@ static char *handle_delete_project(cbm_mcp_server_t *srv, const char *args) {
 
     bool exists = (access(path, F_OK) == 0);
     const char *status = "not_found";
+    const char *error_detail = NULL;
+    bool is_error = false;
+
     if (exists) {
-        (void)cbm_unlink(path);
+        int rc = cbm_unlink(path);
         (void)cbm_unlink(wal);
         (void)cbm_unlink(shm);
-        status = "deleted";
+        if (rc == 0) {
+            status = "deleted";
+        } else {
+            status = "delete_failed";
+            error_detail = strerror(errno);
+            is_error = true;
+        }
+    } else {
+        is_error = true;
     }
 
     cbm_pipeline_unlock();
@@ -1561,12 +1628,15 @@ static char *handle_delete_project(cbm_mcp_server_t *srv, const char *args) {
     yyjson_mut_doc_set_root(doc, root);
     yyjson_mut_obj_add_str(doc, root, "project", name);
     yyjson_mut_obj_add_str(doc, root, "status", status);
+    if (error_detail) {
+        yyjson_mut_obj_add_str(doc, root, "error", error_detail);
+    }
 
     char *json = yy_doc_to_str(doc);
     yyjson_mut_doc_free(doc);
     free(name);
 
-    char *result = cbm_mcp_text_result(json, false);
+    char *result = cbm_mcp_text_result(json, is_error);
     free(json);
     return result;
 }
@@ -1815,13 +1885,20 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     cbm_store_find_nodes_by_name(store, project, func_name, &nodes, &node_count);
 
     if (node_count == 0) {
+        enum { HINT_BUF_SZ = 512 };
+        char hint[HINT_BUF_SZ];
+        snprintf(hint, sizeof(hint),
+                 "{\"error\":\"function not found\",\"function_name\":\"%s\","
+                 "\"hint\":\"Use search_graph(name_pattern=\\\".*%s.*\\\") to find the exact "
+                 "name, then pass it to trace_path.\"}",
+                 func_name, func_name);
         free(func_name);
         free(project);
         free(direction);
         free(mode);
         free(param_name);
         cbm_store_free_nodes(nodes, 0);
-        return cbm_mcp_text_result("{\"error\":\"function not found\"}", true);
+        return cbm_mcp_text_result(hint, true);
     }
 
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
@@ -1999,9 +2076,13 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
     free(srv->current_project);
     srv->current_project = NULL;
 
-    /* Serialize pipeline runs to prevent concurrent writes */
+    /* Serialize pipeline runs to prevent concurrent writes.
+     * Track active pipeline so signal handler and notifications/cancelled
+     * can cancel it mid-run. */
     cbm_pipeline_lock();
+    srv->active_pipeline = p;
     int rc = cbm_pipeline_run(p);
+    srv->active_pipeline = NULL;
     cbm_pipeline_unlock();
 
     cbm_pipeline_free(p);
@@ -2021,6 +2102,12 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
 
     yyjson_mut_obj_add_str(doc, root, "project", project_name);
     yyjson_mut_obj_add_str(doc, root, "status", rc == 0 ? "indexed" : "error");
+
+    if (rc != 0) {
+        yyjson_mut_obj_add_str(doc, root, "hint",
+                               "Pipeline failed. Check repo_path exists and contains source files. "
+                               "Try mode='fast' for a quicker diagnostic run.");
+    }
 
     if (rc == 0) {
         cbm_store_t *store = resolve_store(srv, project_name);
@@ -2944,11 +3031,14 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     /* ── Phase 1: Grep scan ──────────────────────────────────── */
     char tmpfile[CBM_SZ_256];
     if (!write_pattern_file(tmpfile, sizeof(tmpfile), pattern)) {
+        char errmsg[CBM_SZ_256];
+        snprintf(errmsg, sizeof(errmsg), "search failed: cannot create temp file (%s)",
+                 strerror(errno));
         free(root_path);
         free(pattern);
         free(project);
         free(file_pattern);
-        return cbm_mcp_text_result("search failed: temp file", true);
+        return cbm_mcp_text_result(errmsg, true);
     }
 
     /* No grep-level match limit — let grep find all matches, then dedup and
@@ -3132,11 +3222,15 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
 
     FILE *fp = cbm_popen(cmd, "r");
     if (!fp) {
+        char errmsg[CBM_SZ_256];
+        snprintf(errmsg, sizeof(errmsg),
+                 "git diff failed: cannot execute command (%s). Check that git is installed.",
+                 strerror(errno));
         free(root_path);
         free(project);
         free(base_branch);
         free(scope);
-        return cbm_mcp_text_result("git diff failed", true);
+        return cbm_mcp_text_result(errmsg, true);
     }
 
     yyjson_mut_doc *doc = yyjson_mut_doc_new(NULL);
@@ -3168,7 +3262,17 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
             detect_add_impacted_symbols(store, project, line, doc, impacted);
         }
     }
-    cbm_pclose(fp);
+    int git_status = cbm_pclose(fp);
+
+    bool is_error = false;
+    if (git_status != 0 && file_count == 0) {
+        char hint_buf[CBM_SZ_256];
+        snprintf(hint_buf, sizeof(hint_buf),
+                 "git diff exited with status %d. Check that branch '%s' exists.", git_status,
+                 base_branch);
+        yyjson_mut_obj_add_strcpy(doc, root_obj, "hint", hint_buf);
+        is_error = true;
+    }
 
     yyjson_mut_obj_add_val(doc, root_obj, "changed_files", changed);
     yyjson_mut_obj_add_int(doc, root_obj, "changed_count", file_count);
@@ -3182,7 +3286,7 @@ static char *handle_detect_changes(cbm_mcp_server_t *srv, const char *args) {
     free(base_branch);
     free(scope);
 
-    char *result = cbm_mcp_text_result(json, false);
+    char *result = cbm_mcp_text_result(json, is_error);
     free(json);
     return result;
 }
@@ -3270,6 +3374,7 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
     yyjson_mut_val *root_obj = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root_obj);
 
+    bool is_error = false;
     if (strcmp(mode_str, "update") == 0 && content) {
         cbm_mkdir(adr_dir);
         FILE *fp = fopen(adr_path, "w");
@@ -3279,6 +3384,8 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
             yyjson_mut_obj_add_str(doc, root_obj, "status", "updated");
         } else {
             yyjson_mut_obj_add_str(doc, root_obj, "status", "write_error");
+            yyjson_mut_obj_add_str(doc, root_obj, "error", strerror(errno));
+            is_error = true;
         }
     } else if (strcmp(mode_str, "sections") == 0) {
         adr_list_sections(doc, root_obj, adr_path);
@@ -3294,7 +3401,7 @@ static char *handle_manage_adr(cbm_mcp_server_t *srv, const char *args) {
     free(mode_str);
     free(content);
 
-    char *result = cbm_mcp_text_result(json, false);
+    char *result = cbm_mcp_text_result(json, is_error);
     free(json);
     return result;
 }
@@ -3638,8 +3745,16 @@ char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
         return cbm_jsonrpc_format_error(0, JSONRPC_PARSE_ERROR, "Parse error");
     }
 
-    /* Notifications (no id) → no response */
+    /* Notifications (no id) → handle cancellation, then no response */
     if (!req.has_id) {
+        if (req.method && strcmp(req.method, "notifications/cancelled") == 0) {
+            /* MCP cancellation: cancel the active pipeline if request ID matches */
+            if (srv->active_pipeline) {
+                cbm_pipeline_cancel(srv->active_pipeline);
+                cbm_log_info("mcp.cancelled", "request_id_active",
+                             srv->active_request_id > 0 ? "yes" : "none");
+            }
+        }
         cbm_jsonrpc_request_free(&req);
         return NULL;
     }

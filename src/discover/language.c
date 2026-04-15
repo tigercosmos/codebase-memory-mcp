@@ -543,10 +543,8 @@ static const ext_entry_t EXT_TABLE[] = {
     {".star", CBM_LANG_STARLARK},
 
     /* SystemVerilog */
-    {".sv", CBM_LANG_SYSTEMVERILOG},
 
     /* SystemVerilog */
-    {".svh", CBM_LANG_SYSTEMVERILOG},
 
     /* Sway */
     {".sw", CBM_LANG_SWAY},
@@ -756,6 +754,7 @@ static const char *LANG_NAMES[CBM_LANG_COUNT] = {
     [CBM_LANG_PRISMA] = "Prisma",
     [CBM_LANG_HYPRLANG] = "Hyprlang",
     [CBM_LANG_DOTENV] = "DotEnv",
+    [CBM_LANG_SYSTEMVERILOG] = "SystemVerilog",
     [CBM_LANG_DIFF] = "Diff",
     [CBM_LANG_WGSL] = "WGSL",
     [CBM_LANG_KDL] = "KDL",
@@ -773,7 +772,6 @@ static const char *LANG_NAMES[CBM_LANG_COUNT] = {
     [CBM_LANG_REQUIREMENTS] = "Requirements",
     [CBM_LANG_HLSL] = "HLSL",
     [CBM_LANG_VHDL] = "VHDL",
-    [CBM_LANG_SYSTEMVERILOG] = "SystemVerilog",
     [CBM_LANG_DEVICETREE] = "DeviceTree",
     [CBM_LANG_LINKERSCRIPT] = "Linker Script",
     [CBM_LANG_GN] = "GN",

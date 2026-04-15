@@ -1668,6 +1668,32 @@ static bool aspect_wanted(yyjson_doc *aspects_doc, yyjson_val *aspects_arr, cons
     return false;
 }
 
+/* Append cross_repo_links summary to architecture JSON if CROSS_* edges exist. */
+static void append_cross_repo_summary(yyjson_mut_doc *doc, yyjson_mut_val *root,
+                                      const cbm_schema_info_t *schema) {
+    int cross_http = 0;
+    int cross_async = 0;
+    int cross_channel = 0;
+    for (int i = 0; i < schema->edge_type_count; i++) {
+        if (strcmp(schema->edge_types[i].type, "CROSS_HTTP_CALLS") == 0) {
+            cross_http = schema->edge_types[i].count;
+        } else if (strcmp(schema->edge_types[i].type, "CROSS_ASYNC_CALLS") == 0) {
+            cross_async = schema->edge_types[i].count;
+        } else if (strcmp(schema->edge_types[i].type, "CROSS_CHANNEL") == 0) {
+            cross_channel = schema->edge_types[i].count;
+        }
+    }
+    int cross_total = cross_http + cross_async + cross_channel;
+    if (cross_total > 0) {
+        yyjson_mut_val *cr = yyjson_mut_obj(doc);
+        yyjson_mut_obj_add_int(doc, cr, "cross_http_calls", cross_http);
+        yyjson_mut_obj_add_int(doc, cr, "cross_async_calls", cross_async);
+        yyjson_mut_obj_add_int(doc, cr, "cross_channel", cross_channel);
+        yyjson_mut_obj_add_int(doc, cr, "total", cross_total);
+        yyjson_mut_obj_add_val(doc, root, "cross_repo_links", cr);
+    }
+}
+
 static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
     char *project = cbm_mcp_get_string_arg(args, "project");
     cbm_store_t *store = resolve_store(srv, project);
@@ -1743,6 +1769,8 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
         }
         yyjson_mut_obj_add_val(doc, root, "relationship_patterns", pats);
     }
+
+    append_cross_repo_summary(doc, root, &schema);
 
     char *json = yy_doc_to_str(doc);
     yyjson_mut_doc_free(doc);

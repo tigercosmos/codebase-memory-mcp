@@ -117,7 +117,19 @@ echo ""
 echo "--- Dangerous command detection ---"
 
 DANGEROUS_CMDS='wget|netcat|ncat|/dev/tcp|telnet'
+# Known-benign matches (vendored grammar URI scheme tables, etc.). Each entry
+# is a regex matched against the full line; matches are stripped before
+# evaluation. Document the source so reviewers can verify the false positive.
+ALLOWED_DANGEROUS=(
+    '^telnet$'  # rst tree-sitter grammar: valid_schemas[] in vendored/grammars/rst/tree_sitter_rst/chars.c
+)
 if grep -wE "$DANGEROUS_CMDS" "$STRINGS_FILE" > "$SEC_CMDS" 2>/dev/null && [ -s "$SEC_CMDS" ]; then
+    for allow in "${ALLOWED_DANGEROUS[@]}"; do
+        grep -vE "$allow" "$SEC_CMDS" > "${SEC_CMDS}.tmp" || true
+        mv "${SEC_CMDS}.tmp" "$SEC_CMDS"
+    done
+fi
+if [ -s "$SEC_CMDS" ]; then
     echo "BLOCKED: Dangerous commands found in binary:"
     cat "$SEC_CMDS"
     FAIL=1

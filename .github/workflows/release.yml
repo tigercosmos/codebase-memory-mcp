@@ -197,12 +197,18 @@ jobs:
           cp install.ps1 binaries/ 2>/dev/null || true
           ls -la binaries/
 
-      - name: Security audits on all release binaries
+      - name: Security audits on all release files
         run: |
-          for bin in binaries/codebase-memory-mcp*; do
-            [ -f "$bin" ] || continue
-            echo "--- Auditing: $(basename "$bin") ---"
-            scripts/security-strings.sh "$bin"
+          # Audit every file that ships in the release archives — binaries,
+          # install scripts, LICENSE, and any future companion files.
+          # security-strings.sh detects file type and applies binary-only
+          # rules (URL allowlist, dangerous-command detection) only to real
+          # binaries; for shell scripts it still runs credential and base64
+          # pattern audits.
+          for f in binaries/*; do
+            [ -f "$f" ] || continue
+            echo "--- Auditing: $(basename "$f") ---"
+            scripts/security-strings.sh "$f"
           done
 
       - name: VirusTotal scan

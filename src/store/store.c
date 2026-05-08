@@ -2748,10 +2748,24 @@ int cbm_store_get_schema(cbm_store_t *s, const char *project, cbm_schema_info_t 
         int cap = ST_INIT_CAP_8;
         int n = 0;
         cbm_label_count_t *arr = malloc(cap * sizeof(cbm_label_count_t));
+        if (!arr) {
+            sqlite3_finalize(stmt);
+            return CBM_NOT_FOUND;
+        }
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             if (n >= cap) {
-                cap *= ST_GROWTH;
-                arr = safe_realloc(arr, cap * sizeof(cbm_label_count_t));
+                int new_cap = cap * ST_GROWTH;
+                void *tmp = realloc(arr, new_cap * sizeof(cbm_label_count_t));
+                if (!tmp) {
+                    for (int i = 0; i < n; i++) {
+                        free((void *)arr[i].label);
+                    }
+                    free(arr);
+                    sqlite3_finalize(stmt);
+                    return CBM_NOT_FOUND;
+                }
+                arr = tmp;
+                cap = new_cap;
             }
             arr[n].label = heap_strdup((const char *)sqlite3_column_text(stmt, 0));
             arr[n].count = sqlite3_column_int(stmt, SKIP_ONE);
@@ -2800,10 +2814,26 @@ int cbm_store_get_schema(cbm_store_t *s, const char *project, cbm_schema_info_t 
         int cap = ST_INIT_CAP_8;
         int n = 0;
         cbm_type_count_t *arr = malloc(cap * sizeof(cbm_type_count_t));
+        if (!arr) {
+            sqlite3_finalize(stmt);
+            cbm_store_schema_free(out);
+            return CBM_NOT_FOUND;
+        }
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             if (n >= cap) {
-                cap *= ST_GROWTH;
-                arr = safe_realloc(arr, cap * sizeof(cbm_type_count_t));
+                int new_cap = cap * ST_GROWTH;
+                void *tmp = realloc(arr, new_cap * sizeof(cbm_type_count_t));
+                if (!tmp) {
+                    for (int i = 0; i < n; i++) {
+                        free((void *)arr[i].type);
+                    }
+                    free(arr);
+                    sqlite3_finalize(stmt);
+                    cbm_store_schema_free(out);
+                    return CBM_NOT_FOUND;
+                }
+                arr = tmp;
+                cap = new_cap;
             }
             arr[n].type = heap_strdup((const char *)sqlite3_column_text(stmt, 0));
             arr[n].count = sqlite3_column_int(stmt, SKIP_ONE);

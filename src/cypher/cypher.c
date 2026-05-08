@@ -516,8 +516,20 @@ static int parse_props(parser_t *p, cbm_prop_filter_t **out, int *count) {
             arr = tmp;
             cap = new_cap;
         }
-        arr[n].key = heap_strdup(key->text);
-        arr[n].value = heap_strdup(val->text);
+        const char *new_key = heap_strdup(key->text);
+        const char *new_val = heap_strdup(val->text);
+        if (!new_key || !new_val) {
+            free((void *)new_key);
+            free((void *)new_val);
+            for (int i = 0; i < n; i++) {
+                free((void *)arr[i].key);
+                free((void *)arr[i].value);
+            }
+            free(arr);
+            return CBM_NOT_FOUND;
+        }
+        arr[n].key = new_key;
+        arr[n].value = new_val;
         n++;
 
         match(p, TOK_COMMA); /* optional comma */
@@ -604,7 +616,12 @@ static int parse_rel_types(parser_t *p, cbm_rel_pattern_t *out) {
         free(types);
         return CBM_NOT_FOUND;
     }
-    types[n++] = heap_strdup(t->text);
+    const char *first_type = heap_strdup(t->text);
+    if (!first_type) {
+        free(types);
+        return CBM_NOT_FOUND;
+    }
+    types[n++] = first_type;
 
     while (match(p, TOK_PIPE)) {
         t = expect(p, TOK_IDENT);
@@ -628,7 +645,15 @@ static int parse_rel_types(parser_t *p, cbm_rel_pattern_t *out) {
             types = (const char **)tmp;
             cap = new_cap;
         }
-        types[n++] = heap_strdup(t->text);
+        const char *next_type = heap_strdup(t->text);
+        if (!next_type) {
+            for (int i = 0; i < n; i++) {
+                free((void *)types[i]);
+            }
+            free(types);
+            return CBM_NOT_FOUND;
+        }
+        types[n++] = next_type;
     }
 
     out->types = types;
@@ -791,6 +816,11 @@ static cbm_expr_t *parse_or_expr(parser_t *p);
 static cbm_expr_t *parse_in_list(parser_t *p, cbm_condition_t *c) {
     advance(p);
     c->op = heap_strdup("IN");
+    if (!c->op) {
+        free((void *)c->variable);
+        free((void *)c->property);
+        return NULL;
+    }
     if (!expect(p, TOK_LBRACKET)) {
         free((void *)c->variable);
         free((void *)c->property);
@@ -827,7 +857,18 @@ static cbm_expr_t *parse_in_list(parser_t *p, cbm_condition_t *c) {
                 vals = (const char **)tmp;
                 vcap = new_vcap;
             }
-            vals[vn++] = heap_strdup(advance(p)->text);
+            const char *new_val = heap_strdup(advance(p)->text);
+            if (!new_val) {
+                for (int i = 0; i < vn; i++) {
+                    free((void *)vals[i]);
+                }
+                free((void *)vals);
+                free((void *)c->variable);
+                free((void *)c->property);
+                free((void *)c->op);
+                return NULL;
+            }
+            vals[vn++] = new_val;
         } else {
             break;
         }
@@ -1140,8 +1181,10 @@ static cbm_case_expr_t *parse_case_expr(parser_t *p) {
             void *tmp = realloc(kase->branches, new_bcap * sizeof(cbm_case_branch_t));
             if (!tmp) {
                 expr_free(when);
+                free((void *)then_val);
                 for (int i = 0; i < kase->branch_count; i++) {
                     expr_free(kase->branches[i].when_expr);
+                    free((void *)kase->branches[i].then_val);
                 }
                 free(kase->branches);
                 free(kase);

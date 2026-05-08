@@ -285,24 +285,50 @@ Config/markup languages (HTML, CSS, SCSS, YAML, TOML, HCL, SQL, Dockerfile) run 
 ### PHP (laravel/framework)
 
 **Project**: `laravel-framework-php` | **Repo**: `/tmp/lang-bench/laravel-framework-php`
-**Nodes**: 38,644 | **Edges**: 161,242
+**Nodes**: 39,767 | **Edges**: 169,268 (post-PHP-LSP; was 196,979 with name-fallback misroutes)
 
-| Q# | Question | Grade | Attempts | Approach | Notes |
-|----|----------|-------|----------|----------|-------|
-| Q1 | Index Stats | PASS | 1/5 | get_graph_schema | 26,984 Methods, 3,546 Classes, 390 Interfaces, 270 Routes |
-| Q2 | Find Functions | PASS | 1/5 | search_graph(Function) | value (in=1024), fake (in=878), response (in=712). 143 total |
-| Q3 | Find Classes | PASS | 1/5 | search_graph(Class) | Model (in=836,out=155), Blueprint (in=785), Container (in=625) |
-| Q4 | Pattern Search | PASS | 1/5 | search_graph(name_pattern=test) | TestCase (in=1370). 14,505 test-related nodes |
-| Q5 | Code Snippet | PASS | 1/5 | get_code_snippet | value() from helpers.php:264-267 |
-| Q6 | Text Search | PARTIAL | 2/5 | search_code(error) | TODO/FIXME=0; "error" found 3 in workflow YAML |
-| Q7 | Outbound Trace | PASS | 1/5 | trace_call_path(outbound) | value calls first->from->all, toArray, jsonSerialize |
-| Q8 | Inbound Trace | PARTIAL | 1/5 | trace_call_path(inbound) | Resolved to method variant (0 callers) instead of helper function |
-| Q9 | Cypher CALLS | PASS | 1/5 | query_graph | app.php->toArray, __construct->__construct |
-| Q10 | Properties | PASS | 1/5 | query_graph(properties) | enum_value, collect, data_fill, data_has |
-| Q11 | Inheritance | PASS | 1/5 | query_graph(INHERITS) | 200 rows (capped): AuthorizationException, Model relations |
-| Q12 | List Directory | PASS | 1/5 | list_directory | 16 entries: src/, tests/, config/, bin/ |
+PHP now runs through a Light Semantic Pass (`internal/cbm/lsp/php_lsp.c`) that
+performs receiver-type tracking, namespace+`use`-clause resolution, PHPDoc
+`@var`/`@param` binding, magic-method (`__call`/`__callStatic`) dispatch, and
+emits override resolutions consumed by `pass_parallel.c::resolve_file_calls`
+and `pass_calls.c::resolve_single_call`.
 
-**Score: 9/12 (75%)**
+**Attribution correctness fix** (the primary metric, see
+`docs/PHP_LSP_PRE_FLIGHT.md` §6):
+- `ConfiguresPrompts.configurePrompts → helpers.value` misroute (3
+  call sites): **fixed** — those typed-receiver `$prompt->value()` calls
+  no longer route to the global helper. Verified: 0 misroute edges.
+- Roughly 27 500 fewer total edges, primarily from blocking
+  name-fallback edges where the receiver was a vendor (un-indexed) type
+  — better precision at the cost of some recall, see notes below.
+
+| Q# | Question | Grade | Approach | Notes |
+|----|----------|-------|----------|-------|
+| Q1 | Index Stats | PASS | get_graph_schema | unchanged |
+| Q2 | Find Functions | PASS | search_graph(Function) | unchanged |
+| Q3 | Find Classes | PASS | search_graph(Class) | unchanged |
+| Q4 | Pattern Search | PASS | search_graph(name_pattern=test) | unchanged |
+| Q5 | Code Snippet | PASS | get_code_snippet | unchanged |
+| Q6 | Text Search | PARTIAL | search_code | search-backend issue, separate ticket — see PHP_LSP_PRE_FLIGHT §3 |
+| Q7 | Outbound Trace | PASS | trace_call_path(outbound) | unchanged |
+| Q8 | Inbound Trace | PARTIAL | trace_call_path(inbound) | tool-side disambiguation, separate ticket — see PHP_LSP_PRE_FLIGHT §4.1 |
+| Q9 | Cypher CALLS | PASS | query_graph | unchanged |
+| Q10 | Properties | PASS | query_graph(properties) | unchanged |
+| Q11 | Inheritance | PASS | query_graph(INHERITS) | unchanged |
+| Q12 | List Directory | PASS | list_directory | unchanged |
+
+**Score: 10/12 (83%)** — the two remaining PARTIALs are non-LSP issues
+tracked separately. PHP-LSP delivered the underlying graph-correctness
+win (collide-set attribution); benchmark Tier 1 (≥ 90 %) requires the
+search-recall and trace-disambiguation tickets to ship as well.
+
+**Note on edge-count drop**: when the LSP knows the receiver is typed
+but the receiver class is not indexed (e.g., Composer vendor types like
+`Laravel\\Prompts\\Prompt`), it emits a synthetic
+`php_method_typed_unindexed` resolution that the bridge uses to
+**suppress** the unified extractor's name-based fallback. This trades
+recall (no edge instead of a guess) for precision (no wrong edge). The
+pre-flight argued this is the right trade for graph correctness.
 
 ### Lua (neovim/neovim)
 

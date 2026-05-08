@@ -5,6 +5,7 @@
 #include "extract_unified.h"
 #include "lsp/go_lsp.h"
 #include "lsp/c_lsp.h"
+#include "lsp/php_lsp.h"
 #include "preprocessor.h"
 #include "foundation/compat.h"
 #include "tree_sitter/api.h" // TSParser, TSNode, TSTree, TSInput, TSLanguage, TSPoint, TSParseOptions, TSParseState
@@ -356,6 +357,9 @@ CBMFileResult *cbm_extract_file(const char *source, int source_len, CBMLanguage 
     }
     if (language == CBM_LANG_C || language == CBM_LANG_CPP || language == CBM_LANG_CUDA) {
         cbm_run_c_lsp(a, result, source, source_len, root, language != CBM_LANG_C);
+    }
+    if (language == CBM_LANG_PHP) {
+        cbm_run_php_lsp(a, result, source, source_len, root);
     }
     atomic_fetch_add(&total_lsp_ns, now_ns() - lsp_start);
 

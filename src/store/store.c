@@ -2304,8 +2304,7 @@ int cbm_store_search(cbm_store_t *s, const cbm_search_params_t *params, cbm_sear
     snprintf(count_sql, sizeof(count_sql), "SELECT COUNT(*) FROM (%s)", sql);
 
     /* Add ORDER BY + LIMIT */
-    enum { ST_DEFAULT_SEARCH_LIMIT = 200 };
-    int limit = params->limit > 0 ? params->limit : ST_DEFAULT_SEARCH_LIMIT;
+    int limit = params->limit > 0 ? params->limit : CBM_DEFAULT_SEARCH_LIMIT;
     int offset = params->offset;
     const char *name_col = has_degree_filter ? "name" : "n.name";
     char order_limit[CBM_SZ_128];

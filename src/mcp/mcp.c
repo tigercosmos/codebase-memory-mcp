@@ -285,7 +285,12 @@ static const tool_def_t TOOLS[] = {
      "splitting and structural label boosting — recommended for natural-language discovery; "
      "(2) name_pattern='.*regex.*' for exact pattern matching; (3) semantic_query=[...] for "
      "vector cosine search that bridges vocabulary (finds 'publish' when you search 'send'). "
-     "The three modes are independent and can be combined in a single call.",
+     "The three modes are independent and can be combined in a single call. "
+     "PAGINATION: results are capped at limit (default 200) — broader queries are silently "
+     "truncated. The response always includes 'total' (full match count before limit) and "
+     "'has_more' (true when total > offset+returned). Detect truncation with has_more, then "
+     "page by re-calling with offset=offset+limit until has_more is false. Narrow first via "
+     "label/file_pattern/min_degree before paginating large result sets.",
      "{\"type\":\"object\",\"properties\":{\"project\":{\"type\":\"string\"},"
      "\"query\":{\"type\":\"string\",\"description\":\"Natural-language or keyword full-text "
      "search using BM25 ranking. Tokens are split on whitespace; camelCase identifiers are "
@@ -303,17 +308,24 @@ static const tool_def_t TOOLS[] = {
      "Each keyword is scored independently via per-keyword min-cosine; results reflect functions "
      "that score well on ALL keywords. Requires moderate/full index mode. Results appear in the "
      "'semantic_results' field (separate from 'results').\"},\"limit\":{\"type\":"
-     "\"integer\",\"description\":\"Max results. Default: "
-     "200\"},\"offset\":{\"type\":\"integer\",\"default\":0}},\"required\":[\"project\"]}"},
+     "\"integer\",\"description\":\"Max results per call. Default 200. Response carries "
+     "'total' (full match count) and 'has_more' (true if truncated) so callers can "
+     "detect the limit and paginate.\"},\"offset\":{\"type\":\"integer\",\"default\":0,"
+     "\"description\":\"Skip the first N matching nodes. Combine with 'limit' to page: "
+     "increment offset by limit and re-call while has_more is true.\"}},"
+     "\"required\":[\"project\"]}"},
 
     {"query_graph",
      "Execute a Cypher query against the knowledge graph for complex multi-hop patterns, "
-     "aggregations, and cross-service analysis.",
+     "aggregations, and cross-service analysis. The response includes 'total' (returned "
+     "row count). There is a hard 100k row ceiling — for broad queries add LIMIT in the "
+     "Cypher itself or use search_graph + offset/limit pagination instead.",
      "{\"type\":\"object\",\"properties\":{\"query\":{\"type\":\"string\",\"description\":\"Cypher "
      "query\"},\"project\":{\"type\":\"string\"},\"max_rows\":{\"type\":\"integer\","
      "\"description\":"
-     "\"Optional row limit. Default: unlimited (100k "
-     "ceiling)\"}},\"required\":[\"query\",\"project\"]}"},
+     "\"Optional row limit. Default: unlimited up to a 100k row "
+     "ceiling. No offset support — use search_graph for paginated browsing.\"}},"
+     "\"required\":[\"query\",\"project\"]}"},
 
     {"trace_path",
      "Trace paths through the code graph. Modes: calls (callers/callees), data_flow (value "
@@ -358,7 +370,11 @@ static const tool_def_t TOOLS[] = {
      "the knowledge graph: deduplicates matches into containing functions, ranks by structural "
      "importance (definitions first, popular functions next, tests last). "
      "Modes: compact (default, signatures only — token efficient), full (with source), "
-     "files (just file paths). Use path_filter regex to scope results.",
+     "files (just file paths). Use path_filter regex to scope results. "
+     "TRUNCATION: enriched results are capped at limit (default 10). Response carries "
+     "'total_grep_matches' (raw grep hit count) and 'total_results' (deduplicated function "
+     "count) — compare to limit to detect truncation. There is no offset parameter; to see "
+     "more, raise limit or narrow the query with file_pattern / path_filter.",
      "{\"type\":\"object\",\"properties\":{\"pattern\":{\"type\":\"string\"},\"project\":{\"type\":"
      "\"string\"},\"file_pattern\":{\"type\":\"string\",\"description\":\"Glob for grep "
      "--include (e.g. *.go)\"},\"path_filter\":{\"type\":\"string\",\"description\":\"Regex "
@@ -368,8 +384,10 @@ static const tool_def_t TOOLS[] = {
      "\"context\":{\"type\":\"integer\",\"description\":\"Lines of context around each match "
      "(like grep -C). Only used in compact mode.\"},"
      "\"regex\":{\"type\":\"boolean\",\"default\":false},\"limit\":{\"type\":\"integer\","
-     "\"description\":\"Max results (default 10)\",\"default\":10}},\"required\":["
-     "\"pattern\",\"project\"]}"},
+     "\"description\":\"Max enriched results per call. Default 10. Response includes "
+     "'total_grep_matches' and 'total_results' so callers can detect truncation. No "
+     "offset parameter — raise limit or narrow with file_pattern / path_filter to see more."
+     "\",\"default\":10}},\"required\":[\"pattern\",\"project\"]}"},
 
     {"list_projects", "List all indexed projects", "{\"type\":\"object\",\"properties\":{}}"},
 
@@ -1389,8 +1407,7 @@ static char *handle_search_graph(cbm_mcp_server_t *srv, const char *args) {
     char *relationship = cbm_mcp_get_string_arg(args, "relationship");
     bool exclude_entry_points = cbm_mcp_get_bool_arg(args, "exclude_entry_points");
     bool include_connected = cbm_mcp_get_bool_arg(args, "include_connected");
-    enum { SEARCH_DEFAULT_LIMIT = 200 };
-    int limit = cbm_mcp_get_int_arg(args, "limit", SEARCH_DEFAULT_LIMIT);
+    int limit = cbm_mcp_get_int_arg(args, "limit", CBM_DEFAULT_SEARCH_LIMIT);
     int offset = cbm_mcp_get_int_arg(args, "offset", 0);
     int min_degree = cbm_mcp_get_int_arg(args, "min_degree", CBM_NOT_FOUND);
     int max_degree = cbm_mcp_get_int_arg(args, "max_degree", CBM_NOT_FOUND);

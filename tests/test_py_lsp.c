@@ -506,6 +506,168 @@ TEST(pylsp_pep695_generic_class) {
     PASS();
 }
 
+/* ── Phase 9 — cross-file resolution ──────────────────────────── */
+
+static int find_resolved_arr(const CBMResolvedCallArray *arr, const char *callerSub,
+                             const char *calleeSub) {
+    for (int i = 0; i < arr->count; i++) {
+        const CBMResolvedCall *rc = &arr->items[i];
+        if (rc->caller_qn && strstr(rc->caller_qn, callerSub) &&
+            rc->callee_qn && strstr(rc->callee_qn, calleeSub))
+            return i;
+    }
+    return -1;
+}
+
+TEST(pylsp_crossfile_method_dispatch) {
+    /* file svc.py defines class RedisStore with Get(); file main.py calls
+     * the method on a typed parameter. Reuses CBMLSPDef to feed the
+     * cross-file definition into the resolver. */
+    const char *source =
+        "from svc import RedisStore\n"
+        "def process(s: RedisStore):\n"
+        "    return s.Get('k')\n";
+
+    CBMLSPDef defs[2];
+    memset(defs, 0, sizeof(defs));
+    defs[0].qualified_name = "svc.RedisStore";
+    defs[0].short_name = "RedisStore";
+    defs[0].label = "Class";
+    defs[0].def_module_qn = "svc";
+
+    defs[1].qualified_name = "svc.RedisStore.Get";
+    defs[1].short_name = "Get";
+    defs[1].label = "Method";
+    defs[1].receiver_type = "svc.RedisStore";
+    defs[1].def_module_qn = "svc";
+
+    const char *imp_names[] = {"RedisStore"};
+    const char *imp_qns[] = {"svc.RedisStore"};
+
+    CBMArena arena;
+    cbm_arena_init(&arena);
+    CBMResolvedCallArray out = {0};
+
+    cbm_run_py_lsp_cross(&arena, source, (int)strlen(source), "test.main",
+                         defs, 2, imp_names, imp_qns, 1, NULL, &out);
+
+    ASSERT_GTE(find_resolved_arr(&out, "process", "Get"), 0);
+    cbm_arena_destroy(&arena);
+    PASS();
+}
+
+TEST(pylsp_crossfile_inheritance) {
+    /* svc.py defines class Base with shared(); main.py defines class Child(Base)
+     * and calls self.shared(). Caller passes ALL relevant defs (cross-file
+     * Base/shared + local Child/go) — same convention as test_go_lsp.c. */
+    const char *source =
+        "from svc import Base\n"
+        "class Child(Base):\n"
+        "    def go(self):\n"
+        "        return self.shared()\n";
+
+    CBMLSPDef defs[4];
+    memset(defs, 0, sizeof(defs));
+    defs[0].qualified_name = "svc.Base";
+    defs[0].short_name = "Base";
+    defs[0].label = "Class";
+    defs[0].def_module_qn = "svc";
+
+    defs[1].qualified_name = "svc.Base.shared";
+    defs[1].short_name = "shared";
+    defs[1].label = "Method";
+    defs[1].receiver_type = "svc.Base";
+    defs[1].def_module_qn = "svc";
+
+    defs[2].qualified_name = "test.main.Child";
+    defs[2].short_name = "Child";
+    defs[2].label = "Class";
+    defs[2].def_module_qn = "test.main";
+    defs[2].embedded_types = "svc.Base";
+
+    defs[3].qualified_name = "test.main.Child.go";
+    defs[3].short_name = "go";
+    defs[3].label = "Method";
+    defs[3].receiver_type = "test.main.Child";
+    defs[3].def_module_qn = "test.main";
+
+    const char *imp_names[] = {"Base"};
+    const char *imp_qns[] = {"svc.Base"};
+
+    CBMArena arena;
+    cbm_arena_init(&arena);
+    CBMResolvedCallArray out = {0};
+
+    cbm_run_py_lsp_cross(&arena, source, (int)strlen(source), "test.main",
+                         defs, 4, imp_names, imp_qns, 1, NULL, &out);
+
+    ASSERT_GTE(find_resolved_arr(&out, "go", "shared"), 0);
+    cbm_arena_destroy(&arena);
+    PASS();
+}
+
+TEST(pylsp_batch_two_files) {
+    const char *src_a =
+        "def helper():\n"
+        "    return 1\n";
+    const char *src_b =
+        "from a import helper\n"
+        "def main():\n"
+        "    return helper()\n";
+
+    CBMLSPDef a_defs[1];
+    memset(a_defs, 0, sizeof(a_defs));
+    a_defs[0].qualified_name = "a.helper";
+    a_defs[0].short_name = "helper";
+    a_defs[0].label = "Function";
+    a_defs[0].def_module_qn = "a";
+
+    CBMLSPDef b_defs[1];
+    memset(b_defs, 0, sizeof(b_defs));
+    b_defs[0].qualified_name = "b.main";
+    b_defs[0].short_name = "main";
+    b_defs[0].label = "Function";
+    b_defs[0].def_module_qn = "b";
+
+    const char *b_imp_names[] = {"helper"};
+    const char *b_imp_qns[] = {"a.helper"};
+
+    CBMBatchPyLSPFile files[2];
+    memset(files, 0, sizeof(files));
+    files[0].source = src_a;
+    files[0].source_len = (int)strlen(src_a);
+    files[0].module_qn = "a";
+    files[0].defs = a_defs;
+    files[0].def_count = 1;
+
+    files[1].source = src_b;
+    files[1].source_len = (int)strlen(src_b);
+    files[1].module_qn = "b";
+    files[1].defs = b_defs;
+    files[1].def_count = 1;
+    /* b imports helper from a — also include a's def in b's reachable set. */
+    CBMLSPDef b_combined[2];
+    memcpy(&b_combined[0], &a_defs[0], sizeof(CBMLSPDef));
+    memcpy(&b_combined[1], &b_defs[0], sizeof(CBMLSPDef));
+    files[1].defs = b_combined;
+    files[1].def_count = 2;
+    files[1].import_names = b_imp_names;
+    files[1].import_qns = b_imp_qns;
+    files[1].import_count = 1;
+
+    CBMArena arena;
+    cbm_arena_init(&arena);
+    CBMResolvedCallArray outs[2];
+    memset(outs, 0, sizeof(outs));
+
+    cbm_batch_py_lsp_cross(&arena, files, 2, outs);
+
+    /* file b's main should have called helper. */
+    ASSERT_GTE(find_resolved_arr(&outs[1], "main", "helper"), 0);
+    cbm_arena_destroy(&arena);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(py_lsp) {
@@ -540,4 +702,8 @@ SUITE(py_lsp) {
     RUN_TEST(pylsp_super_call);
     RUN_TEST(pylsp_multi_inheritance_first_base);
     RUN_TEST(pylsp_pep695_generic_class);
+    /* Phase 9 — cross-file + batch */
+    RUN_TEST(pylsp_crossfile_method_dispatch);
+    RUN_TEST(pylsp_crossfile_inheritance);
+    RUN_TEST(pylsp_batch_two_files);
 }

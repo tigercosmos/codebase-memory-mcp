@@ -869,7 +869,100 @@ void cbm_run_py_lsp(CBMArena* arena, CBMFileResult* result,
     py_lsp_process_file(&ctx, root);
 }
 
-/* ── Cross-file + batch — Phase 9 fills these in ──────────────── */
+/* ── Cross-file + batch ───────────────────────────────────────── */
+
+extern const TSLanguage* tree_sitter_python(void);
+
+/* Split a "|"-separated list into a NULL-terminated array of arena copies. */
+static const char** py_split_pipe(CBMArena* arena, const char* text) {
+    if (!text || !text[0]) return NULL;
+    int count = 1;
+    for (const char* p = text; *p; p++) if (*p == '|') count++;
+    const char** out = (const char**)cbm_arena_alloc(arena,
+        (size_t)(count + 1) * sizeof(const char*));
+    if (!out) return NULL;
+    int idx = 0;
+    const char* start = text;
+    for (const char* p = text; ; p++) {
+        if (*p == '|' || *p == '\0') {
+            size_t n = (size_t)(p - start);
+            char* s = (char*)cbm_arena_alloc(arena, n + 1);
+            if (!s) return NULL;
+            memcpy(s, start, n);
+            s[n] = '\0';
+            out[idx++] = s;
+            if (*p == '\0') break;
+            start = p + 1;
+        }
+    }
+    out[idx] = NULL;
+    return out;
+}
+
+/* Build a registry from CBMLSPDef[] supplied by the caller — covers both
+ * the source file's own defs and cross-file referenced defs. */
+static void py_register_lsp_defs(CBMArena* arena, CBMTypeRegistry* reg,
+    CBMLSPDef* defs, int def_count) {
+    for (int i = 0; i < def_count; i++) {
+        CBMLSPDef* d = &defs[i];
+        if (!d->qualified_name || !d->short_name || !d->label) continue;
+
+        if (strcmp(d->label, "Type") == 0 || strcmp(d->label, "Class") == 0 ||
+            strcmp(d->label, "Interface") == 0 || strcmp(d->label, "Protocol") == 0) {
+            CBMRegisteredType rt;
+            memset(&rt, 0, sizeof(rt));
+            rt.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
+            rt.short_name = cbm_arena_strdup(arena, d->short_name);
+            rt.is_interface = d->is_interface ||
+                strcmp(d->label, "Interface") == 0 ||
+                strcmp(d->label, "Protocol") == 0;
+            rt.embedded_types = py_split_pipe(arena, d->embedded_types);
+            if (d->method_names_str && d->method_names_str[0]) {
+                rt.method_names = py_split_pipe(arena, d->method_names_str);
+            }
+            cbm_registry_add_type(reg, rt);
+        }
+
+        if (strcmp(d->label, "Function") == 0 || strcmp(d->label, "Method") == 0) {
+            CBMRegisteredFunc rf;
+            memset(&rf, 0, sizeof(rf));
+            rf.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
+            rf.short_name = cbm_arena_strdup(arena, d->short_name);
+
+            // Build FUNC type from "|"-separated return types.
+            const char** ret_strs = py_split_pipe(arena, d->return_types);
+            const CBMType** ret_types = NULL;
+            if (ret_strs) {
+                int n = 0;
+                while (ret_strs[n]) n++;
+                if (n > 0) {
+                    ret_types = (const CBMType**)cbm_arena_alloc(arena,
+                        (size_t)(n + 1) * sizeof(const CBMType*));
+                    for (int j = 0; j < n; j++) {
+                        ret_types[j] = cbm_type_named(arena, ret_strs[j]);
+                    }
+                    ret_types[n] = NULL;
+                }
+            }
+            rf.signature = cbm_type_func(arena, NULL, NULL, ret_types);
+
+            if (strcmp(d->label, "Method") == 0 && d->receiver_type && d->receiver_type[0]) {
+                rf.receiver_type = cbm_arena_strdup(arena, d->receiver_type);
+                if (!cbm_registry_lookup_type(reg, rf.receiver_type)) {
+                    CBMRegisteredType auto_t;
+                    memset(&auto_t, 0, sizeof(auto_t));
+                    auto_t.qualified_name = rf.receiver_type;
+                    const char* dot = strrchr(d->receiver_type, '.');
+                    auto_t.short_name = dot
+                        ? cbm_arena_strdup(arena, dot + 1)
+                        : rf.receiver_type;
+                    cbm_registry_add_type(reg, auto_t);
+                }
+            }
+            cbm_registry_add_func(reg, rf);
+        }
+    }
+}
 
 void cbm_run_py_lsp_cross(
     CBMArena* arena,
@@ -879,27 +972,87 @@ void cbm_run_py_lsp_cross(
     const char** import_names, const char** import_qns, int import_count,
     TSTree* cached_tree,
     CBMResolvedCallArray* out) {
-    (void)arena;
-    (void)source;
-    (void)source_len;
-    (void)module_qn;
-    (void)defs;
-    (void)def_count;
-    (void)import_names;
-    (void)import_qns;
-    (void)import_count;
-    (void)cached_tree;
-    (void)out;
+    if (!arena || !source || source_len <= 0 || !out) return;
+
+    TSParser* parser = NULL;
+    TSTree* tree = cached_tree;
+    bool owns_tree = false;
+    if (!tree) {
+        parser = ts_parser_new();
+        if (!parser) return;
+        ts_parser_set_language(parser, tree_sitter_python());
+        tree = ts_parser_parse_string(parser, NULL, source, (uint32_t)source_len);
+        owns_tree = true;
+        if (!tree) { ts_parser_delete(parser); return; }
+    }
+    TSNode root = ts_tree_root_node(tree);
+
+    CBMTypeRegistry reg;
+    cbm_registry_init(&reg, arena);
+    cbm_python_stdlib_register(&reg, arena);
+    py_register_lsp_defs(arena, &reg, defs, def_count);
+
+    PyLSPContext ctx;
+    py_lsp_init(&ctx, arena, source, source_len, &reg, module_qn, out);
+    for (int i = 0; i < import_count; i++) {
+        if (import_names && import_qns && import_names[i] && import_qns[i]) {
+            py_lsp_add_import(&ctx, import_names[i], import_qns[i]);
+        }
+    }
+    py_lsp_process_file(&ctx, root);
+
+    if (owns_tree && tree) ts_tree_delete(tree);
+    if (parser) ts_parser_delete(parser);
 }
 
 void cbm_batch_py_lsp_cross(
     CBMArena* arena,
     CBMBatchPyLSPFile* files, int file_count,
     CBMResolvedCallArray* out) {
-    (void)arena;
-    (void)files;
-    (void)file_count;
-    (void)out;
+    if (!arena || !files || file_count <= 0 || !out) return;
+
+    for (int f = 0; f < file_count; f++) {
+        CBMBatchPyLSPFile* file = &files[f];
+        memset(&out[f], 0, sizeof(CBMResolvedCallArray));
+        if (!file->source || file->source_len <= 0) continue;
+
+        CBMArena file_arena;
+        cbm_arena_init(&file_arena);
+
+        CBMResolvedCallArray file_out;
+        memset(&file_out, 0, sizeof(file_out));
+
+        cbm_run_py_lsp_cross(&file_arena,
+            file->source, file->source_len, file->module_qn,
+            file->defs, file->def_count,
+            file->import_names, file->import_qns, file->import_count,
+            file->cached_tree, &file_out);
+
+        if (file_out.count > 0) {
+            out[f].count = file_out.count;
+            out[f].items = (CBMResolvedCall*)cbm_arena_alloc(arena,
+                (size_t)file_out.count * sizeof(CBMResolvedCall));
+            if (out[f].items) {
+                for (int j = 0; j < file_out.count; j++) {
+                    CBMResolvedCall* src = &file_out.items[j];
+                    CBMResolvedCall* dst = &out[f].items[j];
+                    dst->caller_qn = src->caller_qn
+                        ? cbm_arena_strdup(arena, src->caller_qn) : NULL;
+                    dst->callee_qn = src->callee_qn
+                        ? cbm_arena_strdup(arena, src->callee_qn) : NULL;
+                    dst->strategy = src->strategy
+                        ? cbm_arena_strdup(arena, src->strategy) : NULL;
+                    dst->confidence = src->confidence;
+                    dst->reason = src->reason
+                        ? cbm_arena_strdup(arena, src->reason) : NULL;
+                }
+            } else {
+                out[f].count = 0;
+            }
+        }
+
+        cbm_arena_destroy(&file_arena);
+    }
 }
 
 /* ── Stdlib stub — Phase 10 replaces with auto-generated body ─── */

@@ -668,6 +668,63 @@ TEST(pylsp_batch_two_files) {
     PASS();
 }
 
+/* ── Phase 10 — stdlib resolution ─────────────────────────────── */
+
+TEST(pylsp_stdlib_os_getcwd) {
+    /* Top-level module attribute resolution against the stdlib registry.
+     * Note: `import os.path` only binds `path` in scope (the leaf binding
+     * extracted from the dotted import) — full submodule traversal of
+     * `os.path.join` style accesses needs a Phase 10.5 follow-up where we
+     * also stamp parent-module bindings. For v1, top-level module calls
+     * resolve correctly. */
+    CBMFileResult *r = extract_py(
+        "import os\n"
+        "def use():\n"
+        "    return os.getcwd()\n");
+    ASSERT_NOT_NULL(r);
+    int idx = find_resolved(r, "use", "getcwd");
+    ASSERT_GTE(idx, 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_stdlib_collections_defaultdict) {
+    CBMFileResult *r = extract_py(
+        "from collections import defaultdict\n"
+        "def use():\n"
+        "    return defaultdict(list)\n");
+    ASSERT_NOT_NULL(r);
+    /* defaultdict(list) is a constructor — emits lsp_constructor edge */
+    int idx = find_resolved(r, "use", "defaultdict");
+    ASSERT_GTE(idx, 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_stdlib_pathlib_path_method) {
+    CBMFileResult *r = extract_py(
+        "from pathlib import Path\n"
+        "def use(p: Path):\n"
+        "    return p.exists()\n");
+    ASSERT_NOT_NULL(r);
+    int idx = find_resolved(r, "use", "exists");
+    ASSERT_GTE(idx, 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_stdlib_logging_getlogger) {
+    CBMFileResult *r = extract_py(
+        "import logging\n"
+        "def use():\n"
+        "    return logging.getLogger('app')\n");
+    ASSERT_NOT_NULL(r);
+    int idx = find_resolved(r, "use", "getLogger");
+    ASSERT_GTE(idx, 0);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(py_lsp) {
@@ -706,4 +763,9 @@ SUITE(py_lsp) {
     RUN_TEST(pylsp_crossfile_method_dispatch);
     RUN_TEST(pylsp_crossfile_inheritance);
     RUN_TEST(pylsp_batch_two_files);
+    /* Phase 10 — stdlib resolution */
+    RUN_TEST(pylsp_stdlib_os_getcwd);
+    RUN_TEST(pylsp_stdlib_collections_defaultdict);
+    RUN_TEST(pylsp_stdlib_pathlib_path_method);
+    RUN_TEST(pylsp_stdlib_logging_getlogger);
 }

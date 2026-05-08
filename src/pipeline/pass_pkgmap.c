@@ -912,6 +912,21 @@ char *cbm_pipeline_resolve_module(const cbm_pipeline_ctx_t *ctx, const char *sou
         return qn;
     }
 
+    /* 1b. Try build-tool path aliases (tsconfig/jsconfig paths today;
+     *     other loaders can register here later). Independent of pkgmap. */
+    if (ctx->path_aliases && source_rel) {
+        const cbm_path_alias_map_t *amap =
+            cbm_path_alias_find_for_file(ctx->path_aliases, source_rel);
+        if (amap) {
+            char *aliased = cbm_path_alias_resolve(amap, module_path);
+            if (aliased) {
+                char *qn = cbm_pipeline_fqn_module(ctx->project_name, aliased);
+                free(aliased);
+                return qn;
+            }
+        }
+    }
+
     /* 2. No pkgmap → fall through immediately */
     CBMHashTable *pkgmap = cbm_pipeline_get_pkgmap();
     if (!pkgmap) {

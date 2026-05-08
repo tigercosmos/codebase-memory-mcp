@@ -405,6 +405,9 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
     cbm_log_info("incremental.registry_seed", "symbols", itoa_buf(cbm_registry_size(registry)),
                  "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
 
+    cbm_path_alias_collection_t *path_aliases =
+        cbm_load_path_aliases(cbm_pipeline_repo_path(p));
+
     cbm_pipeline_ctx_t ctx = {
         .project_name = project,
         .repo_path = cbm_pipeline_repo_path(p),
@@ -412,6 +415,7 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
         .registry = registry,
         .cancelled = cbm_pipeline_cancelled_ptr(p),
         .mode = cbm_pipeline_get_mode(p),
+        .path_aliases = path_aliases,
     };
 
     for (int i = 0; i < ci; i++) {
@@ -429,6 +433,7 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
 
     free(changed_files);
     cbm_registry_free(registry);
+    cbm_path_alias_collection_free(path_aliases);
 
     /* Step 7: Dump to disk */
     dump_and_persist(existing, db_path, project, files, file_count, cbm_pipeline_repo_path(p));

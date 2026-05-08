@@ -9,6 +9,7 @@
 #define CBM_PIPELINE_INTERNAL_H
 
 #include "pipeline/pipeline.h"
+#include "pipeline/path_alias.h"
 #include "graph_buffer/graph_buffer.h"
 #include "discover/discover.h"
 #include "foundation/hash_table.h"
@@ -62,6 +63,11 @@ typedef struct {
      * and pass_calls/usages/semantic reuse cached results instead of re-extracting.
      * Indexed by file position in the files[] array. Owned by pipeline.c. */
     CBMFileResult **result_cache;
+
+    /* Build-tool path aliases (tsconfig/jsconfig today; webpack/vite-style
+     * configs are an easy follow-on). NULL when no usable configs were found.
+     * Owned by pipeline.c / pipeline_incremental.c. */
+    const cbm_path_alias_collection_t *path_aliases;
 } cbm_pipeline_ctx_t;
 
 /* Get the current pipeline's package map (NULL if none). */

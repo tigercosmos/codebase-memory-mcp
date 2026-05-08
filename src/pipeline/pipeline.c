@@ -820,6 +820,7 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
     CBM_PROF_START(t_pipeline_total);
     struct timespec t0;
     cbm_clock_gettime(CLOCK_MONOTONIC, &t0);
+    cbm_path_alias_collection_t *path_aliases = NULL;
 
     /* Load user-defined extension overrides (fail-open: NULL on error) */
     CBM_PROF_START(t_userconfig);
@@ -860,6 +861,10 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
     p->gbuf = cbm_gbuf_new(p->project_name, p->repo_path);
     p->registry = cbm_registry_new();
 
+    /* Phase 2b: Load build-tool path aliases (tsconfig/jsconfig today). NULL
+     * when no usable configs are found — non-TS projects pay nothing. */
+    path_aliases = cbm_load_path_aliases(p->repo_path);
+
     /* Build shared context for pass functions */
     cbm_pipeline_ctx_t ctx = {
         .project_name = p->project_name,
@@ -868,6 +873,7 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
         .registry = p->registry,
         .cancelled = &p->cancelled,
         .mode = (int)p->mode,
+        .path_aliases = path_aliases,
     };
 
     rc = run_extraction_phase(p, &ctx, files, file_count);
@@ -893,6 +899,7 @@ cleanup:
     p->gbuf = NULL;
     cbm_registry_free(p->registry);
     p->registry = NULL;
+    cbm_path_alias_collection_free(path_aliases);
     /* Clear and free user extension config */
     cbm_set_user_lang_config(NULL);
     cbm_userconfig_free(p->userconfig);

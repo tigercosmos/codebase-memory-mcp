@@ -322,14 +322,73 @@ static const cbm_gbuf_node_t *calls_find_source(cbm_pipeline_ctx_t *ctx, const c
     return src;
 }
 
+/* Confidence floor below which LSP-resolved calls are ignored and the
+ * registry resolver is consulted instead. Locked at 0.6 per the v1
+ * Python-LSP integration plan; revisit when telemetry justifies a knob. */
+#define CBM_LSP_CONFIDENCE_FLOOR 0.6f
+
+/* Look up the highest-confidence LSP-resolved call entry whose caller QN
+ * matches the textual call's enclosing function and whose callee QN
+ * short-name matches the textual callee. Returns a pointer into
+ * result->resolved_calls or NULL if no qualifying entry exists. */
+static const CBMResolvedCall *find_lsp_resolution(const CBMResolvedCallArray *arr,
+                                                  const CBMCall *call) {
+    if (!arr || arr->count == 0 || !call) {
+        return NULL;
+    }
+    if (!call->enclosing_func_qn || !call->callee_name) {
+        return NULL;
+    }
+    const CBMResolvedCall *best = NULL;
+    for (int i = 0; i < arr->count; i++) {
+        const CBMResolvedCall *rc = &arr->items[i];
+        if (!rc->caller_qn || !rc->callee_qn) {
+            continue;
+        }
+        if (rc->confidence < CBM_LSP_CONFIDENCE_FLOOR) {
+            continue;
+        }
+        if (strcmp(rc->caller_qn, call->enclosing_func_qn) != 0) {
+            continue;
+        }
+        const char *short_name = strrchr(rc->callee_qn, '.');
+        short_name = short_name ? short_name + SKIP_ONE : rc->callee_qn;
+        if (strcmp(short_name, call->callee_name) != 0) {
+            continue;
+        }
+        if (!best || rc->confidence > best->confidence) {
+            best = rc;
+        }
+    }
+    return best;
+}
+
 /* Resolve one call and emit the appropriate edge. Returns 1 if resolved, 0 if not. */
-static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call, const char *rel,
+static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
+                               const CBMResolvedCallArray *lsp_calls, const char *rel,
                                const char *module_qn, const char **imp_keys, const char **imp_vals,
                                int imp_count) {
     const cbm_gbuf_node_t *source_node = calls_find_source(ctx, rel, call->enclosing_func_qn);
     if (!source_node) {
         return 0;
     }
+
+    /* LSP-resolved calls take precedence over registry-textual matching. */
+    const CBMResolvedCall *lsp = find_lsp_resolution(lsp_calls, call);
+    if (lsp) {
+        const cbm_gbuf_node_t *target_node = cbm_gbuf_find_by_qn(ctx->gbuf, lsp->callee_qn);
+        if (target_node && source_node->id != target_node->id) {
+            cbm_resolution_t res = {0};
+            res.qualified_name = lsp->callee_qn;
+            res.confidence = lsp->confidence;
+            res.strategy = lsp->strategy;
+            res.candidate_count = 1;
+            emit_classified_edge(ctx, call, source_node, target_node, &res, module_qn,
+                                 imp_keys, imp_vals, imp_count);
+            return SKIP_ONE;
+        }
+    }
+
     cbm_resolution_t res = cbm_registry_resolve(ctx->registry, call->callee_name, module_qn,
                                                 imp_keys, imp_vals, imp_count);
     if (!res.qualified_name || res.qualified_name[0] == '\0') {
@@ -408,7 +467,8 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
                 continue;
             }
             total_calls++;
-            if (resolve_single_call(ctx, call, rel, module_qn, imp_keys, imp_vals, imp_count)) {
+            if (resolve_single_call(ctx, call, &result->resolved_calls, rel, module_qn,
+                                    imp_keys, imp_vals, imp_count)) {
                 resolved++;
             } else {
                 unresolved++;

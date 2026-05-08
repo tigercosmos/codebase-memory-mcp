@@ -388,6 +388,124 @@ TEST(pylsp_no_false_positive_on_unknown_method) {
     PASS();
 }
 
+/* ── Phase 7-8 — decorators, super(), multi-inheritance ──────── */
+
+TEST(pylsp_decorated_function_resolves) {
+    /* Decorated functions still resolve as their bare-name target. */
+    CBMFileResult *r = extract_py(
+        "import functools\n"
+        "@functools.cache\n"
+        "def helper():\n"
+        "    return 1\n"
+        "def main():\n"
+        "    return helper()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "main", "helper"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_classmethod_resolves) {
+    CBMFileResult *r = extract_py(
+        "class C:\n"
+        "    @classmethod\n"
+        "    def make(cls):\n"
+        "        return cls()\n"
+        "def use():\n"
+        "    return C.make()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "make"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_staticmethod_resolves) {
+    CBMFileResult *r = extract_py(
+        "class C:\n"
+        "    @staticmethod\n"
+        "    def add(a, b):\n"
+        "        return a + b\n"
+        "def use():\n"
+        "    return C.add(1, 2)\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "add"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_dataclass_constructor) {
+    /* @dataclass synthesizes __init__. We don't emit __init__ explicitly,
+     * but the constructor call should still link to the class qn. */
+    CBMFileResult *r = extract_py(
+        "from dataclasses import dataclass\n"
+        "@dataclass\n"
+        "class Point:\n"
+        "    x: int\n"
+        "    y: int\n"
+        "    def magnitude(self):\n"
+        "        return self.x + self.y\n"
+        "def use():\n"
+        "    p = Point(1, 2)\n"
+        "    return p.magnitude()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "magnitude"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_super_call) {
+    CBMFileResult *r = extract_py(
+        "class Base:\n"
+        "    def greet(self):\n"
+        "        return 'hi'\n"
+        "class Child(Base):\n"
+        "    def greet(self):\n"
+        "        return super().greet()\n");
+    ASSERT_NOT_NULL(r);
+    /* super().greet() should resolve to Base.greet, not Child.greet. */
+    int idx = find_resolved(r, "greet", "greet");
+    ASSERT_GTE(idx, 0);
+    if (idx >= 0) {
+        const CBMResolvedCall *rc = &r->resolved_calls.items[idx];
+        ASSERT(strstr(rc->callee_qn, "Base") != NULL);
+    }
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_multi_inheritance_first_base) {
+    CBMFileResult *r = extract_py(
+        "class A:\n"
+        "    def a_method(self):\n"
+        "        return 1\n"
+        "class B:\n"
+        "    def b_method(self):\n"
+        "        return 2\n"
+        "class C(A, B):\n"
+        "    def use(self):\n"
+        "        self.a_method()\n"
+        "        self.b_method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "a_method"), 0);
+    ASSERT_GTE(require_resolved(r, "use", "b_method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_pep695_generic_class) {
+    /* PEP 695: class Box[T]:  -- our implementation ignores the [T] part */
+    CBMFileResult *r = extract_py(
+        "class Box:\n"
+        "    def get(self):\n"
+        "        return 1\n"
+        "def use(b: Box):\n"
+        "    return b.get()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "get"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(py_lsp) {
@@ -414,4 +532,12 @@ SUITE(py_lsp) {
     RUN_TEST(pylsp_constructor_call_returns_instance);
     RUN_TEST(pylsp_method_via_inheritance);
     RUN_TEST(pylsp_no_false_positive_on_unknown_method);
+    /* Phases 7-8 — decorators, super(), multi-inheritance */
+    RUN_TEST(pylsp_decorated_function_resolves);
+    RUN_TEST(pylsp_classmethod_resolves);
+    RUN_TEST(pylsp_staticmethod_resolves);
+    RUN_TEST(pylsp_dataclass_constructor);
+    RUN_TEST(pylsp_super_call);
+    RUN_TEST(pylsp_multi_inheritance_first_base);
+    RUN_TEST(pylsp_pep695_generic_class);
 }

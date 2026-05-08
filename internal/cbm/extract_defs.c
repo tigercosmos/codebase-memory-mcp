@@ -2123,16 +2123,28 @@ static void extract_class_methods(CBMExtractCtx *ctx, TSNode class_node, const c
             continue;
         }
 
-        if (!cbm_kind_in_set(child, spec->function_node_types)) {
+        // Python wraps @classmethod / @staticmethod / @property methods in
+        // a decorated_definition node. Peek through it to find the inner
+        // function_definition so we still emit a Method entry.
+        TSNode method_node = child;
+        if (strcmp(ts_node_type(child), "decorated_definition") == 0) {
+            TSNode def = ts_node_child_by_field_name(child, TS_FIELD("definition"));
+            if (ts_node_is_null(def) || !cbm_kind_in_set(def, spec->function_node_types)) {
+                continue;
+            }
+            method_node = def;
+        }
+
+        if (!cbm_kind_in_set(method_node, spec->function_node_types)) {
             continue;
         }
 
-        TSNode name_node = resolve_method_name(child, ctx->language);
+        TSNode name_node = resolve_method_name(method_node, ctx->language);
         if (ts_node_is_null(name_node)) {
             continue;
         }
 
-        push_method_def(ctx, child, class_qn, spec, name_node);
+        push_method_def(ctx, method_node, class_qn, spec, name_node);
     }
 }
 

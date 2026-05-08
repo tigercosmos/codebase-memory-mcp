@@ -440,9 +440,38 @@ static void py_emit_call_for(PyLSPContext* ctx, TSNode call_node) {
         TSNode obj = ts_node_child_by_field_name(fn, "object", 6);
         TSNode attr = ts_node_child_by_field_name(fn, "attribute", 9);
         if (ts_node_is_null(obj) || ts_node_is_null(attr)) return;
-        const CBMType* obj_type = py_eval_expr_type(ctx, obj);
         char* attr_name = py_node_text(ctx, attr);
-        if (!attr_name || !obj_type) return;
+        if (!attr_name) return;
+
+        // super().method() — Python 3 super() returns a proxy bound to the
+        // enclosing class's MRO. Resolve attr against the first base class
+        // of the enclosing class (single-inheritance practical case).
+        if (strcmp(ts_node_type(obj), "call") == 0) {
+            TSNode super_fn = ts_node_child_by_field_name(obj, "function", 8);
+            if (!ts_node_is_null(super_fn) &&
+                strcmp(ts_node_type(super_fn), "identifier") == 0) {
+                char* super_name = py_node_text(ctx, super_fn);
+                if (super_name && strcmp(super_name, "super") == 0 &&
+                    ctx->enclosing_class_qn) {
+                    const CBMRegisteredType* enclosing =
+                        cbm_registry_lookup_type(ctx->registry, ctx->enclosing_class_qn);
+                    if (enclosing && enclosing->embedded_types) {
+                        for (int i = 0; enclosing->embedded_types[i]; i++) {
+                            const CBMRegisteredFunc* f = py_lookup_attribute(ctx,
+                                enclosing->embedded_types[i], attr_name);
+                            if (f) {
+                                py_emit_resolved_call(ctx, f->qualified_name,
+                                    "lsp_super", 0.88f);
+                                return;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        const CBMType* obj_type = py_eval_expr_type(ctx, obj);
+        if (!obj_type) return;
 
         if (obj_type->kind == CBM_TYPE_MODULE) {
             const char* mod = obj_type->data.module.module_qn;

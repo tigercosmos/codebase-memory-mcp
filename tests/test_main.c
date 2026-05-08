@@ -41,6 +41,7 @@ extern void suite_artifact(void);
 extern void suite_sqlite_writer(void);
 extern void suite_go_lsp(void);
 extern void suite_c_lsp(void);
+extern void suite_php_lsp(void);
 extern void suite_store_arch(void);
 extern void suite_store_bulk(void);
 extern void suite_traces(void);
@@ -114,6 +115,7 @@ int main(void) {
     /* LSP resolvers */
     RUN_SUITE(go_lsp);
     RUN_SUITE(c_lsp);
+    RUN_SUITE(php_lsp);
 
     /* Architecture + ADR + Louvain */
     RUN_SUITE(store_arch);

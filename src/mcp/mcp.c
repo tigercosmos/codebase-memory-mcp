@@ -166,9 +166,9 @@ void cbm_jsonrpc_request_free(cbm_jsonrpc_request_t *r) {
     if (!r) {
         return;
     }
-    free((void *)r->jsonrpc);
-    free((void *)r->method);
-    free((void *)r->params_raw);
+    safe_str_free(&r->jsonrpc);
+    safe_str_free(&r->method);
+    safe_str_free(&r->params_raw);
     memset(r, 0, sizeof(*r));
 }
 
@@ -876,9 +876,9 @@ static void build_project_json_entry(yyjson_mut_doc *doc, yyjson_mut_val *arr, c
             if (proj.root_path) {
                 snprintf(root_path_buf, sizeof(root_path_buf), "%s", proj.root_path);
             }
-            free((void *)proj.name);
-            free((void *)proj.indexed_at);
-            free((void *)proj.root_path);
+            safe_str_free(&proj.name);
+            safe_str_free(&proj.indexed_at);
+            safe_str_free(&proj.root_path);
         }
         cbm_store_close(pstore);
     }
@@ -2018,12 +2018,12 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
 /* ── Helper: free heap fields of a stack-allocated node ────────── */
 
 static void free_node_contents(cbm_node_t *n) {
-    free((void *)n->project);
-    free((void *)n->label);
-    free((void *)n->name);
-    free((void *)n->qualified_name);
-    free((void *)n->file_path);
-    free((void *)n->properties_json);
+    safe_str_free(&n->project);
+    safe_str_free(&n->label);
+    safe_str_free(&n->name);
+    safe_str_free(&n->qualified_name);
+    safe_str_free(&n->file_path);
+    safe_str_free(&n->properties_json);
     memset(n, 0, sizeof(*n));
 }
 
@@ -2083,9 +2083,9 @@ static char *get_project_root(cbm_mcp_server_t *srv, const char *project) {
         return NULL;
     }
     char *root = heap_strdup(proj.root_path);
-    free((void *)proj.name);
-    free((void *)proj.indexed_at);
-    free((void *)proj.root_path);
+    safe_str_free(&proj.name);
+    safe_str_free(&proj.indexed_at);
+    safe_str_free(&proj.root_path);
     return root;
 }
 
@@ -2928,10 +2928,7 @@ static grep_match_t *collect_grep_matches(FILE *fp, const char *root_path, size_
             continue;
         }
 
-        if (gm_count >= gm_cap) {
-            gm_cap *= PAIR_LEN;
-            gm = safe_realloc(gm, gm_cap * sizeof(grep_match_t));
-        }
+        safe_grow(gm, gm_count, gm_cap, PAIR_LEN);
         snprintf(gm[gm_count].file, sizeof(gm[0].file), "%s", file);
         gm[gm_count].line = (int)strtol(colon1 + SKIP_ONE, NULL, CBM_DECIMAL_BASE);
         snprintf(gm[gm_count].content, sizeof(gm[0].content), "%s", colon2 + SKIP_ONE);
@@ -3010,12 +3007,12 @@ static void classify_grep_hit(grep_match_t *hit, cbm_node_t *file_nodes, int fil
 /* Free a file_nodes array returned from cbm_store_find_nodes_by_file. */
 static void free_file_nodes(cbm_node_t *nodes, int count) {
     for (int j = 0; j < count; j++) {
-        free((void *)nodes[j].project);
-        free((void *)nodes[j].label);
-        free((void *)nodes[j].name);
-        free((void *)nodes[j].qualified_name);
-        free((void *)nodes[j].file_path);
-        free((void *)nodes[j].properties_json);
+        safe_str_free(&nodes[j].project);
+        safe_str_free(&nodes[j].label);
+        safe_str_free(&nodes[j].name);
+        safe_str_free(&nodes[j].qualified_name);
+        safe_str_free(&nodes[j].file_path);
+        safe_str_free(&nodes[j].properties_json);
     }
     free(nodes);
 }

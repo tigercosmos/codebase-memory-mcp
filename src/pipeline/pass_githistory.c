@@ -285,7 +285,7 @@ static int parse_git_log(const char *repo_path, commit_t **out, int *out_count) 
 /* Callback to free hash table entries. */
 static void free_counter(const char *key, void *val, void *ud) {
     (void)ud;
-    free((void *)key);
+    safe_str_free(&key);
     free(val);
 }
 

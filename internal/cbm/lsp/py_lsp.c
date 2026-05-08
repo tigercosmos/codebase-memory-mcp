@@ -1,16 +1,14 @@
 /*
  * py_lsp.c — Python type-aware call resolution.
  *
- * Phase 2 scaffold: PyLSPContext, single-file entry point, cross-file +
- * batch entry points (no-op shells). Subsequent phases fill in:
- *   Phase 3 — imports
- *   Phase 4 — scope binding
- *   Phase 5 — expression typing
- *   Phase 6 — attribute resolution + method dispatch
- *   Phase 7 — decorators
- *   Phase 8 — class hierarchy + generics
- *   Phase 9 — cross-file resolution + batch
- *   Phase 10 — cbm_python_stdlib_register
+ * Implements the Python LSP-style binder + type evaluator + call resolver.
+ * Mirrors go_lsp.c / c_lsp.c:
+ *   - py_lsp_bind_imports     (Phase 3) — imports → root scope
+ *   - py_eval_expr_type       (Phase 5) — single-expression type
+ *   - py_process_statement    (Phase 4) — assignment / for / with binding
+ *   - py_lookup_attribute     (Phase 6) — attribute walk with MRO
+ *   - py_resolve_calls_in     (Phase 4-6) — recursive AST walker emitting
+ *                                          resolved_calls entries
  */
 #include "py_lsp.h"
 #include "../cbm.h"
@@ -18,6 +16,15 @@
 #include "tree_sitter/api.h"
 #include <stdlib.h>
 #include <string.h>
+
+// Forward decls
+static void py_resolve_calls_in(PyLSPContext* ctx, TSNode node);
+static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node);
+static void py_process_statement(PyLSPContext* ctx, TSNode node);
+static const CBMRegisteredFunc* py_lookup_attribute(PyLSPContext* ctx,
+    const char* type_qn, const char* member_name);
+static void py_emit_resolved_call(PyLSPContext* ctx, const char* callee_qn,
+    const char* strategy, float confidence);
 
 void py_lsp_init(PyLSPContext* ctx, CBMArena* arena, const char* source, int source_len,
     const CBMTypeRegistry* registry, const char* module_qn, CBMResolvedCallArray* out) {
@@ -105,11 +112,700 @@ const CBMType* py_lsp_lookup_in_scope(const PyLSPContext* ctx, const char* name)
     return cbm_scope_lookup(ctx->current_scope, name);
 }
 
+/* ── helpers: text + emit ─────────────────────────────────────── */
+
+static char* py_node_text(PyLSPContext* ctx, TSNode node) {
+    if (!ctx || ts_node_is_null(node)) return NULL;
+    uint32_t start = ts_node_start_byte(node);
+    uint32_t end = ts_node_end_byte(node);
+    if (end <= start || (int)end > ctx->source_len) return NULL;
+    size_t len = (size_t)(end - start);
+    char* out = (char*)cbm_arena_alloc(ctx->arena, len + 1);
+    if (!out) return NULL;
+    memcpy(out, ctx->source + start, len);
+    out[len] = '\0';
+    return out;
+}
+
+static void py_emit_resolved_call(PyLSPContext* ctx, const char* callee_qn,
+    const char* strategy, float confidence) {
+    if (!ctx || !ctx->resolved_calls || !callee_qn || !ctx->enclosing_func_qn) return;
+    CBMResolvedCall rc;
+    memset(&rc, 0, sizeof(rc));
+    rc.caller_qn = ctx->enclosing_func_qn;
+    rc.callee_qn = cbm_arena_strdup(ctx->arena, callee_qn);
+    rc.strategy = strategy;
+    rc.confidence = confidence;
+    cbm_resolvedcall_push(ctx->resolved_calls, ctx->arena, rc);
+}
+
+/* ── helpers: registry-driven attribute lookup with depth cap ──── */
+
+static const CBMRegisteredFunc* py_lookup_attribute_depth(PyLSPContext* ctx,
+    const char* type_qn, const char* member_name, int depth) {
+    if (!ctx || !type_qn || !member_name) return NULL;
+    if (depth > CBM_LSP_MAX_LOOKUP_DEPTH) return NULL;
+
+    const CBMRegisteredFunc* f = cbm_registry_lookup_method(ctx->registry, type_qn, member_name);
+    if (f) return f;
+
+    const CBMRegisteredType* rt = cbm_registry_lookup_type(ctx->registry, type_qn);
+    if (rt) {
+        if (rt->alias_of) {
+            f = py_lookup_attribute_depth(ctx, rt->alias_of, member_name, depth + 1);
+            if (f) return f;
+        }
+        if (rt->embedded_types) {
+            for (int i = 0; rt->embedded_types[i]; i++) {
+                f = py_lookup_attribute_depth(ctx, rt->embedded_types[i], member_name, depth + 1);
+                if (f) return f;
+            }
+        }
+    }
+    return NULL;
+}
+
+static const CBMRegisteredFunc* py_lookup_attribute(PyLSPContext* ctx,
+    const char* type_qn, const char* member_name) {
+    return py_lookup_attribute_depth(ctx, type_qn, member_name, 0);
+}
+
+/* ── expression typing ────────────────────────────────────────── */
+
+/* Map a tree-sitter Python literal node to a BUILTIN type. Returns NULL if
+ * the node isn't a simple literal. */
+static const CBMType* py_literal_type(PyLSPContext* ctx, TSNode node) {
+    const char* k = ts_node_type(node);
+    if (strcmp(k, "integer") == 0) return cbm_type_builtin(ctx->arena, "int");
+    if (strcmp(k, "float") == 0) return cbm_type_builtin(ctx->arena, "float");
+    if (strcmp(k, "string") == 0) return cbm_type_builtin(ctx->arena, "str");
+    if (strcmp(k, "concatenated_string") == 0) return cbm_type_builtin(ctx->arena, "str");
+    if (strcmp(k, "true") == 0 || strcmp(k, "false") == 0)
+        return cbm_type_builtin(ctx->arena, "bool");
+    if (strcmp(k, "none") == 0) return cbm_type_builtin(ctx->arena, "None");
+    if (strcmp(k, "list") == 0) return cbm_type_builtin(ctx->arena, "list");
+    if (strcmp(k, "dictionary") == 0) return cbm_type_builtin(ctx->arena, "dict");
+    if (strcmp(k, "set") == 0) return cbm_type_builtin(ctx->arena, "set");
+    if (strcmp(k, "tuple") == 0) return cbm_type_builtin(ctx->arena, "tuple");
+    if (strcmp(k, "list_comprehension") == 0) return cbm_type_builtin(ctx->arena, "list");
+    if (strcmp(k, "dictionary_comprehension") == 0) return cbm_type_builtin(ctx->arena, "dict");
+    if (strcmp(k, "set_comprehension") == 0) return cbm_type_builtin(ctx->arena, "set");
+    if (strcmp(k, "generator_expression") == 0) return cbm_type_builtin(ctx->arena, "generator");
+    return NULL;
+}
+
+/* If `func_qn` is a registered function, return its return type. */
+static const CBMType* py_func_return_type(PyLSPContext* ctx, const char* func_qn) {
+    if (!ctx || !func_qn) return cbm_type_unknown();
+    const CBMRegisteredFunc* f = cbm_registry_lookup_func(ctx->registry, func_qn);
+    if (!f || !f->signature) return cbm_type_unknown();
+    if (f->signature->kind != CBM_TYPE_FUNC) return cbm_type_unknown();
+    const CBMType** rets = f->signature->data.func.return_types;
+    if (!rets || !rets[0]) return cbm_type_unknown();
+    if (!rets[1]) return rets[0];
+    int count = 0;
+    while (rets[count]) count++;
+    return cbm_type_tuple(ctx->arena, rets, count);
+}
+
+static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node) {
+    if (!ctx || ts_node_is_null(node)) return cbm_type_unknown();
+
+    const CBMType* lit = py_literal_type(ctx, node);
+    if (lit) return lit;
+
+    const char* k = ts_node_type(node);
+
+    if (strcmp(k, "identifier") == 0) {
+        char* name = py_node_text(ctx, node);
+        if (!name) return cbm_type_unknown();
+        const CBMType* t = cbm_scope_lookup(ctx->current_scope, name);
+        if (!cbm_type_is_unknown(t)) return t;
+        // Builtin globals: True / False / None at top level.
+        if (strcmp(name, "True") == 0 || strcmp(name, "False") == 0)
+            return cbm_type_builtin(ctx->arena, "bool");
+        if (strcmp(name, "None") == 0) return cbm_type_builtin(ctx->arena, "None");
+        // Module/package-local function — caller QN inferred from registry.
+        const CBMRegisteredFunc* f = cbm_registry_lookup_symbol(ctx->registry,
+            ctx->module_qn, name);
+        if (f) return py_func_return_type(ctx, f->qualified_name);
+        return cbm_type_unknown();
+    }
+
+    if (strcmp(k, "attribute") == 0) {
+        TSNode obj = ts_node_child_by_field_name(node, "object", 6);
+        TSNode attr = ts_node_child_by_field_name(node, "attribute", 9);
+        if (ts_node_is_null(obj) || ts_node_is_null(attr)) return cbm_type_unknown();
+        const CBMType* obj_type = py_eval_expr_type(ctx, obj);
+        char* attr_name = py_node_text(ctx, attr);
+        if (!attr_name || !obj_type) return cbm_type_unknown();
+
+        if (obj_type->kind == CBM_TYPE_MODULE) {
+            // module.attr — return type of the registered symbol if known.
+            const char* mod = obj_type->data.module.module_qn;
+            const CBMRegisteredFunc* f = cbm_registry_lookup_symbol(ctx->registry, mod, attr_name);
+            if (f) return py_func_return_type(ctx, f->qualified_name);
+            // Could also be a class — return NAMED("mod.attr")
+            const char* qn = cbm_arena_sprintf(ctx->arena, "%s.%s", mod, attr_name);
+            const CBMRegisteredType* rt = cbm_registry_lookup_type(ctx->registry, qn);
+            if (rt) return cbm_type_named(ctx->arena, qn);
+            return cbm_type_unknown();
+        }
+        if (obj_type->kind == CBM_TYPE_NAMED) {
+            const CBMRegisteredFunc* f = py_lookup_attribute(ctx,
+                obj_type->data.named.qualified_name, attr_name);
+            if (f) return py_func_return_type(ctx, f->qualified_name);
+        }
+        return cbm_type_unknown();
+    }
+
+    if (strcmp(k, "call") == 0) {
+        TSNode fn = ts_node_child_by_field_name(node, "function", 8);
+        if (ts_node_is_null(fn)) return cbm_type_unknown();
+        const char* fk = ts_node_type(fn);
+
+        if (strcmp(fk, "identifier") == 0) {
+            char* fname = py_node_text(ctx, fn);
+            if (!fname) return cbm_type_unknown();
+            // Constructor call: ClassName() returns NAMED(ClassName).
+            const CBMType* in_scope = cbm_scope_lookup(ctx->current_scope, fname);
+            if (!cbm_type_is_unknown(in_scope) && in_scope->kind == CBM_TYPE_NAMED) {
+                const CBMRegisteredType* rt = cbm_registry_lookup_type(ctx->registry,
+                    in_scope->data.named.qualified_name);
+                if (rt) return in_scope;  // NAMED(ClassName) = instance type
+            }
+            // Module-local function call.
+            const CBMRegisteredFunc* f = cbm_registry_lookup_symbol(ctx->registry,
+                ctx->module_qn, fname);
+            if (f) return py_func_return_type(ctx, f->qualified_name);
+        }
+
+        if (strcmp(fk, "attribute") == 0) {
+            TSNode obj = ts_node_child_by_field_name(fn, "object", 6);
+            TSNode attr = ts_node_child_by_field_name(fn, "attribute", 9);
+            if (ts_node_is_null(obj) || ts_node_is_null(attr)) return cbm_type_unknown();
+            const CBMType* obj_type = py_eval_expr_type(ctx, obj);
+            char* attr_name = py_node_text(ctx, attr);
+            if (!attr_name || !obj_type) return cbm_type_unknown();
+
+            if (obj_type->kind == CBM_TYPE_MODULE) {
+                const char* mod = obj_type->data.module.module_qn;
+                const CBMRegisteredFunc* f = cbm_registry_lookup_symbol(ctx->registry,
+                    mod, attr_name);
+                if (f) return py_func_return_type(ctx, f->qualified_name);
+            }
+            if (obj_type->kind == CBM_TYPE_NAMED) {
+                const CBMRegisteredFunc* f = py_lookup_attribute(ctx,
+                    obj_type->data.named.qualified_name, attr_name);
+                if (f) return py_func_return_type(ctx, f->qualified_name);
+            }
+        }
+        return cbm_type_unknown();
+    }
+
+    if (strcmp(k, "binary_operator") == 0) {
+        TSNode left = ts_node_child_by_field_name(node, "left", 4);
+        const CBMType* lt = py_eval_expr_type(ctx, left);
+        return lt ? lt : cbm_type_unknown();
+    }
+
+    if (strcmp(k, "comparison_operator") == 0 ||
+        strcmp(k, "boolean_operator") == 0 ||
+        strcmp(k, "not_operator") == 0) {
+        return cbm_type_builtin(ctx->arena, "bool");
+    }
+
+    if (strcmp(k, "conditional_expression") == 0) {
+        // a if cond else b — return union of a, b types
+        uint32_t nc = ts_node_named_child_count(node);
+        if (nc >= 2) {
+            const CBMType* a = py_eval_expr_type(ctx, ts_node_named_child(node, 0));
+            const CBMType* b = py_eval_expr_type(ctx, ts_node_named_child(node, 2));
+            const CBMType* members[2] = {a, b};
+            return cbm_type_union(ctx->arena, members, 2);
+        }
+    }
+
+    if (strcmp(k, "parenthesized_expression") == 0) {
+        if (ts_node_named_child_count(node) > 0) {
+            return py_eval_expr_type(ctx, ts_node_named_child(node, 0));
+        }
+    }
+
+    return cbm_type_unknown();
+}
+
+/* ── statement processing: bind from assignments, for-loops, with-as ──── */
+
+static void py_process_statement(PyLSPContext* ctx, TSNode node) {
+    if (!ctx || ts_node_is_null(node)) return;
+    const char* k = ts_node_type(node);
+
+    if (strcmp(k, "assignment") == 0) {
+        TSNode left = ts_node_child_by_field_name(node, "left", 4);
+        TSNode right = ts_node_child_by_field_name(node, "right", 5);
+        TSNode ann = ts_node_child_by_field_name(node, "type", 4);
+
+        const CBMType* rhs_type = ts_node_is_null(right)
+            ? cbm_type_unknown()
+            : py_eval_expr_type(ctx, right);
+
+        // Annotated assignment: x: T = expr — annotation wins.
+        if (!ts_node_is_null(ann)) {
+            char* ann_text = py_node_text(ctx, ann);
+            if (ann_text && ann_text[0]) {
+                const CBMType* ann_t = cbm_scope_lookup(ctx->current_scope, ann_text);
+                if (cbm_type_is_unknown(ann_t)) {
+                    ann_t = cbm_type_named(ctx->arena, ann_text);
+                }
+                rhs_type = ann_t;
+            }
+        }
+
+        if (ts_node_is_null(left)) return;
+        const char* lk = ts_node_type(left);
+        if (strcmp(lk, "identifier") == 0) {
+            char* name = py_node_text(ctx, left);
+            if (name) cbm_scope_bind(ctx->current_scope, name, rhs_type);
+        } else if (strcmp(lk, "attribute") == 0) {
+            // self.x = expr — record on the enclosing class via a synthetic
+            // type entry. For now we just don't bind locally.
+        }
+        return;
+    }
+
+    if (strcmp(k, "for_statement") == 0) {
+        TSNode left = ts_node_child_by_field_name(node, "left", 4);
+        // Iterable type is the right-hand side; we use UNKNOWN since
+        // generic container element typing is Phase 8+ work.
+        if (!ts_node_is_null(left) && strcmp(ts_node_type(left), "identifier") == 0) {
+            char* name = py_node_text(ctx, left);
+            if (name) cbm_scope_bind(ctx->current_scope, name, cbm_type_unknown());
+        }
+        return;
+    }
+
+    if (strcmp(k, "with_statement") == 0) {
+        // with X as y:  bind y to type-of(X.__enter__())
+        // For now bind y to UNKNOWN — Phase 6+ refines.
+        uint32_t nc = ts_node_named_child_count(node);
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode child = ts_node_named_child(node, i);
+            if (strcmp(ts_node_type(child), "with_clause") != 0) continue;
+            uint32_t cn = ts_node_named_child_count(child);
+            for (uint32_t j = 0; j < cn; j++) {
+                TSNode item = ts_node_named_child(child, j);
+                if (strcmp(ts_node_type(item), "with_item") != 0) continue;
+                TSNode alias = ts_node_child_by_field_name(item, "alias", 5);
+                if (!ts_node_is_null(alias) && strcmp(ts_node_type(alias), "identifier") == 0) {
+                    char* name = py_node_text(ctx, alias);
+                    if (name) cbm_scope_bind(ctx->current_scope, name, cbm_type_unknown());
+                }
+            }
+        }
+        return;
+    }
+}
+
+/* ── Recursive walker: process statements + emit resolved_calls ── */
+
+static void py_emit_call_for(PyLSPContext* ctx, TSNode call_node) {
+    TSNode fn = ts_node_child_by_field_name(call_node, "function", 8);
+    if (ts_node_is_null(fn)) return;
+    const char* fk = ts_node_type(fn);
+
+    if (strcmp(fk, "identifier") == 0) {
+        char* fname = py_node_text(ctx, fn);
+        if (!fname) return;
+        // Constructor call (ClassName())
+        const CBMType* in_scope = cbm_scope_lookup(ctx->current_scope, fname);
+        if (!cbm_type_is_unknown(in_scope) && in_scope->kind == CBM_TYPE_NAMED) {
+            const char* qn = in_scope->data.named.qualified_name;
+            // Treat the call as targeting __init__; emit edge to the class QN.
+            py_emit_resolved_call(ctx, qn, "lsp_constructor", 0.85f);
+            return;
+        }
+        // Module-local function
+        const CBMRegisteredFunc* f = cbm_registry_lookup_symbol(ctx->registry,
+            ctx->module_qn, fname);
+        if (f) {
+            py_emit_resolved_call(ctx, f->qualified_name, "lsp_direct", 0.95f);
+            return;
+        }
+        // Builtin / unknown — skip silently (low confidence)
+        return;
+    }
+
+    if (strcmp(fk, "attribute") == 0) {
+        TSNode obj = ts_node_child_by_field_name(fn, "object", 6);
+        TSNode attr = ts_node_child_by_field_name(fn, "attribute", 9);
+        if (ts_node_is_null(obj) || ts_node_is_null(attr)) return;
+        const CBMType* obj_type = py_eval_expr_type(ctx, obj);
+        char* attr_name = py_node_text(ctx, attr);
+        if (!attr_name || !obj_type) return;
+
+        if (obj_type->kind == CBM_TYPE_MODULE) {
+            const char* mod = obj_type->data.module.module_qn;
+            const CBMRegisteredFunc* f = cbm_registry_lookup_symbol(ctx->registry,
+                mod, attr_name);
+            if (f) {
+                py_emit_resolved_call(ctx, f->qualified_name, "lsp_module_attr", 0.92f);
+                return;
+            }
+            // Best-effort: emit "module.attr" QN — Phase 9 cross-file may fix up.
+            const char* qn = cbm_arena_sprintf(ctx->arena, "%s.%s", mod, attr_name);
+            py_emit_resolved_call(ctx, qn, "lsp_module_attr_unresolved", 0.55f);
+            return;
+        }
+        if (obj_type->kind == CBM_TYPE_NAMED) {
+            const CBMRegisteredFunc* f = py_lookup_attribute(ctx,
+                obj_type->data.named.qualified_name, attr_name);
+            if (f) {
+                py_emit_resolved_call(ctx, f->qualified_name, "lsp_method", 0.9f);
+                return;
+            }
+        }
+        return;
+    }
+}
+
+static void py_resolve_calls_in(PyLSPContext* ctx, TSNode node) {
+    if (!ctx || ts_node_is_null(node)) return;
+    const char* k = ts_node_type(node);
+
+    // Statement-level binding effects.
+    py_process_statement(ctx, node);
+
+    // Emit call entry if applicable.
+    if (strcmp(k, "call") == 0) {
+        py_emit_call_for(ctx, node);
+    }
+
+    // Recurse: children. We don't push scope for control-flow blocks
+    // here (Python scoping is function-level apart from comprehension /
+    // lambda / class), but we do for nested function / class / lambda.
+    if (strcmp(k, "function_definition") == 0 ||
+        strcmp(k, "class_definition") == 0 ||
+        strcmp(k, "lambda") == 0) {
+        // These are processed by the top-level pass; skip recursion to
+        // avoid double-walking their bodies.
+        return;
+    }
+
+    uint32_t nc = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < nc; i++) {
+        py_resolve_calls_in(ctx, ts_node_named_child(node, i));
+    }
+}
+
+/* ── function / class processing ───────────────────────────────── */
+
+/* Resolve a type-annotation text into a CBMType. Tries: scope lookup
+ * (for imports / type aliases), module-qualified lookup in the registry,
+ * then falls back to a bare NAMED. */
+static const CBMType* py_resolve_annotation(PyLSPContext* ctx, const char* ann) {
+    if (!ann || !ann[0]) return cbm_type_unknown();
+    const CBMType* t = cbm_scope_lookup(ctx->current_scope, ann);
+    if (!cbm_type_is_unknown(t)) return t;
+    if (ctx->module_qn) {
+        const char* qn = cbm_arena_sprintf(ctx->arena, "%s.%s", ctx->module_qn, ann);
+        const CBMRegisteredType* rt = cbm_registry_lookup_type(ctx->registry, qn);
+        if (rt) return cbm_type_named(ctx->arena, qn);
+    }
+    return cbm_type_named(ctx->arena, ann);
+}
+
+static void py_bind_parameters(PyLSPContext* ctx, TSNode params) {
+    if (ts_node_is_null(params)) return;
+    uint32_t nc = ts_node_named_child_count(params);
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode p = ts_node_named_child(params, i);
+        const char* pk = ts_node_type(p);
+
+        TSNode ident_node = {0};
+        TSNode type_node = {0};
+        if (strcmp(pk, "identifier") == 0) {
+            ident_node = p;
+        } else if (strcmp(pk, "typed_parameter") == 0 ||
+                   strcmp(pk, "typed_default_parameter") == 0) {
+            if (ts_node_named_child_count(p) > 0)
+                ident_node = ts_node_named_child(p, 0);
+            type_node = ts_node_child_by_field_name(p, "type", 4);
+        } else if (strcmp(pk, "default_parameter") == 0) {
+            ident_node = ts_node_child_by_field_name(p, "name", 4);
+        } else if (strcmp(pk, "list_splat_pattern") == 0 ||
+                   strcmp(pk, "dictionary_splat_pattern") == 0) {
+            if (ts_node_named_child_count(p) > 0)
+                ident_node = ts_node_named_child(p, 0);
+        }
+        if (ts_node_is_null(ident_node)) continue;
+
+        char* name = py_node_text(ctx, ident_node);
+        if (!name) continue;
+
+        const CBMType* t = cbm_type_unknown();
+        if (!ts_node_is_null(type_node)) {
+            char* ann = py_node_text(ctx, type_node);
+            t = py_resolve_annotation(ctx, ann);
+        }
+        cbm_scope_bind(ctx->current_scope, name, t);
+    }
+}
+
+static void py_process_function(PyLSPContext* ctx, TSNode func_node, const char* container_qn) {
+    TSNode name_node = ts_node_child_by_field_name(func_node, "name", 4);
+    if (ts_node_is_null(name_node)) return;
+    char* fname = py_node_text(ctx, name_node);
+    if (!fname || !fname[0]) return;
+
+    const char* prev_func = ctx->enclosing_func_qn;
+    const char* base_qn = container_qn ? container_qn : ctx->module_qn;
+    ctx->enclosing_func_qn = cbm_arena_sprintf(ctx->arena, "%s.%s", base_qn, fname);
+
+    CBMScope* saved = ctx->current_scope;
+    ctx->current_scope = cbm_scope_push(ctx->arena, ctx->current_scope);
+
+    TSNode params = ts_node_child_by_field_name(func_node, "parameters", 10);
+    py_bind_parameters(ctx, params);
+
+    // For methods, bind `self`/`cls` AFTER param walk so the receiver type
+    // wins over the unannotated `self` / `cls` parameter declaration.
+    if (ctx->enclosing_class_qn) {
+        cbm_scope_bind(ctx->current_scope, "self",
+            cbm_type_named(ctx->arena, ctx->enclosing_class_qn));
+        cbm_scope_bind(ctx->current_scope, "cls",
+            cbm_type_named(ctx->arena, ctx->enclosing_class_qn));
+    }
+
+    TSNode body = ts_node_child_by_field_name(func_node, "body", 4);
+    if (!ts_node_is_null(body)) {
+        py_resolve_calls_in(ctx, body);
+        // Also descend into nested function/class definitions in the body.
+        uint32_t bnc = ts_node_named_child_count(body);
+        for (uint32_t i = 0; i < bnc; i++) {
+            TSNode c = ts_node_named_child(body, i);
+            const char* ck = ts_node_type(c);
+            if (strcmp(ck, "function_definition") == 0) {
+                py_process_function(ctx, c, ctx->enclosing_func_qn);
+            } else if (strcmp(ck, "decorated_definition") == 0) {
+                TSNode def = ts_node_child_by_field_name(c, "definition", 10);
+                if (!ts_node_is_null(def) &&
+                    strcmp(ts_node_type(def), "function_definition") == 0) {
+                    py_process_function(ctx, def, ctx->enclosing_func_qn);
+                }
+            }
+        }
+    }
+
+    ctx->current_scope = saved;
+    ctx->enclosing_func_qn = prev_func;
+}
+
+static void py_process_class(PyLSPContext* ctx, TSNode class_node) {
+    TSNode name_node = ts_node_child_by_field_name(class_node, "name", 4);
+    if (ts_node_is_null(name_node)) return;
+    char* cname = py_node_text(ctx, name_node);
+    if (!cname || !cname[0]) return;
+
+    const char* prev_class = ctx->enclosing_class_qn;
+    ctx->enclosing_class_qn = cbm_arena_sprintf(ctx->arena, "%s.%s", ctx->module_qn, cname);
+
+    TSNode body = ts_node_child_by_field_name(class_node, "body", 4);
+    if (!ts_node_is_null(body)) {
+        uint32_t bnc = ts_node_named_child_count(body);
+        for (uint32_t i = 0; i < bnc; i++) {
+            TSNode c = ts_node_named_child(body, i);
+            const char* ck = ts_node_type(c);
+            if (strcmp(ck, "function_definition") == 0) {
+                py_process_function(ctx, c, ctx->enclosing_class_qn);
+            } else if (strcmp(ck, "decorated_definition") == 0) {
+                TSNode def = ts_node_child_by_field_name(c, "definition", 10);
+                if (!ts_node_is_null(def) &&
+                    strcmp(ts_node_type(def), "function_definition") == 0) {
+                    py_process_function(ctx, def, ctx->enclosing_class_qn);
+                }
+            } else if (strcmp(ck, "class_definition") == 0) {
+                py_process_class(ctx, c);  // nested class
+            }
+        }
+    }
+
+    ctx->enclosing_class_qn = prev_class;
+}
+
+/* Bind every Class / Type definition from the registry into the root scope
+ * as NAMED(qn). Lets bare references like `Foo()` and `c: Foo` resolve to
+ * the registered class type. */
+static void py_bind_module_classes(PyLSPContext* ctx) {
+    if (!ctx || !ctx->registry || !ctx->module_qn) return;
+    const CBMRegisteredType* types = ctx->registry->types;
+    int n = ctx->registry->type_count;
+    size_t prefix_len = strlen(ctx->module_qn);
+    for (int i = 0; i < n; i++) {
+        const char* qn = types[i].qualified_name;
+        const char* sname = types[i].short_name;
+        if (!qn || !sname) continue;
+        if (strncmp(qn, ctx->module_qn, prefix_len) != 0) continue;
+        if (qn[prefix_len] != '.') continue;
+        cbm_scope_bind(ctx->current_scope, sname, cbm_type_named(ctx->arena, qn));
+    }
+}
+
 void py_lsp_process_file(PyLSPContext* ctx, TSNode root) {
-    if (!ctx) return;
+    if (!ctx || ts_node_is_null(root)) return;
     py_lsp_bind_imports(ctx);
-    /* Phase 4+ walks the AST and binds locals + resolves calls. */
-    (void)root;
+    py_bind_module_classes(ctx);
+
+    uint32_t nc = ts_node_named_child_count(root);
+    // Pass 1: top-level assignments bind into module scope.
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode c = ts_node_named_child(root, i);
+        py_process_statement(ctx, c);
+    }
+    // Pass 2: top-level calls (rare) and nested definitions.
+    const char* prev_func = ctx->enclosing_func_qn;
+    ctx->enclosing_func_qn = cbm_arena_sprintf(ctx->arena, "%s.__module__", ctx->module_qn);
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode c = ts_node_named_child(root, i);
+        const char* ck = ts_node_type(c);
+        if (strcmp(ck, "function_definition") == 0) {
+            py_process_function(ctx, c, NULL);
+        } else if (strcmp(ck, "class_definition") == 0) {
+            py_process_class(ctx, c);
+        } else if (strcmp(ck, "decorated_definition") == 0) {
+            TSNode def = ts_node_child_by_field_name(c, "definition", 10);
+            if (ts_node_is_null(def)) continue;
+            const char* dk = ts_node_type(def);
+            if (strcmp(dk, "function_definition") == 0) {
+                py_process_function(ctx, def, NULL);
+            } else if (strcmp(dk, "class_definition") == 0) {
+                py_process_class(ctx, def);
+            }
+        } else if (strcmp(ck, "expression_statement") == 0) {
+            // Top-level call statements
+            py_resolve_calls_in(ctx, c);
+        }
+    }
+    ctx->enclosing_func_qn = prev_func;
+}
+
+/* Register one definition into the registry. Returns true if recognized. */
+static bool py_register_def(CBMArena* arena, CBMTypeRegistry* reg, CBMDefinition* d,
+    const char* module_qn) {
+    if (!d || !d->qualified_name || !d->name || !d->label) return false;
+
+    if (strcmp(d->label, "Class") == 0 || strcmp(d->label, "Type") == 0) {
+        CBMRegisteredType rt;
+        memset(&rt, 0, sizeof(rt));
+        rt.qualified_name = d->qualified_name;
+        rt.short_name = d->name;
+        rt.is_interface = false;
+        if (d->base_classes) {
+            // Python's extract_defs records the entire `(Base, Other)` argument
+            // list as a single base_classes[0] entry. Split commas and strip
+            // parens / whitespace / generic subscripts to recover usable QNs.
+            int cap = 8;
+            const char** embedded = (const char**)cbm_arena_alloc(arena,
+                (size_t)(cap + 1) * sizeof(const char*));
+            int n = 0;
+            for (int j = 0; d->base_classes[j]; j++) {
+                const char* raw = d->base_classes[j];
+                size_t raw_len = strlen(raw);
+                // Trim outer parens if present.
+                size_t lo = 0;
+                size_t hi = raw_len;
+                while (lo < hi && (raw[lo] == '(' || raw[lo] == ' ')) lo++;
+                while (hi > lo && (raw[hi - 1] == ')' || raw[hi - 1] == ' ')) hi--;
+                // Split on commas at depth 0 (ignore commas inside [], ()).
+                size_t start = lo;
+                int depth = 0;
+                for (size_t k = lo; k <= hi; k++) {
+                    char c = (k < hi) ? raw[k] : ',';
+                    if (c == '[' || c == '(') depth++;
+                    else if (c == ']' || c == ')') depth--;
+                    else if (c == ',' && depth == 0) {
+                        size_t s = start;
+                        size_t e = k;
+                        while (s < e && raw[s] == ' ') s++;
+                        while (e > s && raw[e - 1] == ' ') e--;
+                        // Strip generic subscript: "Foo[T]" -> "Foo"
+                        size_t lb = s;
+                        while (lb < e && raw[lb] != '[') lb++;
+                        size_t name_end = lb;
+                        // Skip keyword args like "metaclass=Meta" (contains '=')
+                        size_t eq = s;
+                        while (eq < name_end && raw[eq] != '=') eq++;
+                        if (eq >= name_end && name_end > s) {
+                            size_t blen = name_end - s;
+                            char* bname = (char*)cbm_arena_alloc(arena, blen + 1);
+                            if (bname) {
+                                memcpy(bname, raw + s, blen);
+                                bname[blen] = '\0';
+                                if (n >= cap) {
+                                    int new_cap = cap * 2;
+                                    const char** grown = (const char**)cbm_arena_alloc(arena,
+                                        (size_t)(new_cap + 1) * sizeof(const char*));
+                                    if (grown) {
+                                        for (int q = 0; q < n; q++) grown[q] = embedded[q];
+                                        embedded = grown;
+                                        cap = new_cap;
+                                    }
+                                }
+                                if (n < cap) {
+                                    embedded[n++] = strchr(bname, '.')
+                                        ? bname
+                                        : cbm_arena_sprintf(arena, "%s.%s", module_qn, bname);
+                                }
+                            }
+                        }
+                        start = k + 1;
+                    }
+                }
+            }
+            embedded[n] = NULL;
+            if (n > 0) rt.embedded_types = embedded;
+        }
+        cbm_registry_add_type(reg, rt);
+        return true;
+    }
+
+    if (strcmp(d->label, "Function") == 0 || strcmp(d->label, "Method") == 0) {
+        CBMRegisteredFunc rf;
+        memset(&rf, 0, sizeof(rf));
+        rf.qualified_name = d->qualified_name;
+        rf.short_name = d->name;
+
+        const CBMType** ret_types = NULL;
+        if (d->return_types && d->return_types[0]) {
+            int count = 0;
+            while (d->return_types[count]) count++;
+            ret_types = (const CBMType**)cbm_arena_alloc(arena,
+                (size_t)(count + 1) * sizeof(const CBMType*));
+            for (int j = 0; j < count; j++) {
+                ret_types[j] = cbm_type_named(arena, d->return_types[j]);
+            }
+            ret_types[count] = NULL;
+        } else if (d->return_type && d->return_type[0]) {
+            ret_types = (const CBMType**)cbm_arena_alloc(arena, 2 * sizeof(const CBMType*));
+            ret_types[0] = cbm_type_named(arena, d->return_type);
+            ret_types[1] = NULL;
+        }
+        rf.signature = cbm_type_func(arena, d->param_names, NULL, ret_types);
+
+        if (strcmp(d->label, "Method") == 0) {
+            // Receiver type: the enclosing class. Python def metadata may
+            // record the class name in `receiver` or via the QN itself.
+            const char* qn = d->qualified_name;
+            const char* last_dot = strrchr(qn, '.');
+            if (last_dot && last_dot != qn) {
+                size_t prefix_len = (size_t)(last_dot - qn);
+                rf.receiver_type = cbm_arena_strndup(arena, qn, prefix_len);
+            }
+        }
+        cbm_registry_add_func(reg, rf);
+        return true;
+    }
+    return false;
 }
 
 /* ── cbm_run_py_lsp: single-file entry point ──────────────────── */
@@ -121,17 +817,19 @@ void cbm_run_py_lsp(CBMArena* arena, CBMFileResult* result,
     CBMTypeRegistry reg;
     cbm_registry_init(&reg, arena);
 
-    // Phase 10 will register typeshed-generated stdlib here.
     cbm_python_stdlib_register(&reg, arena);
 
     const char* module_qn = result->module_qn;
 
-    // Phase 4 will register the file's own definitions into reg here.
+    // Register the file's own definitions so calls inside this file can
+    // resolve via the registry.
+    for (int i = 0; i < result->defs.count; i++) {
+        py_register_def(arena, &reg, &result->defs.items[i], module_qn);
+    }
 
     PyLSPContext ctx;
     py_lsp_init(&ctx, arena, source, source_len, &reg, module_qn, &result->resolved_calls);
 
-    // Wire imports from the unified extractor.
     for (int i = 0; i < result->imports.count; i++) {
         CBMImport* imp = &result->imports.items[i];
         if (imp->local_name && imp->module_path) {

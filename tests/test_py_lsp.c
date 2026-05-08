@@ -293,6 +293,101 @@ TEST(pylsp_import_multi_pass_through_extract_file) {
     PASS();
 }
 
+/* ── Phase 4-6 — direct calls + method dispatch ────────────────── */
+
+TEST(pylsp_direct_function_call) {
+    /* def helper(): return 1
+     * def main(): return helper() */
+    CBMFileResult *r = extract_py(
+        "def helper():\n"
+        "    return 1\n"
+        "def main():\n"
+        "    return helper()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "main", "helper"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_method_call_simple) {
+    /* class C:
+     *     def m(self): return 1
+     * def use(c):
+     *     c.m()  -- with annotation */
+    CBMFileResult *r = extract_py(
+        "class C:\n"
+        "    def m(self):\n"
+        "        return 1\n"
+        "def use(c: C):\n"
+        "    return c.m()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "m"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_method_via_self) {
+    CBMFileResult *r = extract_py(
+        "class C:\n"
+        "    def helper(self):\n"
+        "        return 1\n"
+        "    def caller(self):\n"
+        "        return self.helper()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "caller", "helper"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_constructor_call_returns_instance) {
+    /* class Foo: ...
+     * def use():
+     *   f = Foo()
+     *   f.method()  -- requires inferring f as Foo */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def use():\n"
+        "    f = Foo()\n"
+        "    return f.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_method_via_inheritance) {
+    CBMFileResult *r = extract_py(
+        "class Base:\n"
+        "    def shared(self):\n"
+        "        return 1\n"
+        "class Child(Base):\n"
+        "    def go(self):\n"
+        "        return self.shared()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "go", "shared"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_no_false_positive_on_unknown_method) {
+    /* Calling a method on an UNKNOWN type should NOT emit a high-confidence
+     * resolution. */
+    CBMFileResult *r = extract_py(
+        "def f(x):\n"
+        "    return x.something_unknown_42()\n");
+    ASSERT_NOT_NULL(r);
+    /* Should produce no high-confidence match for "something_unknown_42" */
+    int idx = find_resolved(r, "f", "something_unknown_42");
+    if (idx >= 0) {
+        const CBMResolvedCall *rc = &r->resolved_calls.items[idx];
+        ASSERT(rc->confidence < 0.6f);
+    }
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(py_lsp) {
@@ -312,4 +407,11 @@ SUITE(py_lsp) {
     RUN_TEST(pylsp_import_star_best_effort);
     RUN_TEST(pylsp_import_typing_only_still_binds);
     RUN_TEST(pylsp_import_multi_pass_through_extract_file);
+    /* Phases 4-6 — bindings + expression typing + method dispatch */
+    RUN_TEST(pylsp_direct_function_call);
+    RUN_TEST(pylsp_method_call_simple);
+    RUN_TEST(pylsp_method_via_self);
+    RUN_TEST(pylsp_constructor_call_returns_instance);
+    RUN_TEST(pylsp_method_via_inheritance);
+    RUN_TEST(pylsp_no_false_positive_on_unknown_method);
 }

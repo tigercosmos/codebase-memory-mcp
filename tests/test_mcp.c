@@ -393,6 +393,41 @@ TEST(tool_search_graph_basic) {
     PASS();
 }
 
+/* Forward declarations for helpers defined later in this file */
+static cbm_mcp_server_t *setup_snippet_server(char *tmp_dir, size_t tmp_sz);
+static void cleanup_snippet_dir(const char *tmp_dir);
+static char *extract_text_content(const char *mcp_result);
+
+TEST(tool_search_graph_includes_node_properties) {
+    /* search_graph results must surface each node's properties_json
+     * payload so callers don't have to round-trip through get_code_snippet
+     * just to read them. The setup_snippet_server inserts HandleRequest
+     * with a signature/return_type/is_exported property blob; this test
+     * pins that those keys reach the MCP response. */
+    char tmp[256];
+    cbm_mcp_server_t *srv = setup_snippet_server(tmp, sizeof(tmp));
+    ASSERT_NOT_NULL(srv);
+
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":42,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"search_graph\","
+             "\"arguments\":{\"project\":\"test-project\",\"label\":\"Function\","
+             "\"name_pattern\":\"HandleRequest\",\"limit\":5}}}");
+    ASSERT_NOT_NULL(resp);
+    char *inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+    /* Properties from HandleRequest's properties_json must appear. */
+    ASSERT_NOT_NULL(strstr(inner, "signature"));
+    ASSERT_NOT_NULL(strstr(inner, "func HandleRequest"));
+    ASSERT_NOT_NULL(strstr(inner, "is_exported"));
+    free(inner);
+    free(resp);
+
+    cbm_mcp_server_free(srv);
+    cleanup_snippet_dir(tmp);
+    PASS();
+}
+
 TEST(tool_query_graph_basic) {
     cbm_mcp_server_t *srv = setup_mcp_with_data();
 
@@ -1695,6 +1730,7 @@ SUITE(mcp) {
     RUN_TEST(tool_get_graph_schema_empty);
     RUN_TEST(tool_unknown_tool);
     RUN_TEST(tool_search_graph_basic);
+    RUN_TEST(tool_search_graph_includes_node_properties);
     RUN_TEST(tool_query_graph_basic);
     RUN_TEST(tool_index_status_no_project);
 

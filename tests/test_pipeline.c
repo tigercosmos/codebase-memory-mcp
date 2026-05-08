@@ -529,7 +529,7 @@ TEST(githistory_compute_coupling) {
     char *files_4[] = {"d.go", "e.go"};
 
     cbm_commit_files_t commits[] = {
-        {files_0, 3}, {files_1, 2}, {files_2, 2}, {files_3, 2}, {files_4, 2},
+        {files_0, 3, 0}, {files_1, 2, 0}, {files_2, 2, 0}, {files_3, 2, 0}, {files_4, 2, 0},
     };
 
     cbm_change_coupling_t results[100];
@@ -556,6 +556,47 @@ TEST(githistory_compute_coupling) {
     PASS();
 }
 
+TEST(githistory_coupling_carries_last_co_change) {
+    /* Coupling output must surface the most recent commit timestamp at which
+     * a pair co-changed, so callers can score recency in addition to
+     * frequency. The pair (a.go, b.go) co-changes at three timestamps; the
+     * resulting last_co_change must be the maximum (newest) of those. */
+    char *files_old[] = {"a.go", "b.go"};
+    char *files_mid[] = {"a.go", "b.go"};
+    char *files_new[] = {"a.go", "b.go"};
+    /* Unrelated co-change in the middle to make sure we don't accidentally
+     * pick up that pair's timestamp by index. */
+    char *files_other[] = {"c.go", "d.go"};
+
+    cbm_commit_files_t commits[] = {
+        {files_old, 2, 1700000000LL},   /* oldest a.go/b.go co-change */
+        {files_other, 2, 1750000000LL}, /* unrelated pair */
+        {files_mid, 2, 1720000000LL},
+        {files_new, 2, 1800000000LL},   /* newest a.go/b.go co-change */
+    };
+
+    cbm_change_coupling_t results[16];
+    int n = cbm_compute_change_coupling(commits, 4, results, 16);
+    ASSERT_GTE(n, 1);
+
+    bool found_ab = false;
+    for (int i = 0; i < n; i++) {
+        bool is_ab = (strcmp(results[i].file_a, "a.go") == 0 &&
+                      strcmp(results[i].file_b, "b.go") == 0) ||
+                     (strcmp(results[i].file_a, "b.go") == 0 &&
+                      strcmp(results[i].file_b, "a.go") == 0);
+        if (!is_ab) {
+            continue;
+        }
+        ASSERT_EQ(results[i].co_change_count, 3);
+        /* last_co_change must be the max of the three a.go/b.go timestamps. */
+        ASSERT_EQ(results[i].last_co_change, 1800000000LL);
+        found_ab = true;
+    }
+    ASSERT_TRUE(found_ab);
+    PASS();
+}
+
 TEST(githistory_skip_large_commits) {
     /* A single commit with 25 files → should be skipped (>20) */
     char *files[25];
@@ -565,7 +606,7 @@ TEST(githistory_skip_large_commits) {
         files[i] = bufs[i];
     }
 
-    cbm_commit_files_t commits[] = {{files, 25}};
+    cbm_commit_files_t commits[] = {{files, 25, 0}};
 
     cbm_change_coupling_t results[100];
     int n = cbm_compute_change_coupling(commits, 1, results, 100);
@@ -4138,7 +4179,8 @@ TEST(githistory_compute_change_coupling) {
     char *files_eee[] = {"d.go", "e.go"};
 
     cbm_commit_files_t commits[5] = {
-        {files_aaa, 3}, {files_bbb, 2}, {files_ccc, 2}, {files_ddd, 2}, {files_eee, 2},
+        {files_aaa, 3, 0}, {files_bbb, 2, 0}, {files_ccc, 2, 0},
+        {files_ddd, 2, 0}, {files_eee, 2, 0},
     };
 
     cbm_change_coupling_t out[100];
@@ -4174,7 +4216,7 @@ TEST(githistory_coupling_skips_large_commits) {
         snprintf(bufs[i], sizeof(bufs[i]), "file%d.go", i);
         files[i] = bufs[i];
     }
-    cbm_commit_files_t commits[1] = {{files, 25}};
+    cbm_commit_files_t commits[1] = {{files, 25, 0}};
 
     cbm_change_coupling_t out[100];
     int count = cbm_compute_change_coupling(commits, 1, out, 100);
@@ -5229,7 +5271,7 @@ TEST(coupling_single_file_commit) {
     /* Commits with single files → no pairs → zero couplings */
     char *f1[] = {"a.go"};
     char *f2[] = {"b.go"};
-    cbm_commit_files_t commits[] = {{f1, 1}, {f2, 1}};
+    cbm_commit_files_t commits[] = {{f1, 1, 0}, {f2, 1, 0}};
     cbm_change_coupling_t results[16];
     int n = cbm_compute_change_coupling(commits, 2, results, 16);
     ASSERT_EQ(n, 0);
@@ -5349,6 +5391,7 @@ SUITE(pipeline) {
     /* Git history pass */
     RUN_TEST(githistory_is_trackable);
     RUN_TEST(githistory_compute_coupling);
+    RUN_TEST(githistory_coupling_carries_last_co_change);
     RUN_TEST(githistory_skip_large_commits);
     RUN_TEST(githistory_limits_to_max);
     /* Test detection */

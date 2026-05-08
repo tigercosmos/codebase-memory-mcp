@@ -117,13 +117,29 @@ typedef struct {
     char file_b[CBM_SZ_512];
     int co_change_count;
     double coupling_score;
+    /* Unix epoch of the most recent commit that touched both files together.
+     * 0 when no timestamp was available (e.g. older callers / popen path
+     * without %ct). */
+    long long last_co_change;
 } cbm_change_coupling_t;
 
 /* Commit data for coupling analysis */
 typedef struct {
     char **files;
     int count;
+    /* Unix epoch of the commit. 0 means unknown — coupling computation
+     * still works but last_co_change on the resulting edge will be 0. */
+    long long timestamp;
 } cbm_commit_files_t;
+
+/* Per-file temporal metadata. Populated alongside change-coupling so File
+ * nodes can carry change_count and last_modified for hotspot / risk
+ * analysis queries. */
+typedef struct {
+    char file_path[CBM_SZ_512];
+    int change_count;
+    long long last_modified; /* unix epoch of most recent commit */
+} cbm_file_temporal_t;
 
 /* Compute change coupling from commit history.
  * Returns number of couplings written to out (up to max_out).
@@ -383,6 +399,10 @@ typedef struct {
     cbm_change_coupling_t *couplings;
     int count;
     int commit_count;
+    /* Per-file temporal data (change_count + last_modified) for File nodes.
+     * NULL when the history pass had no commits to analyse. */
+    cbm_file_temporal_t *file_temporal;
+    int file_temporal_count;
 } cbm_githistory_result_t;
 
 /* Compute change couplings without touching the graph buffer.

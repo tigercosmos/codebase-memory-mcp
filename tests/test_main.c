@@ -41,6 +41,7 @@ extern void suite_artifact(void);
 extern void suite_sqlite_writer(void);
 extern void suite_go_lsp(void);
 extern void suite_c_lsp(void);
+extern void suite_scope(void);
 extern void suite_store_arch(void);
 extern void suite_store_bulk(void);
 extern void suite_traces(void);
@@ -112,6 +113,7 @@ int main(void) {
     RUN_SUITE(artifact);
 
     /* LSP resolvers */
+    RUN_SUITE(scope);
     RUN_SUITE(go_lsp);
     RUN_SUITE(c_lsp);
 

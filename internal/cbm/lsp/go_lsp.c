@@ -879,9 +879,10 @@ static const CBMType* go_lookup_field(GoLSPContext* ctx,
 
 // --- go_lookup_field_or_method: method sets + embedding ---
 
-const CBMRegisteredFunc* go_lookup_field_or_method(GoLSPContext* ctx,
-    const char* type_qn, const char* member_name) {
+static const CBMRegisteredFunc* go_lookup_field_or_method_depth(GoLSPContext* ctx,
+    const char* type_qn, const char* member_name, int depth) {
     if (!type_qn || !member_name) return NULL;
+    if (depth > CBM_LSP_MAX_LOOKUP_DEPTH) return NULL;
 
     // Direct method lookup
     const CBMRegisteredFunc* f = cbm_registry_lookup_method(ctx->registry, type_qn, member_name);
@@ -891,20 +892,25 @@ const CBMRegisteredFunc* go_lookup_field_or_method(GoLSPContext* ctx,
     if (rt) {
         // Follow type alias chain
         if (rt->alias_of) {
-            f = go_lookup_field_or_method(ctx, rt->alias_of, member_name);
+            f = go_lookup_field_or_method_depth(ctx, rt->alias_of, member_name, depth + 1);
             if (f) return f;
         }
 
         // Check embedded types (promoted methods)
         if (rt->embedded_types) {
             for (int i = 0; rt->embedded_types[i]; i++) {
-                f = go_lookup_field_or_method(ctx, rt->embedded_types[i], member_name);
+                f = go_lookup_field_or_method_depth(ctx, rt->embedded_types[i], member_name, depth + 1);
                 if (f) return f;
             }
         }
     }
 
     return NULL;
+}
+
+const CBMRegisteredFunc* go_lookup_field_or_method(GoLSPContext* ctx,
+    const char* type_qn, const char* member_name) {
+    return go_lookup_field_or_method_depth(ctx, type_qn, member_name, 0);
 }
 
 // --- go_process_statement: bind variables from statements ---

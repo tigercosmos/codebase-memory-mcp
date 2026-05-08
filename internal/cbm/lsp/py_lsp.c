@@ -58,9 +58,57 @@ void py_lsp_add_import(PyLSPContext* ctx, const char* local_name, const char* mo
     ctx->import_count = new_count;
 }
 
+/* Determine whether this import is an `import X` style binding (binds the
+ * module itself) or a `from X import Y` style binding (binds Y, an
+ * attribute of module X). Heuristic: if module_qn ends in `.<local_name>`
+ * and has at least two components, it's a from-import; otherwise it's a
+ * straight module import. Matches the shape produced by extract_imports.c.
+ */
+static bool import_is_from_style(const char* local_name, const char* module_qn) {
+    if (!local_name || !module_qn) return false;
+    size_t local_len = strlen(local_name);
+    size_t mod_len = strlen(module_qn);
+    if (mod_len <= local_len) return false;
+    if (module_qn[mod_len - local_len - 1] != '.') return false;
+    if (strcmp(module_qn + mod_len - local_len, local_name) != 0) return false;
+    return true;
+}
+
+void py_lsp_bind_imports(PyLSPContext* ctx) {
+    if (!ctx || !ctx->current_scope) return;
+    for (int i = 0; i < ctx->import_count; i++) {
+        const char* local = ctx->import_local_names[i];
+        const char* qn = ctx->import_module_qns[i];
+        if (!local || !qn) continue;
+
+        // Wildcard imports are recorded for traceability but cannot bind a
+        // concrete name — skip the scope insertion. Phase 9 cross-file
+        // logic will use the import map directly to find re-exports.
+        if (strcmp(local, "*") == 0) continue;
+
+        const CBMType* t;
+        if (import_is_from_style(local, qn)) {
+            // `from X import Y` — bind Y to NAMED(X.Y). Phase 6 attribute
+            // resolution checks the registry to upgrade to MODULE / class
+            // / function as appropriate.
+            t = cbm_type_named(ctx->arena, qn);
+        } else {
+            // `import X` / `import X as Y` — bind to MODULE(X).
+            t = cbm_type_module(ctx->arena, qn);
+        }
+        cbm_scope_bind(ctx->current_scope, local, t);
+    }
+}
+
+const CBMType* py_lsp_lookup_in_scope(const PyLSPContext* ctx, const char* name) {
+    if (!ctx) return cbm_type_unknown();
+    return cbm_scope_lookup(ctx->current_scope, name);
+}
+
 void py_lsp_process_file(PyLSPContext* ctx, TSNode root) {
-    /* Phase 2 stub: no-op. Phase 4+ walks the AST and binds/resolves. */
-    (void)ctx;
+    if (!ctx) return;
+    py_lsp_bind_imports(ctx);
+    /* Phase 4+ walks the AST and binds locals + resolves calls. */
     (void)root;
 }
 

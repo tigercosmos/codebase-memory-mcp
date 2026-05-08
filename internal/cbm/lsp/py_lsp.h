@@ -41,6 +41,15 @@ void py_lsp_init(PyLSPContext* ctx, CBMArena* arena, const char* source, int sou
 // Add an import mapping (call once per CBMImport entry).
 void py_lsp_add_import(PyLSPContext* ctx, const char* local_name, const char* module_qn);
 
+// Bind every recorded import into the root scope. Idempotent. Called from
+// py_lsp_process_file before AST traversal. Exposed for unit tests that
+// don't need a tree-sitter parse.
+void py_lsp_bind_imports(PyLSPContext* ctx);
+
+// Test hook: lookup a name in the context's scope chain. Returns
+// cbm_type_unknown() if not bound.
+const CBMType* py_lsp_lookup_in_scope(const PyLSPContext* ctx, const char* name);
+
 // Process all functions/classes in a file's AST, evaluating types and resolving calls.
 // root must be the tree-sitter Python `module` node.
 void py_lsp_process_file(PyLSPContext* ctx, TSNode root);

@@ -10,3 +10,4 @@
 #include "lsp/c_lsp.c"
 #include "lsp/generated/c_stdlib_data.c"
 #include "lsp/generated/cpp_stdlib_data.c"
+#include "lsp/py_lsp.c"

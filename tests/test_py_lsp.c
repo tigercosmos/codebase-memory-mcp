@@ -725,6 +725,120 @@ TEST(pylsp_stdlib_logging_getlogger) {
     PASS();
 }
 
+/* ── Round 1 — parity push ────────────────────────────────────── */
+
+TEST(pylsp_round1_dotted_import_walk) {
+    /* `import os.path` — `os` and `os.path` should both be navigable
+     * through attribute access so `os.path.join('a', 'b')` resolves to
+     * the registered os.path.join function. */
+    CBMFileResult *r = extract_py(
+        "import os.path\n"
+        "def use():\n"
+        "    return os.path.join('a', 'b')\n");
+    ASSERT_NOT_NULL(r);
+    int idx = find_resolved(r, "use", "join");
+    ASSERT_GTE(idx, 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round1_typing_cast) {
+    /* cast(Foo, x) returns NAMED("Foo"), enabling subsequent method
+     * dispatch to resolve. */
+    CBMFileResult *r = extract_py(
+        "from typing import cast\n"
+        "class Foo:\n"
+        "    def m(self):\n"
+        "        return 1\n"
+        "def use(x):\n"
+        "    f = cast(Foo, x)\n"
+        "    return f.m()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "m"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round1_assert_type_passthrough) {
+    /* assert_type(x, T) is a no-op at runtime; the returned value's type
+     * is unchanged. We type the result as type-of(x). */
+    CBMFileResult *r = extract_py(
+        "from typing import assert_type\n"
+        "class Foo:\n"
+        "    def m(self):\n"
+        "        return 1\n"
+        "def use(x: Foo):\n"
+        "    f = assert_type(x, Foo)\n"
+        "    return f.m()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "m"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round1_forward_reference) {
+    /* def f(x: "Foo") — quoted annotation must resolve as if unquoted. */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def m(self):\n"
+        "        return 1\n"
+        "def use(x: \"Foo\"):\n"
+        "    return x.m()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "m"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round1_self_return_chains) {
+    /* class Builder:
+     *   def step1(self) -> Self: return self
+     *   def step2(self) -> Self: return self
+     *   def build(self): return ...
+     * Builder().step1().step2().build()  — must chain through Self. */
+    CBMFileResult *r = extract_py(
+        "from typing import Self\n"
+        "class Builder:\n"
+        "    def step1(self) -> Self:\n"
+        "        return self\n"
+        "    def step2(self) -> Self:\n"
+        "        return self\n"
+        "    def build(self):\n"
+        "        return 1\n"
+        "def use():\n"
+        "    return Builder().step1().step2().build()\n");
+    ASSERT_NOT_NULL(r);
+    /* Each chain link should resolve. We assert the final .build() does. */
+    ASSERT_GTE(require_resolved(r, "use", "build"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round1_generic_subscript_annotation) {
+    /* `def f(items: list[Foo])` — the generic subscript should not
+     * confuse annotation resolution; we drop the [Foo] part for v1. */
+    CBMFileResult *r = extract_py(
+        "from typing import Optional\n"
+        "class Foo:\n"
+        "    def m(self):\n"
+        "        return 1\n"
+        "def use(x: Optional[Foo]):\n"
+        "    return x.m()\n");
+    ASSERT_NOT_NULL(r);
+    /* x has type Optional which strips to Optional, then we look up
+     * .m on it. This SHOULD NOT resolve in v1 since Optional is just
+     * Union — but it shouldn't crash either. We assert no false-positive
+     * high-confidence resolution against an unrelated method. */
+    int idx = find_resolved(r, "use", "m");
+    if (idx >= 0) {
+        const CBMResolvedCall *rc = &r->resolved_calls.items[idx];
+        /* If we did resolve, must be against Foo, not something garbage. */
+        ASSERT(strstr(rc->callee_qn, "Foo") != NULL);
+    }
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(py_lsp) {
@@ -768,4 +882,11 @@ SUITE(py_lsp) {
     RUN_TEST(pylsp_stdlib_collections_defaultdict);
     RUN_TEST(pylsp_stdlib_pathlib_path_method);
     RUN_TEST(pylsp_stdlib_logging_getlogger);
+    /* Round 1 — parity push */
+    RUN_TEST(pylsp_round1_dotted_import_walk);
+    RUN_TEST(pylsp_round1_typing_cast);
+    RUN_TEST(pylsp_round1_assert_type_passthrough);
+    RUN_TEST(pylsp_round1_forward_reference);
+    RUN_TEST(pylsp_round1_self_return_chains);
+    RUN_TEST(pylsp_round1_generic_subscript_annotation);
 }

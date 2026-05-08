@@ -72,6 +72,9 @@ ALLOWED_MODULES = {
     "threading",
     "multiprocessing",
     "queue",
+    "urllib",
+    "http",
+    "concurrent",
 }
 
 
@@ -143,15 +146,21 @@ def base_qns(class_node: ast.ClassDef, module_qn: str) -> list[str]:
     return out
 
 
-def parse_module(path: Path, module_qn: str) -> ModuleStubs:
+@dataclasses.dataclass
+class StarReExport:
+    target_module: str   # e.g. "posixpath" / "ntpath"
+
+
+def parse_module(path: Path, module_qn: str) -> tuple[ModuleStubs, list[StarReExport]]:
     src = path.read_text(encoding="utf-8", errors="replace")
     try:
         tree = ast.parse(src)
     except SyntaxError:
-        return ModuleStubs(module_qn=module_qn, classes=[], functions=[])
+        return ModuleStubs(module_qn=module_qn, classes=[], functions=[]), []
 
     classes: list[StubClass] = []
     functions: list[StubFunction] = []
+    star_imports: list[StarReExport] = []
     seen_funcs: set[str] = set()
 
     def walk(body: list[ast.stmt], current_module_qn: str) -> None:
@@ -176,19 +185,30 @@ def parse_module(path: Path, module_qn: str) -> ModuleStubs:
                     short_name=name,
                     module_qn=current_module_qn,
                 ))
+            elif isinstance(node, ast.ImportFrom):
+                # Track `from X import *` for re-export resolution.
+                if node.module and any(alias.name == "*" for alias in node.names):
+                    star_imports.append(StarReExport(target_module=node.module))
             elif isinstance(node, ast.If):
                 # Flatten version guards.
                 walk(node.body, current_module_qn)
                 walk(node.orelse, current_module_qn)
 
     walk(tree.body, module_qn)
-    return ModuleStubs(module_qn=module_qn, classes=classes, functions=functions)
+    return ModuleStubs(module_qn=module_qn, classes=classes, functions=functions), star_imports
 
 
-def iter_module_stubs(stdlib_root: Path) -> Iterable[ModuleStubs]:
+def collect_all_stubs(stdlib_root: Path) -> tuple[dict[str, ModuleStubs], dict[str, list[StarReExport]]]:
+    """Gather every stub in the allowlist plus any re-export targets they
+    pull in transitively (e.g. os.path -> posixpath -> genericpath).
+    Returns (modules, star_imports_per_module). """
+    modules: dict[str, ModuleStubs] = {}
+    star_imports: dict[str, list[StarReExport]] = {}
+
+    # First pass: walk allowlist
+    queue: list[tuple[Path, str]] = []
     for path in sorted(stdlib_root.rglob("*.pyi")):
         rel = path.relative_to(stdlib_root)
-        # Map file path to module qn.
         parts = list(rel.parts)
         if parts[-1] == "__init__.pyi":
             parts.pop()
@@ -202,7 +222,80 @@ def iter_module_stubs(stdlib_root: Path) -> Iterable[ModuleStubs]:
         if top not in ALLOWED_MODULES:
             continue
         module_qn = ".".join(parts)
-        yield parse_module(path, module_qn)
+        queue.append((path, module_qn))
+
+    seen_targets: set[str] = set()
+    while queue:
+        path, mod_qn = queue.pop()
+        if mod_qn in modules:
+            continue
+        ms, stars = parse_module(path, mod_qn)
+        modules[mod_qn] = ms
+        star_imports[mod_qn] = stars
+        # Enqueue re-export targets (e.g. posixpath, ntpath, genericpath)
+        for star in stars:
+            tgt = star.target_module
+            if tgt in seen_targets:
+                continue
+            seen_targets.add(tgt)
+            tgt_path = stdlib_root / (tgt.replace(".", "/") + ".pyi")
+            if tgt_path.is_file():
+                queue.append((tgt_path, tgt))
+            else:
+                tgt_init = stdlib_root / tgt.replace(".", "/") / "__init__.pyi"
+                if tgt_init.is_file():
+                    queue.append((tgt_init, tgt))
+
+    return modules, star_imports
+
+
+def resolve_reexports(modules: dict[str, ModuleStubs],
+                       star_imports: dict[str, list[StarReExport]]) -> None:
+    """For each module with `from X import *`, copy X's classes/functions
+    into the current module under that module's QN. Iterates to a fixed
+    point to handle re-export chains. """
+    changed = True
+    iter_count = 0
+    while changed and iter_count < 8:
+        changed = False
+        iter_count += 1
+        for mod_qn, stars in star_imports.items():
+            ms = modules[mod_qn]
+            for star in stars:
+                target = modules.get(star.target_module)
+                if not target:
+                    continue
+                # Copy target's classes/functions under mod_qn
+                existing_class_names = {c.short_name for c in ms.classes}
+                existing_func_names = {f.short_name for f in ms.functions}
+                for c in target.classes:
+                    if c.short_name in existing_class_names:
+                        continue
+                    ms.classes.append(StubClass(
+                        qualified_name=f"{mod_qn}.{c.short_name}",
+                        short_name=c.short_name,
+                        methods=list(c.methods),
+                        bases=list(c.bases),
+                    ))
+                    existing_class_names.add(c.short_name)
+                    changed = True
+                for f in target.functions:
+                    if f.short_name in existing_func_names:
+                        continue
+                    ms.functions.append(StubFunction(
+                        qualified_name=f"{mod_qn}.{f.short_name}",
+                        short_name=f.short_name,
+                        module_qn=mod_qn,
+                    ))
+                    existing_func_names.add(f.short_name)
+                    changed = True
+
+
+def iter_module_stubs(stdlib_root: Path) -> Iterable[ModuleStubs]:
+    modules, star_imports = collect_all_stubs(stdlib_root)
+    resolve_reexports(modules, star_imports)
+    for mod_qn in sorted(modules.keys()):
+        yield modules[mod_qn]
 
 
 C_HEADER = """\

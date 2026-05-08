@@ -1447,6 +1447,43 @@ static void try_field_type_hint(resolve_ctx_t *rc, cbm_resolution_t *res, const 
     }
 }
 
+/* Look up an LSP-resolved override for this call site.
+ * Returns a cbm_resolution_t with non-empty qualified_name on hit, empty on
+ * miss. See src/pipeline/pass_calls.c for the rationale. */
+static cbm_resolution_t lsp_override_resolution_pp(const CBMFileResult *result,
+                                                    const CBMCall *call) {
+    cbm_resolution_t empty = {0};
+    if (!result || !call || !call->callee_name || !call->enclosing_func_qn) return empty;
+    if (result->resolved_calls.count == 0) return empty;
+    const char *short_name = call->callee_name;
+    const char *p = call->callee_name;
+    for (; *p; p++) {
+        if (*p == '.') short_name = p + 1;
+    }
+    if (!short_name || !*short_name) return empty;
+    size_t snlen = strlen(short_name);
+
+    const CBMResolvedCall *best = NULL;
+    for (int i = 0; i < result->resolved_calls.count; i++) {
+        const CBMResolvedCall *rc2 = &result->resolved_calls.items[i];
+        if (!rc2->caller_qn || !rc2->callee_qn) continue;
+        if (strcmp(rc2->caller_qn, call->enclosing_func_qn) != 0) continue;
+        size_t qlen = strlen(rc2->callee_qn);
+        if (qlen <= snlen) continue;
+        if (rc2->callee_qn[qlen - snlen - 1] != '.') continue;
+        if (strcmp(rc2->callee_qn + qlen - snlen, short_name) != 0) continue;
+        if (rc2->confidence < 0.5f) continue;
+        if (!best || rc2->confidence > best->confidence) best = rc2;
+    }
+    if (!best) return empty;
+    cbm_resolution_t r = {0};
+    r.qualified_name = best->callee_qn;
+    r.strategy = best->strategy ? best->strategy : "lsp_override";
+    r.confidence = (double)best->confidence;
+    r.candidate_count = 1;
+    return r;
+}
+
 /* Resolve calls for one file and emit CALLS/HTTP_CALLS/ASYNC_CALLS edges. */
 static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CBMFileResult *result,
                                const char *rel, const char *module_qn, const char **imp_keys,
@@ -1462,8 +1499,11 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
             continue;
         }
 
-        cbm_resolution_t res = cbm_registry_resolve(rc->registry, call->callee_name, module_qn,
-                                                    imp_keys, imp_vals, imp_count);
+        cbm_resolution_t res = lsp_override_resolution_pp(result, call);
+        if (!res.qualified_name || res.qualified_name[0] == '\0') {
+            res = cbm_registry_resolve(rc->registry, call->callee_name, module_qn,
+                                       imp_keys, imp_vals, imp_count);
+        }
 
         try_field_type_hint(rc, &res, call->callee_name, source_node->id);
 

@@ -24,7 +24,7 @@
 #include "arena.h"
 #include "helpers.h"
 #include "foundation/constants.h"
-#include "ts_node_stack.h"
+#include "extract_node_stack.h"
 #include "tree_sitter/api.h"
 #include <stdint.h>
 #include <string.h>

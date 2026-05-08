@@ -4,7 +4,7 @@
 #include "lang_specs.h"
 #include "extract_unified.h"
 #include "foundation/constants.h"
-#include "ts_node_stack.h"
+#include "extract_node_stack.h"
 #include "tree_sitter/api.h" // TSNode, ts_node_*
 #include <stdint.h>          // uint32_t
 #include <string.h>

@@ -5,7 +5,7 @@
 #include "extract_unified.h"
 #include "tree_sitter/api.h" // TSNode, ts_node_*
 #include "foundation/constants.h"
-#include "ts_node_stack.h"
+#include "extract_node_stack.h"
 
 enum { MAX_EXCEPTION_NAME_LEN = 100, LAST_IDX = 1 };
 #include <stdint.h> // uint32_t

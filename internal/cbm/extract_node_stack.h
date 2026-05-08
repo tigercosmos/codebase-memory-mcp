@@ -1,5 +1,5 @@
 /*
- * ts_node_stack.h — Growable TSNode stack for AST traversal.
+ * extract_node_stack.h — Growable TSNode stack for AST traversal.
  *
  * Replaces fixed-size TSNode stack[] arrays that silently drop AST subtrees
  * when the stack overflows (GitHub issue #199).
@@ -9,8 +9,8 @@
  * Initial capacity matches the previous fixed caps so small files allocate
  * no extra memory.
  */
-#ifndef CBM_TS_NODE_STACK_H
-#define CBM_TS_NODE_STACK_H
+#ifndef CBM_EXTRACT_NODE_STACK_H
+#define CBM_EXTRACT_NODE_STACK_H
 
 #include "arena.h"
 #include "tree_sitter/api.h"
@@ -50,4 +50,4 @@ static inline TSNode ts_nstack_pop(TSNodeStack *s) {
     return s->items[--s->count];
 }
 
-#endif /* CBM_TS_NODE_STACK_H */
+#endif /* CBM_EXTRACT_NODE_STACK_H */

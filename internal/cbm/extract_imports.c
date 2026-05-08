@@ -4,7 +4,7 @@
 #include "lang_specs.h" // CBMLangSpec, CBMEmbeddedLangSpec, cbm_lang_spec, cbm_ts_language
 #include "tree_sitter/api.h" // TSNode, ts_node_*
 #include "foundation/constants.h"
-#include "ts_node_stack.h"
+#include "extract_node_stack.h"
 #include <stdint.h> // uint32_t
 #include <string.h>
 #include <ctype.h>

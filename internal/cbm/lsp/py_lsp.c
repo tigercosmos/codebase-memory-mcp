@@ -14,6 +14,7 @@
 #include "../cbm.h"
 #include "../helpers.h"
 #include "tree_sitter/api.h"
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -26,6 +27,7 @@ static const CBMRegisteredFunc* py_lookup_attribute(PyLSPContext* ctx,
 static void py_emit_resolved_call(PyLSPContext* ctx, const char* callee_qn,
     const char* strategy, float confidence);
 static const CBMType* py_resolve_annotation(PyLSPContext* ctx, const char* ann);
+static const CBMType* py_iterable_element_type(PyLSPContext* ctx, const CBMType* iter_type);
 
 void py_lsp_init(PyLSPContext* ctx, CBMArena* arena, const char* source, int source_len,
     const CBMTypeRegistry* registry, const char* module_qn, CBMResolvedCallArray* out) {
@@ -289,6 +291,43 @@ static const CBMType* py_func_return_type(PyLSPContext* ctx, const char* func_qn
     return py_func_return_type_recv(ctx, func_qn, NULL);
 }
 
+/* Element type of an iterable. For TEMPLATE("list"|"set"|"Iterable"|...,
+ * [T]), return T. For TEMPLATE("dict", [K, V]) — `for x in d` iterates
+ * keys, return K. For TEMPLATE("tuple", [A, B, ...]) return UNION(A, B,
+ * ...) since `for x in (a, b)` yields heterogeneous types. NAMED("list")
+ * with no template args -> UNKNOWN. */
+static const CBMType* py_iterable_element_type(PyLSPContext* ctx, const CBMType* iter_type) {
+    if (!iter_type) return cbm_type_unknown();
+    if (iter_type->kind == CBM_TYPE_TEMPLATE) {
+        const char* name = iter_type->data.template_type.template_name;
+        const CBMType** args = iter_type->data.template_type.template_args;
+        int n = iter_type->data.template_type.arg_count;
+        if (!name || n <= 0 || !args) return cbm_type_unknown();
+        if (strcmp(name, "list") == 0 || strcmp(name, "set") == 0 ||
+            strcmp(name, "frozenset") == 0 || strcmp(name, "Iterable") == 0 ||
+            strcmp(name, "Iterator") == 0 || strcmp(name, "Sequence") == 0 ||
+            strcmp(name, "MutableSequence") == 0 || strcmp(name, "AsyncIterable") == 0 ||
+            strcmp(name, "AsyncIterator") == 0 || strcmp(name, "Generator") == 0 ||
+            strcmp(name, "Reversible") == 0 || strcmp(name, "Collection") == 0 ||
+            strcmp(name, "Container") == 0 || strcmp(name, "deque") == 0) {
+            return args[0];
+        }
+        if (strcmp(name, "dict") == 0 || strcmp(name, "Mapping") == 0 ||
+            strcmp(name, "MutableMapping") == 0 || strcmp(name, "defaultdict") == 0 ||
+            strcmp(name, "OrderedDict") == 0) {
+            // `for k in d` iterates keys.
+            return args[0];
+        }
+        if (strcmp(name, "tuple") == 0) {
+            if (n == 1) return args[0];
+            return cbm_type_union(ctx->arena, args, n);
+        }
+        // Other generics: best-effort take first arg.
+        return args[0];
+    }
+    return cbm_type_unknown();
+}
+
 static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node) {
     if (!ctx || ts_node_is_null(node)) return cbm_type_unknown();
 
@@ -348,6 +387,25 @@ static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node) {
                 obj_type->data.named.qualified_name, attr_name);
             if (f) return py_func_return_type_recv(ctx, f->qualified_name,
                 obj_type->data.named.qualified_name);
+        }
+        if (obj_type->kind == CBM_TYPE_UNION) {
+            int matches = 0;
+            const CBMRegisteredFunc* hit = NULL;
+            const char* hit_recv = NULL;
+            for (int i = 0; i < obj_type->data.union_type.count; i++) {
+                const CBMType* m = obj_type->data.union_type.members[i];
+                if (!m || m->kind != CBM_TYPE_NAMED) continue;
+                const CBMRegisteredFunc* f = py_lookup_attribute(ctx,
+                    m->data.named.qualified_name, attr_name);
+                if (f) {
+                    matches++;
+                    hit = f;
+                    hit_recv = m->data.named.qualified_name;
+                }
+            }
+            if (matches == 1 && hit) {
+                return py_func_return_type_recv(ctx, hit->qualified_name, hit_recv);
+            }
         }
         return cbm_type_unknown();
     }
@@ -509,11 +567,15 @@ static void py_process_statement(PyLSPContext* ctx, TSNode node) {
 
     if (strcmp(k, "for_statement") == 0) {
         TSNode left = ts_node_child_by_field_name(node, "left", 4);
-        // Iterable type is the right-hand side; we use UNKNOWN since
-        // generic container element typing is Phase 8+ work.
+        TSNode right = ts_node_child_by_field_name(node, "right", 5);
+        const CBMType* elem_type = cbm_type_unknown();
+        if (!ts_node_is_null(right)) {
+            const CBMType* iter_type = py_eval_expr_type(ctx, right);
+            elem_type = py_iterable_element_type(ctx, iter_type);
+        }
         if (!ts_node_is_null(left) && strcmp(ts_node_type(left), "identifier") == 0) {
             char* name = py_node_text(ctx, left);
-            if (name) cbm_scope_bind(ctx->current_scope, name, cbm_type_unknown());
+            if (name) cbm_scope_bind(ctx->current_scope, name, elem_type);
         }
         return;
     }
@@ -627,7 +689,221 @@ static void py_emit_call_for(PyLSPContext* ctx, TSNode call_node) {
                 return;
             }
         }
+        if (obj_type->kind == CBM_TYPE_UNION) {
+            // Try each non-None member; if exactly one matches, emit.
+            int matches = 0;
+            const CBMRegisteredFunc* hit = NULL;
+            for (int i = 0; i < obj_type->data.union_type.count; i++) {
+                const CBMType* m = obj_type->data.union_type.members[i];
+                if (!m) continue;
+                if (m->kind == CBM_TYPE_BUILTIN && m->data.builtin.name &&
+                    strcmp(m->data.builtin.name, "None") == 0) continue;
+                if (m->kind != CBM_TYPE_NAMED) continue;
+                const CBMRegisteredFunc* f = py_lookup_attribute(ctx,
+                    m->data.named.qualified_name, attr_name);
+                if (f) { matches++; hit = f; }
+            }
+            if (matches == 1 && hit) {
+                py_emit_resolved_call(ctx, hit->qualified_name, "lsp_method_union", 0.85f);
+                return;
+            }
+        }
         return;
+    }
+}
+
+/* Detect `isinstance(x, T)` / `isinstance(x, (T1, T2))` and return
+ * (var_name, narrowed_type). Returns true on match. */
+static bool py_match_isinstance(PyLSPContext* ctx, TSNode call_node,
+    char** out_name, const CBMType** out_type) {
+    if (ts_node_is_null(call_node)) return false;
+    if (strcmp(ts_node_type(call_node), "call") != 0) return false;
+    TSNode fn = ts_node_child_by_field_name(call_node, "function", 8);
+    if (ts_node_is_null(fn) || strcmp(ts_node_type(fn), "identifier") != 0) return false;
+    char* fname = py_node_text(ctx, fn);
+    if (!fname || strcmp(fname, "isinstance") != 0) return false;
+    TSNode args = ts_node_child_by_field_name(call_node, "arguments", 9);
+    if (ts_node_is_null(args) || ts_node_named_child_count(args) < 2) return false;
+    TSNode var_node = ts_node_named_child(args, 0);
+    TSNode type_node = ts_node_named_child(args, 1);
+    if (ts_node_is_null(var_node) || strcmp(ts_node_type(var_node), "identifier") != 0)
+        return false;
+    char* name = py_node_text(ctx, var_node);
+    if (!name) return false;
+    char* tname = py_node_text(ctx, type_node);
+    if (!tname) return false;
+    *out_name = name;
+    *out_type = py_resolve_annotation(ctx, tname);
+    return true;
+}
+
+/* Walk through parenthesized expressions and walrus expressions to find
+ * the underlying identifier of an `is None` operand. Returns the
+ * identifier's text or NULL. */
+static char* py_underlying_ident(PyLSPContext* ctx, TSNode node) {
+    if (ts_node_is_null(node)) return NULL;
+    const char* k = ts_node_type(node);
+    if (strcmp(k, "identifier") == 0) {
+        return py_node_text(ctx, node);
+    }
+    if (strcmp(k, "parenthesized_expression") == 0) {
+        if (ts_node_named_child_count(node) > 0) {
+            return py_underlying_ident(ctx, ts_node_named_child(node, 0));
+        }
+    }
+    if (strcmp(k, "named_expression") == 0 ||
+        strcmp(k, "assignment_expression") == 0) {
+        TSNode left = ts_node_child_by_field_name(node, "name", 4);
+        if (ts_node_is_null(left)) {
+            left = ts_node_child_by_field_name(node, "left", 4);
+        }
+        if (!ts_node_is_null(left) && strcmp(ts_node_type(left), "identifier") == 0) {
+            return py_node_text(ctx, left);
+        }
+    }
+    return NULL;
+}
+
+/* Detect `x is None` / `x is not None` / `None is x` / etc. Walks
+ * through parens and walrus to find the underlying identifier.
+ * Returns 1 for "x is not None" (positive narrow), -1 for "x is None"
+ * (negative), 0 otherwise. */
+static int py_match_is_none(PyLSPContext* ctx, TSNode test_node, char** out_name) {
+    if (ts_node_is_null(test_node)) return 0;
+    const char* k = ts_node_type(test_node);
+    if (strcmp(k, "comparison_operator") == 0) {
+        uint32_t cn = ts_node_child_count(test_node);
+        TSNode left = {0}, right = {0};
+        bool is_not = false;
+        bool is_is = false;
+        bool first_named = true;
+        for (uint32_t i = 0; i < cn; i++) {
+            TSNode c = ts_node_child(test_node, i);
+            if (ts_node_is_null(c)) continue;
+            if (ts_node_is_named(c)) {
+                if (first_named) { left = c; first_named = false; }
+                else { right = c; }
+                continue;
+            }
+            // Anonymous operator token. Tree-sitter Python emits "is" or
+            // "is not" as a single token via the sym__is_not literal.
+            char* tok = py_node_text(ctx, c);
+            if (!tok) continue;
+            if (strcmp(tok, "is") == 0) is_is = true;
+            else if (strcmp(tok, "is not") == 0) { is_is = true; is_not = true; }
+        }
+        if (!is_is || ts_node_is_null(left) || ts_node_is_null(right)) return 0;
+        char* l_text = py_node_text(ctx, left);
+        char* r_text = py_node_text(ctx, right);
+        if (!l_text || !r_text) return 0;
+        char* var_name = NULL;
+        if (strcmp(r_text, "None") == 0) {
+            var_name = py_underlying_ident(ctx, left);
+        } else if (strcmp(l_text, "None") == 0) {
+            var_name = py_underlying_ident(ctx, right);
+        }
+        if (!var_name) return 0;
+        *out_name = var_name;
+        return is_not ? 1 : -1;
+    }
+    return 0;
+}
+
+/* Compute the non-None component of a UNION type. If t is Optional[X]
+ * (= Union[X, None]), return X; otherwise return t unchanged. */
+static const CBMType* py_strip_none(PyLSPContext* ctx, const CBMType* t) {
+    if (!t || t->kind != CBM_TYPE_UNION) return t;
+    int n = t->data.union_type.count;
+    int retained = 0;
+    const CBMType** kept = (const CBMType**)cbm_arena_alloc(ctx->arena,
+        (size_t)(n + 1) * sizeof(const CBMType*));
+    if (!kept) return t;
+    for (int i = 0; i < n; i++) {
+        const CBMType* m = t->data.union_type.members[i];
+        if (m && m->kind == CBM_TYPE_BUILTIN && m->data.builtin.name &&
+            strcmp(m->data.builtin.name, "None") == 0) continue;
+        kept[retained++] = m;
+    }
+    if (retained == 0) return cbm_type_unknown();
+    if (retained == 1) return kept[0];
+    return cbm_type_union(ctx->arena, kept, retained);
+}
+
+/* Walk a node's subtree looking for walrus expressions and bind their
+ * targets in the enclosing function scope (PEP 572 semantics). */
+static void py_bind_walrus_in(PyLSPContext* ctx, TSNode node) {
+    if (ts_node_is_null(node)) return;
+    const char* k = ts_node_type(node);
+    if (strcmp(k, "named_expression") == 0 ||
+        strcmp(k, "assignment_expression") == 0) {
+        TSNode left = ts_node_child_by_field_name(node, "name", 4);
+        if (ts_node_is_null(left)) {
+            left = ts_node_child_by_field_name(node, "left", 4);
+        }
+        TSNode right = ts_node_child_by_field_name(node, "value", 5);
+        if (ts_node_is_null(right)) {
+            right = ts_node_child_by_field_name(node, "right", 5);
+        }
+        if (!ts_node_is_null(left) && !ts_node_is_null(right) &&
+            strcmp(ts_node_type(left), "identifier") == 0) {
+            char* name = py_node_text(ctx, left);
+            if (name) {
+                const CBMType* t = py_eval_expr_type(ctx, right);
+                cbm_scope_bind(ctx->current_scope, name, t);
+            }
+        }
+    }
+    uint32_t nc = ts_node_named_child_count(node);
+    for (uint32_t i = 0; i < nc; i++) {
+        py_bind_walrus_in(ctx, ts_node_named_child(node, i));
+    }
+}
+
+/* Walk if_statement: push scope for consequence body when narrowing
+ * applies, then recurse. */
+static void py_walk_if_statement(PyLSPContext* ctx, TSNode if_node) {
+    TSNode cond = ts_node_child_by_field_name(if_node, "condition", 9);
+    TSNode body = ts_node_child_by_field_name(if_node, "consequence", 11);
+    TSNode alt = ts_node_child_by_field_name(if_node, "alternative", 11);
+
+    // Walrus bindings in the condition leak into the enclosing scope.
+    py_bind_walrus_in(ctx, cond);
+
+    // Always evaluate the condition (may bind via walrus, currently a no-op).
+    py_resolve_calls_in(ctx, cond);
+
+    // Consequence: maybe narrow.
+    if (!ts_node_is_null(body)) {
+        CBMScope* saved = ctx->current_scope;
+        ctx->current_scope = cbm_scope_push(ctx->arena, ctx->current_scope);
+
+        // Try isinstance narrowing.
+        if (!ts_node_is_null(cond) && strcmp(ts_node_type(cond), "call") == 0) {
+            char* name = NULL;
+            const CBMType* narrowed = NULL;
+            if (py_match_isinstance(ctx, cond, &name, &narrowed) && name && narrowed) {
+                cbm_scope_bind(ctx->current_scope, name, narrowed);
+            }
+        }
+        // Try `x is not None` narrowing.
+        char* none_var = NULL;
+        int none_kind = py_match_is_none(ctx, cond, &none_var);
+        if (none_kind == 1 && none_var) {
+            const CBMType* current = cbm_scope_lookup(ctx->current_scope, none_var);
+            if (current && !cbm_type_is_unknown(current)) {
+                const CBMType* narrowed = py_strip_none(ctx, current);
+                cbm_scope_bind(ctx->current_scope, none_var, narrowed);
+            }
+        }
+
+        py_resolve_calls_in(ctx, body);
+        ctx->current_scope = saved;
+    }
+
+    // Alternative branch: include else / elif. Recurse without narrowing —
+    // the else branch's narrowing is the negation, which we don't model in v1.
+    if (!ts_node_is_null(alt)) {
+        py_resolve_calls_in(ctx, alt);
     }
 }
 
@@ -641,6 +917,51 @@ static void py_resolve_calls_in(PyLSPContext* ctx, TSNode node) {
     // Emit call entry if applicable.
     if (strcmp(k, "call") == 0) {
         py_emit_call_for(ctx, node);
+    }
+
+    // if_statement gets special-case narrowing.
+    if (strcmp(k, "if_statement") == 0) {
+        py_walk_if_statement(ctx, node);
+        return;
+    }
+
+    // Comprehensions push a scope and bind for_in_clause loop vars to the
+    // iterable's element type, then walk inner expressions.
+    if (strcmp(k, "list_comprehension") == 0 ||
+        strcmp(k, "dictionary_comprehension") == 0 ||
+        strcmp(k, "set_comprehension") == 0 ||
+        strcmp(k, "generator_expression") == 0) {
+        CBMScope* saved = ctx->current_scope;
+        ctx->current_scope = cbm_scope_push(ctx->arena, ctx->current_scope);
+        uint32_t cnc = ts_node_named_child_count(node);
+        // First pass: bind for-clause vars (process in source order so
+        // chained comprehensions like `for x in xs for y in x.ys` see
+        // x bound by the time we evaluate x.ys).
+        for (uint32_t i = 0; i < cnc; i++) {
+            TSNode child = ts_node_named_child(node, i);
+            const char* ck = ts_node_type(child);
+            if (strcmp(ck, "for_in_clause") == 0) {
+                TSNode left = ts_node_child_by_field_name(child, "left", 4);
+                TSNode right = ts_node_child_by_field_name(child, "right", 5);
+                const CBMType* elem_type = cbm_type_unknown();
+                if (!ts_node_is_null(right)) {
+                    const CBMType* iter_type = py_eval_expr_type(ctx, right);
+                    elem_type = py_iterable_element_type(ctx, iter_type);
+                }
+                if (!ts_node_is_null(left) &&
+                    strcmp(ts_node_type(left), "identifier") == 0) {
+                    char* name = py_node_text(ctx, left);
+                    if (name) cbm_scope_bind(ctx->current_scope, name, elem_type);
+                }
+            }
+        }
+        // Second pass: recurse into all children (body + filter clauses
+        // benefit from the bound vars).
+        for (uint32_t i = 0; i < cnc; i++) {
+            py_resolve_calls_in(ctx, ts_node_named_child(node, i));
+        }
+        ctx->current_scope = saved;
+        return;
     }
 
     // Recurse: children. We don't push scope for control-flow blocks
@@ -662,11 +983,202 @@ static void py_resolve_calls_in(PyLSPContext* ctx, TSNode node) {
 
 /* ── function / class processing ───────────────────────────────── */
 
+/* Parse a type-annotation TEXT into a CBMType without requiring a
+ * PyLSPContext. Handles `Optional[T]`, `Union[A, B]`, `X | Y`, generic
+ * containers (`list[T]` -> TEMPLATE), forward-reference quotes, and
+ * builtin scalar names. Used by py_register_def, which runs before any
+ * context is available. When module_qn is non-NULL, bare class names
+ * are qualified as "<module_qn>.<name>" so registry lookups match. */
+static const CBMType* py_parse_type_text(CBMArena* arena, const char* ann);
+static const CBMType* py_parse_type_text_qn(CBMArena* arena, const char* ann,
+    const char* module_qn);
+
+/* Trim ASCII whitespace from both ends of an arena-allocated copy. */
+static char* py_trim_ws(CBMArena* arena, const char* start, size_t len) {
+    while (len > 0 && (start[0] == ' ' || start[0] == '\t')) { start++; len--; }
+    while (len > 0 && (start[len - 1] == ' ' || start[len - 1] == '\t')) len--;
+    char* out = (char*)cbm_arena_alloc(arena, len + 1);
+    if (!out) return NULL;
+    memcpy(out, start, len);
+    out[len] = '\0';
+    return out;
+}
+
+/* Split a comma-separated argument string at depth 0 (ignoring commas
+ * inside [], (), {}). Returns NULL-terminated arena array of trimmed
+ * substring copies. Caller passes the inside of `[...]`. */
+static const char** py_split_subscript_args(CBMArena* arena, const char* s, int* out_n) {
+    if (!s) { *out_n = 0; return NULL; }
+    int cap = 8;
+    const char** out = (const char**)cbm_arena_alloc(arena,
+        (size_t)(cap + 1) * sizeof(const char*));
+    if (!out) { *out_n = 0; return NULL; }
+    int n = 0;
+    int depth = 0;
+    size_t len = strlen(s);
+    size_t start = 0;
+    for (size_t i = 0; i <= len; i++) {
+        char c = (i < len) ? s[i] : ',';
+        if (c == '[' || c == '(' || c == '{') depth++;
+        else if (c == ']' || c == ')' || c == '}') depth--;
+        else if (c == ',' && depth == 0) {
+            char* part = py_trim_ws(arena, s + start, i - start);
+            if (part && part[0]) {
+                if (n >= cap) {
+                    int new_cap = cap * 2;
+                    const char** grown = (const char**)cbm_arena_alloc(arena,
+                        (size_t)(new_cap + 1) * sizeof(const char*));
+                    if (grown) {
+                        for (int q = 0; q < n; q++) grown[q] = out[q];
+                        out = grown;
+                        cap = new_cap;
+                    }
+                }
+                if (n < cap) out[n++] = part;
+            }
+            start = i + 1;
+        }
+    }
+    out[n] = NULL;
+    *out_n = n;
+    return out;
+}
+
+static const CBMType* py_parse_type_text_qn(CBMArena* arena, const char* ann,
+    const char* module_qn) {
+    if (!ann || !ann[0]) return cbm_type_unknown();
+    size_t len = strlen(ann);
+
+    if (len >= 2 && (ann[0] == '"' || ann[0] == '\'') && ann[len - 1] == ann[0]) {
+        char* unquoted = (char*)cbm_arena_alloc(arena, len - 1);
+        if (unquoted) {
+            memcpy(unquoted, ann + 1, len - 2);
+            unquoted[len - 2] = '\0';
+            return py_parse_type_text_qn(arena, unquoted, module_qn);
+        }
+    }
+
+    const char* lb = strchr(ann, '[');
+    if (lb && len > 0 && ann[len - 1] == ']') {
+        size_t base_len = (size_t)(lb - ann);
+        char* base = (char*)cbm_arena_alloc(arena, base_len + 1);
+        if (base) {
+            memcpy(base, ann, base_len);
+            base[base_len] = '\0';
+            char* btrim = base;
+            while (*btrim == ' ') btrim++;
+            size_t blen = strlen(btrim);
+            while (blen > 0 && btrim[blen - 1] == ' ') { btrim[blen - 1] = '\0'; blen--; }
+            size_t inner_start = (size_t)(lb - ann) + 1;
+            size_t inner_len = len - inner_start - 1;
+            char* args_text = (char*)cbm_arena_alloc(arena, inner_len + 1);
+            if (args_text) {
+                memcpy(args_text, ann + inner_start, inner_len);
+                args_text[inner_len] = '\0';
+                int arg_n = 0;
+                const char** arg_strs = py_split_subscript_args(arena, args_text, &arg_n);
+                const CBMType** arg_types = NULL;
+                if (arg_n > 0 && arg_strs) {
+                    arg_types = (const CBMType**)cbm_arena_alloc(arena,
+                        (size_t)(arg_n + 1) * sizeof(const CBMType*));
+                    if (arg_types) {
+                        for (int i = 0; i < arg_n; i++) {
+                            arg_types[i] = py_parse_type_text_qn(arena, arg_strs[i], module_qn);
+                        }
+                        arg_types[arg_n] = NULL;
+                    }
+                }
+                if (strcmp(btrim, "Optional") == 0 ||
+                    strcmp(btrim, "typing.Optional") == 0) {
+                    if (arg_types && arg_n >= 1 && arg_types[0]) {
+                        return cbm_type_optional(arena, arg_types[0]);
+                    }
+                }
+                if (strcmp(btrim, "Union") == 0 || strcmp(btrim, "typing.Union") == 0) {
+                    if (arg_types && arg_n > 0) {
+                        return cbm_type_union(arena, arg_types, arg_n);
+                    }
+                }
+                if (arg_types && arg_n > 0) {
+                    return cbm_type_template(arena, btrim, arg_types, arg_n);
+                }
+                return py_parse_type_text_qn(arena, btrim, module_qn);
+            }
+        }
+    }
+
+    {
+        int cap = 4;
+        const char** out = (const char**)cbm_arena_alloc(arena,
+            (size_t)(cap + 1) * sizeof(const char*));
+        if (out) {
+            int onum = 0;
+            int d2 = 0;
+            size_t start = 0;
+            bool seen_pipe = false;
+            for (size_t j = 0; j <= len; j++) {
+                char cc = (j < len) ? ann[j] : '|';
+                if (cc == '[' || cc == '(' || cc == '{') d2++;
+                else if (cc == ']' || cc == ')' || cc == '}') d2--;
+                else if (cc == '|' && d2 == 0) {
+                    seen_pipe = (j < len);
+                    char* p = py_trim_ws(arena, ann + start, j - start);
+                    if (p && p[0] && onum < cap) out[onum++] = p;
+                    start = j + 1;
+                }
+            }
+            if (seen_pipe && onum >= 2) {
+                const CBMType** members = (const CBMType**)cbm_arena_alloc(arena,
+                    (size_t)(onum + 1) * sizeof(const CBMType*));
+                if (members) {
+                    for (int j = 0; j < onum; j++) {
+                        members[j] = py_parse_type_text_qn(arena, out[j], module_qn);
+                    }
+                    return cbm_type_union(arena, members, onum);
+                }
+            }
+        }
+    }
+
+    static const char* builtins[] = {"int", "str", "bool", "float", "bytes",
+        "None", "complex", "bytearray", "object", "type", NULL};
+    for (int i = 0; builtins[i]; i++) {
+        if (strcmp(ann, builtins[i]) == 0) {
+            return cbm_type_builtin(arena, ann);
+        }
+    }
+    // Bare unqualified name: qualify with module_qn if it doesn't already
+    // contain a dot. Skips obvious typing-module names so `Optional` /
+    // `Self` / etc. don't end up qualified to the consumer's module.
+    if (module_qn && !strchr(ann, '.')) {
+        static const char* typing_names[] = {"Self", "Any", "None", "True", "False",
+            "Iterator", "Iterable", "Generator", "AsyncIterator", "AsyncIterable",
+            "Sequence", "MutableSequence", "Mapping", "MutableMapping", "Collection",
+            "Container", "Reversible", "Optional", "Union", "Callable",
+            "Awaitable", "Coroutine", "TypeVar", "ParamSpec", NULL};
+        bool is_typing = false;
+        for (int i = 0; typing_names[i]; i++) {
+            if (strcmp(ann, typing_names[i]) == 0) { is_typing = true; break; }
+        }
+        if (!is_typing) {
+            const char* qn = cbm_arena_sprintf(arena, "%s.%s", module_qn, ann);
+            return cbm_type_named(arena, qn);
+        }
+    }
+    return cbm_type_named(arena, ann);
+}
+
+static const CBMType* py_parse_type_text(CBMArena* arena, const char* ann) {
+    return py_parse_type_text_qn(arena, ann, NULL);
+}
+
 /* Resolve a type-annotation text into a CBMType. Tries: scope lookup
  * (for imports / type aliases), module-qualified lookup in the registry,
  * then falls back to a bare NAMED. Strips quoted forward-reference
- * wrappers like `"Foo"` and the surrounding generic-subscript noise
- * (`list[int]` -> `list`). */
+ * wrappers like `"Foo"` and converts subscripted forms `list[Foo]` /
+ * `Optional[Foo]` / `Union[A, B]` into TEMPLATE / UNION shapes so
+ * subsequent code can reach into element types for comprehensions
+ * etc. */
 static const CBMType* py_resolve_annotation(PyLSPContext* ctx, const char* ann) {
     if (!ann || !ann[0]) return cbm_type_unknown();
 
@@ -681,16 +1193,106 @@ static const CBMType* py_resolve_annotation(PyLSPContext* ctx, const char* ann) 
         }
     }
 
-    // Strip generic subscript: `list[int]` -> `list`. The element type
-    // info is lost in v1; full substitution is Phase 8+.
+    // Generic subscript: `list[Foo]` / `Optional[Foo]` / `Union[A, B]` /
+    // `dict[K, V]`. Parse the base name + comma-split args at depth 0.
     const char* lb = strchr(ann, '[');
-    if (lb) {
+    if (lb && len > 0 && ann[len - 1] == ']') {
         size_t base_len = (size_t)(lb - ann);
         char* base = (char*)cbm_arena_alloc(ctx->arena, base_len + 1);
         if (base) {
             memcpy(base, ann, base_len);
             base[base_len] = '\0';
-            return py_resolve_annotation(ctx, base);
+            // Trim leading/trailing whitespace from base.
+            char* btrim = base;
+            while (*btrim == ' ') btrim++;
+            size_t blen = strlen(btrim);
+            while (blen > 0 && btrim[blen - 1] == ' ') { btrim[blen - 1] = '\0'; blen--; }
+            // Args text: between [ and ]
+            size_t inner_start = (size_t)(lb - ann) + 1;
+            size_t inner_len = len - inner_start - 1;
+            char* args_text = (char*)cbm_arena_alloc(ctx->arena, inner_len + 1);
+            if (args_text) {
+                memcpy(args_text, ann + inner_start, inner_len);
+                args_text[inner_len] = '\0';
+                int arg_n = 0;
+                const char** arg_strs = py_split_subscript_args(ctx->arena, args_text, &arg_n);
+                // Recursively resolve each arg to a CBMType.
+                const CBMType** arg_types = NULL;
+                if (arg_n > 0 && arg_strs) {
+                    arg_types = (const CBMType**)cbm_arena_alloc(ctx->arena,
+                        (size_t)(arg_n + 1) * sizeof(const CBMType*));
+                    if (arg_types) {
+                        for (int i = 0; i < arg_n; i++) {
+                            arg_types[i] = py_resolve_annotation(ctx, arg_strs[i]);
+                        }
+                        arg_types[arg_n] = NULL;
+                    }
+                }
+
+                // Optional[X] -> UNION(X, None)
+                if (strcmp(btrim, "Optional") == 0 ||
+                    strcmp(btrim, "typing.Optional") == 0) {
+                    if (arg_types && arg_n >= 1 && arg_types[0]) {
+                        return cbm_type_optional(ctx->arena, arg_types[0]);
+                    }
+                }
+                // Union[A, B, ...] -> UNION
+                if (strcmp(btrim, "Union") == 0 || strcmp(btrim, "typing.Union") == 0) {
+                    if (arg_types && arg_n > 0) {
+                        return cbm_type_union(ctx->arena, arg_types, arg_n);
+                    }
+                }
+                // Generic containers -> TEMPLATE
+                if (arg_types && arg_n > 0) {
+                    return cbm_type_template(ctx->arena, btrim, arg_types, arg_n);
+                }
+                return py_resolve_annotation(ctx, btrim);
+            }
+        }
+    }
+
+    // X | Y top-level union (PEP 604).
+    {
+        int depth = 0;
+        for (size_t i = 0; i < len; i++) {
+            char c = ann[i];
+            if (c == '[' || c == '(' || c == '{') depth++;
+            else if (c == ']' || c == ')' || c == '}') depth--;
+            else if (c == '|' && depth == 0) {
+                int n = 0;
+                const char** parts = py_split_subscript_args(ctx->arena, ann, &n);
+                // py_split splits on commas — manually split on '|' at depth 0
+                (void)parts;
+                (void)n;
+                // Simpler: walk again splitting on '|'.
+                int cap = 4;
+                const char** out = (const char**)cbm_arena_alloc(ctx->arena,
+                    (size_t)(cap + 1) * sizeof(const char*));
+                if (!out) break;
+                int onum = 0;
+                int d2 = 0;
+                size_t start = 0;
+                for (size_t j = 0; j <= len; j++) {
+                    char cc = (j < len) ? ann[j] : '|';
+                    if (cc == '[' || cc == '(' || cc == '{') d2++;
+                    else if (cc == ']' || cc == ')' || cc == '}') d2--;
+                    else if (cc == '|' && d2 == 0) {
+                        char* p = py_trim_ws(ctx->arena, ann + start, j - start);
+                        if (p && p[0] && onum < cap) out[onum++] = p;
+                        start = j + 1;
+                    }
+                }
+                if (onum >= 2) {
+                    const CBMType** members = (const CBMType**)cbm_arena_alloc(ctx->arena,
+                        (size_t)(onum + 1) * sizeof(const CBMType*));
+                    if (!members) break;
+                    for (int j = 0; j < onum; j++) {
+                        members[j] = py_resolve_annotation(ctx, out[j]);
+                    }
+                    return cbm_type_union(ctx->arena, members, onum);
+                }
+                break;
+            }
         }
     }
 
@@ -973,18 +1575,29 @@ static bool py_register_def(CBMArena* arena, CBMTypeRegistry* reg, CBMDefinition
         rf.short_name = d->name;
 
         const CBMType** ret_types = NULL;
-        if (d->return_types && d->return_types[0]) {
+        // Prefer d->return_type (full text) when it has subscript brackets
+        // — extract_defs.c::extract_return_types strips them in its array
+        // form, which loses subscript args like Optional[Foo]. d->return_type
+        // is the cbm_node_text of the whole annotation node, which is the
+        // form py_parse_type_text_qn expects.
+        bool prefer_full =
+            d->return_type && d->return_type[0] && strchr(d->return_type, '[');
+        if (prefer_full) {
+            ret_types = (const CBMType**)cbm_arena_alloc(arena, 2 * sizeof(const CBMType*));
+            ret_types[0] = py_parse_type_text_qn(arena, d->return_type, module_qn);
+            ret_types[1] = NULL;
+        } else if (d->return_types && d->return_types[0]) {
             int count = 0;
             while (d->return_types[count]) count++;
             ret_types = (const CBMType**)cbm_arena_alloc(arena,
                 (size_t)(count + 1) * sizeof(const CBMType*));
             for (int j = 0; j < count; j++) {
-                ret_types[j] = cbm_type_named(arena, d->return_types[j]);
+                ret_types[j] = py_parse_type_text_qn(arena, d->return_types[j], module_qn);
             }
             ret_types[count] = NULL;
         } else if (d->return_type && d->return_type[0]) {
             ret_types = (const CBMType**)cbm_arena_alloc(arena, 2 * sizeof(const CBMType*));
-            ret_types[0] = cbm_type_named(arena, d->return_type);
+            ret_types[0] = py_parse_type_text_qn(arena, d->return_type, module_qn);
             ret_types[1] = NULL;
         }
         rf.signature = cbm_type_func(arena, d->param_names, NULL, ret_types);

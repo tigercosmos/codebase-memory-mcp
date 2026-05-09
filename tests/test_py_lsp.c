@@ -839,6 +839,158 @@ TEST(pylsp_round1_generic_subscript_annotation) {
     PASS();
 }
 
+/* ── Round 2 — narrowing ──────────────────────────────────────── */
+
+TEST(pylsp_round2_isinstance_narrow) {
+    /* if isinstance(x, Foo): x.method() — x narrowed to Foo */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def use(x):\n"
+        "    if isinstance(x, Foo):\n"
+        "        return x.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round2_is_not_none_narrow) {
+    /* def f(x: Optional[Foo]):
+     *   if x is not None:
+     *     x.method() */
+    CBMFileResult *r = extract_py(
+        "from typing import Optional\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def use(x: Optional[Foo]):\n"
+        "    if x is not None:\n"
+        "        return x.method()\n");
+    ASSERT_NOT_NULL(r);
+    /* Optional strips to Foo for v1 (we drop generic args). x: Optional[Foo]
+     * binds x as NAMED("Optional"). After narrowing, ideally NAMED("Foo").
+     * Since we strip generic args, x is bound as Optional unrelated. The
+     * narrow extracts the non-None member from a UNION; if x is bound as a
+     * single type (not UNION), the narrow is a no-op. */
+    int idx = find_resolved(r, "use", "method");
+    /* We don't fail this test if narrowing doesn't help — this exercises
+     * the code path. The proper fix needs Optional to bind as UNION. */
+    (void)idx;
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round2_isinstance_no_false_positive_in_else) {
+    /* In the else branch, narrowing must NOT apply. */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def use(x):\n"
+        "    if isinstance(x, Foo):\n"
+        "        return 1\n"
+        "    else:\n"
+        "        return x.method()\n");
+    ASSERT_NOT_NULL(r);
+    /* No high-confidence resolution should exist for x.method() in the
+     * else branch, since x is UNKNOWN there. */
+    int idx = find_resolved(r, "use", "method");
+    if (idx >= 0) {
+        const CBMResolvedCall *rc = &r->resolved_calls.items[idx];
+        ASSERT(rc->confidence < 0.6f);
+    }
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── Round 2/3 — walrus, comprehension, optional-narrow ──────── */
+
+TEST(pylsp_round2_narrow_after_call) {
+    /* Without walrus: x = compute(); if x is not None: x.method().
+     * Tests narrow on UNION return-type-of-call. */
+    CBMFileResult *r = extract_py(
+        "from typing import Optional\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def compute() -> Optional[Foo]:\n"
+        "    return None\n"
+        "def use():\n"
+        "    x = compute()\n"
+        "    if x is not None:\n"
+        "        return x.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round2_walrus_binds) {
+    /* if (x := compute()) is not None: x.method() */
+    CBMFileResult *r = extract_py(
+        "from typing import Optional\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def compute() -> Optional[Foo]:\n"
+        "    return None\n"
+        "def use():\n"
+        "    if (x := compute()) is not None:\n"
+        "        return x.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round3_listcomp_element_method) {
+    /* [x.method() for x in items] where items: list[Foo] */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def use(items: list[Foo]):\n"
+        "    return [x.method() for x in items]\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round3_for_loop_element_method) {
+    /* for x in items: x.method() — items: list[Foo] */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def use(items: list[Foo]):\n"
+        "    for x in items:\n"
+        "        x.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round3_optional_narrow_with_union) {
+    /* def f(x: Optional[Foo]):
+     *   if x is not None: x.method() */
+    CBMFileResult *r = extract_py(
+        "from typing import Optional\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def use(x: Optional[Foo]):\n"
+        "    if x is not None:\n"
+        "        return x.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(py_lsp) {
@@ -889,4 +1041,14 @@ SUITE(py_lsp) {
     RUN_TEST(pylsp_round1_forward_reference);
     RUN_TEST(pylsp_round1_self_return_chains);
     RUN_TEST(pylsp_round1_generic_subscript_annotation);
+    /* Round 2 — narrowing */
+    RUN_TEST(pylsp_round2_isinstance_narrow);
+    RUN_TEST(pylsp_round2_is_not_none_narrow);
+    RUN_TEST(pylsp_round2_isinstance_no_false_positive_in_else);
+    /* Round 2/3 — walrus, comprehension, optional-narrow */
+    RUN_TEST(pylsp_round2_narrow_after_call);
+    RUN_TEST(pylsp_round2_walrus_binds);
+    RUN_TEST(pylsp_round3_listcomp_element_method);
+    RUN_TEST(pylsp_round3_for_loop_element_method);
+    RUN_TEST(pylsp_round3_optional_narrow_with_union);
 }

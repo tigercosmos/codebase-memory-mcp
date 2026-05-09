@@ -542,7 +542,7 @@ static cbm_store_t *store_open_internal(const char *path, bool in_memory) {
     if (configure_pragmas(s, in_memory) != CBM_STORE_OK || init_schema(s) != CBM_STORE_OK ||
         create_user_indexes(s) != CBM_STORE_OK) {
         sqlite3_close(s->db);
-        free((void *)s->db_path);
+        safe_str_free(&s->db_path);
         free(s);
         return NULL;
     }
@@ -597,7 +597,7 @@ cbm_store_t *cbm_store_open_path_query(const char *db_path) {
 
     if (configure_pragmas(s, false) != CBM_STORE_OK) {
         sqlite3_close(s->db);
-        free((void *)s->db_path);
+        safe_str_free(&s->db_path);
         free(s);
         return NULL;
     }
@@ -718,7 +718,7 @@ void cbm_store_close(cbm_store_t *s) {
     /* Use sqlite3_close_v2 — auto-deallocates when last statement finalizes.
      * Prevents ASan false-positive leaks from sqlite3 internal state. */
     sqlite3_close_v2(s->db);
-    free((void *)s->db_path);
+    safe_str_free(&s->db_path);
     free(s);
 }
 
@@ -2278,9 +2278,9 @@ int cbm_store_search(cbm_store_t *s, const cbm_search_params_t *params, cbm_sear
     const char *select_cols = "SELECT n.id, n.project, n.label, n.name, n.qualified_name, "
                               "n.file_path, n.start_line, n.end_line, n.properties, "
                               "(SELECT COUNT(*) FROM edges e WHERE e.target_id = n.id AND "
-                              "e.type = 'CALLS') AS in_deg, "
+                              "e.type IN ('CALLS', 'USAGE')) AS in_deg, "
                               "(SELECT COUNT(*) FROM edges e WHERE e.source_id = n.id AND "
-                              "e.type = 'CALLS') AS out_deg ";
+                              "e.type IN ('CALLS', 'USAGE')) AS out_deg ";
 
     char where[CBM_SZ_2K] = "";
     search_bind_t binds[ST_SEARCH_MAX_BINDS];
@@ -2304,7 +2304,7 @@ int cbm_store_search(cbm_store_t *s, const cbm_search_params_t *params, cbm_sear
     snprintf(count_sql, sizeof(count_sql), "SELECT COUNT(*) FROM (%s)", sql);
 
     /* Add ORDER BY + LIMIT */
-    int limit = params->limit > 0 ? params->limit : ST_HALF_SEC;
+    int limit = params->limit > 0 ? params->limit : CBM_DEFAULT_SEARCH_LIMIT;
     int offset = params->offset;
     const char *name_col = has_degree_filter ? "name" : "n.name";
     char order_limit[CBM_SZ_128];
@@ -2368,14 +2368,14 @@ void cbm_store_search_free(cbm_search_output_t *out) {
     }
     for (int i = 0; i < out->count; i++) {
         cbm_search_result_t *r = &out->results[i];
-        free((void *)r->node.project);
-        free((void *)r->node.label);
-        free((void *)r->node.name);
-        free((void *)r->node.qualified_name);
-        free((void *)r->node.file_path);
-        free((void *)r->node.properties_json);
+        safe_str_free(&r->node.project);
+        safe_str_free(&r->node.label);
+        safe_str_free(&r->node.name);
+        safe_str_free(&r->node.qualified_name);
+        safe_str_free(&r->node.file_path);
+        safe_str_free(&r->node.properties_json);
         for (int j = 0; j < r->connected_count; j++) {
-            free((void *)r->connected_names[j]);
+            safe_str_free(&r->connected_names[j]);
         }
         free(r->connected_names);
     }
@@ -2570,30 +2570,30 @@ void cbm_store_traverse_free(cbm_traverse_result_t *out) {
         return;
     }
     /* Free root */
-    free((void *)out->root.project);
-    free((void *)out->root.label);
-    free((void *)out->root.name);
-    free((void *)out->root.qualified_name);
-    free((void *)out->root.file_path);
-    free((void *)out->root.properties_json);
+    safe_str_free(&out->root.project);
+    safe_str_free(&out->root.label);
+    safe_str_free(&out->root.name);
+    safe_str_free(&out->root.qualified_name);
+    safe_str_free(&out->root.file_path);
+    safe_str_free(&out->root.properties_json);
 
     /* Free visited */
     for (int i = 0; i < out->visited_count; i++) {
         cbm_node_hop_t *h = &out->visited[i];
-        free((void *)h->node.project);
-        free((void *)h->node.label);
-        free((void *)h->node.name);
-        free((void *)h->node.qualified_name);
-        free((void *)h->node.file_path);
-        free((void *)h->node.properties_json);
+        safe_str_free(&h->node.project);
+        safe_str_free(&h->node.label);
+        safe_str_free(&h->node.name);
+        safe_str_free(&h->node.qualified_name);
+        safe_str_free(&h->node.file_path);
+        safe_str_free(&h->node.properties_json);
     }
     free(out->visited);
 
     /* Free edges */
     for (int i = 0; i < out->edge_count; i++) {
-        free((void *)out->edges[i].from_name);
-        free((void *)out->edges[i].to_name);
-        free((void *)out->edges[i].type);
+        safe_str_free(&out->edges[i].from_name);
+        safe_str_free(&out->edges[i].to_name);
+        safe_str_free(&out->edges[i].type);
     }
     free(out->edges);
 
@@ -2758,7 +2758,7 @@ int cbm_store_get_schema(cbm_store_t *s, const char *project, cbm_schema_info_t 
                 void *tmp = realloc(arr, new_cap * sizeof(cbm_label_count_t));
                 if (!tmp) {
                     for (int i = 0; i < n; i++) {
-                        free((void *)arr[i].label);
+                        safe_str_free(&arr[i].label);
                     }
                     free(arr);
                     sqlite3_finalize(stmt);
@@ -2825,7 +2825,7 @@ int cbm_store_get_schema(cbm_store_t *s, const char *project, cbm_schema_info_t 
                 void *tmp = realloc(arr, new_cap * sizeof(cbm_type_count_t));
                 if (!tmp) {
                     for (int i = 0; i < n; i++) {
-                        free((void *)arr[i].type);
+                        safe_str_free(&arr[i].type);
                     }
                     free(arr);
                     sqlite3_finalize(stmt);
@@ -2872,7 +2872,7 @@ void cbm_store_schema_free(cbm_schema_info_t *out) {
         return;
     }
     for (int i = 0; i < out->node_label_count; i++) {
-        free((void *)out->node_labels[i].label);
+        safe_str_free(&out->node_labels[i].label);
         for (int j = 0; j < out->node_labels[i].property_count; j++) {
             free(out->node_labels[i].properties[j]);
         }
@@ -2881,7 +2881,7 @@ void cbm_store_schema_free(cbm_schema_info_t *out) {
     free(out->node_labels);
 
     for (int i = 0; i < out->edge_type_count; i++) {
-        free((void *)out->edge_types[i].type);
+        safe_str_free(&out->edge_types[i].type);
         for (int j = 0; j < out->edge_types[i].property_count; j++) {
             free(out->edge_types[i].properties[j]);
         }
@@ -2890,22 +2890,22 @@ void cbm_store_schema_free(cbm_schema_info_t *out) {
     free(out->edge_types);
 
     for (int i = 0; i < out->rel_pattern_count; i++) {
-        free((void *)out->rel_patterns[i]);
+        safe_str_free(&out->rel_patterns[i]);
     }
     free(out->rel_patterns);
 
     for (int i = 0; i < out->sample_func_count; i++) {
-        free((void *)out->sample_func_names[i]);
+        safe_str_free(&out->sample_func_names[i]);
     }
     free(out->sample_func_names);
 
     for (int i = 0; i < out->sample_class_count; i++) {
-        free((void *)out->sample_class_names[i]);
+        safe_str_free(&out->sample_class_names[i]);
     }
     free(out->sample_class_names);
 
     for (int i = 0; i < out->sample_qn_count; i++) {
-        free((void *)out->sample_qns[i]);
+        safe_str_free(&out->sample_qns[i]);
     }
     free(out->sample_qns);
 
@@ -3192,17 +3192,17 @@ static int arch_routes(cbm_store_t *s, const char *project, cbm_architecture_inf
         char *val;
         val = extract_json_string_prop(props, "\"method\"", ST_METHOD_PROP_LEN);
         if (val) {
-            free((void *)arr[n].method);
+            safe_str_free(&arr[n].method);
             arr[n].method = val;
         }
         val = extract_json_string_prop(props, "\"path\"", ST_PATH_PROP_LEN);
         if (val) {
-            free((void *)arr[n].path);
+            safe_str_free(&arr[n].path);
             arr[n].path = val;
         }
         val = extract_json_string_prop(props, "\"handler\"", ST_HANDLER_PROP_LEN);
         if (val) {
-            free((void *)arr[n].handler);
+            safe_str_free(&arr[n].handler);
             arr[n].handler = val;
         }
         n++;
@@ -3649,8 +3649,8 @@ static int arch_layers(cbm_store_t *s, const char *project, cbm_architecture_inf
 
     /* Cleanup */
     for (int i = 0; i < bcount; i++) {
-        free((void *)boundaries[i].from);
-        free((void *)boundaries[i].to);
+        safe_str_free(&boundaries[i].from);
+        safe_str_free(&boundaries[i].to);
     }
     free(boundaries);
     for (int i = 0; i < nrpkgs; i++) {
@@ -4262,66 +4262,66 @@ void cbm_store_architecture_free(cbm_architecture_info_t *out) {
         return;
     }
     for (int i = 0; i < out->language_count; i++) {
-        free((void *)out->languages[i].language);
+        safe_str_free(&out->languages[i].language);
     }
     free(out->languages);
     for (int i = 0; i < out->package_count; i++) {
-        free((void *)out->packages[i].name);
+        safe_str_free(&out->packages[i].name);
     }
     free(out->packages);
     for (int i = 0; i < out->entry_point_count; i++) {
-        free((void *)out->entry_points[i].name);
-        free((void *)out->entry_points[i].qualified_name);
-        free((void *)out->entry_points[i].file);
+        safe_str_free(&out->entry_points[i].name);
+        safe_str_free(&out->entry_points[i].qualified_name);
+        safe_str_free(&out->entry_points[i].file);
     }
     free(out->entry_points);
     for (int i = 0; i < out->route_count; i++) {
-        free((void *)out->routes[i].method);
-        free((void *)out->routes[i].path);
-        free((void *)out->routes[i].handler);
+        safe_str_free(&out->routes[i].method);
+        safe_str_free(&out->routes[i].path);
+        safe_str_free(&out->routes[i].handler);
     }
     free(out->routes);
     for (int i = 0; i < out->hotspot_count; i++) {
-        free((void *)out->hotspots[i].name);
-        free((void *)out->hotspots[i].qualified_name);
+        safe_str_free(&out->hotspots[i].name);
+        safe_str_free(&out->hotspots[i].qualified_name);
     }
     free(out->hotspots);
     for (int i = 0; i < out->boundary_count; i++) {
-        free((void *)out->boundaries[i].from);
-        free((void *)out->boundaries[i].to);
+        safe_str_free(&out->boundaries[i].from);
+        safe_str_free(&out->boundaries[i].to);
     }
     free(out->boundaries);
     for (int i = 0; i < out->service_count; i++) {
-        free((void *)out->services[i].from);
-        free((void *)out->services[i].to);
-        free((void *)out->services[i].type);
+        safe_str_free(&out->services[i].from);
+        safe_str_free(&out->services[i].to);
+        safe_str_free(&out->services[i].type);
     }
     free(out->services);
     for (int i = 0; i < out->layer_count; i++) {
-        free((void *)out->layers[i].name);
-        free((void *)out->layers[i].layer);
-        free((void *)out->layers[i].reason);
+        safe_str_free(&out->layers[i].name);
+        safe_str_free(&out->layers[i].layer);
+        safe_str_free(&out->layers[i].reason);
     }
     free(out->layers);
     for (int i = 0; i < out->cluster_count; i++) {
-        free((void *)out->clusters[i].label);
+        safe_str_free(&out->clusters[i].label);
         for (int j = 0; j < out->clusters[i].top_node_count; j++) {
-            free((void *)out->clusters[i].top_nodes[j]);
+            safe_str_free(&out->clusters[i].top_nodes[j]);
         }
         free(out->clusters[i].top_nodes);
         for (int j = 0; j < out->clusters[i].package_count; j++) {
-            free((void *)out->clusters[i].packages[j]);
+            safe_str_free(&out->clusters[i].packages[j]);
         }
         free(out->clusters[i].packages);
         for (int j = 0; j < out->clusters[i].edge_type_count; j++) {
-            free((void *)out->clusters[i].edge_types[j]);
+            safe_str_free(&out->clusters[i].edge_types[j]);
         }
         free(out->clusters[i].edge_types);
     }
     free(out->clusters);
     for (int i = 0; i < out->file_tree_count; i++) {
-        free((void *)out->file_tree[i].path);
-        free((void *)out->file_tree[i].type);
+        safe_str_free(&out->file_tree[i].path);
+        safe_str_free(&out->file_tree[i].type);
     }
     free(out->file_tree);
     memset(out, 0, sizeof(*out));
@@ -4707,10 +4707,10 @@ void cbm_store_adr_free(cbm_adr_t *adr) {
     if (!adr) {
         return;
     }
-    free((void *)adr->project);
-    free((void *)adr->content);
-    free((void *)adr->created_at);
-    free((void *)adr->updated_at);
+    safe_str_free(&adr->project);
+    safe_str_free(&adr->content);
+    safe_str_free(&adr->created_at);
+    safe_str_free(&adr->updated_at);
     memset(adr, 0, sizeof(*adr));
 }
 
@@ -4748,12 +4748,12 @@ int cbm_store_find_architecture_docs(cbm_store_t *s, const char *project, char *
 /* ── Memory management ──────────────────────────────────────────── */
 
 void cbm_node_free_fields(cbm_node_t *n) {
-    free((void *)n->project);
-    free((void *)n->label);
-    free((void *)n->name);
-    free((void *)n->qualified_name);
-    free((void *)n->file_path);
-    free((void *)n->properties_json);
+    safe_str_free(&n->project);
+    safe_str_free(&n->label);
+    safe_str_free(&n->name);
+    safe_str_free(&n->qualified_name);
+    safe_str_free(&n->file_path);
+    safe_str_free(&n->properties_json);
 }
 
 void cbm_store_free_nodes(cbm_node_t *nodes, int count) {
@@ -4771,17 +4771,17 @@ void cbm_store_free_edges(cbm_edge_t *edges, int count) {
         return;
     }
     for (int i = 0; i < count; i++) {
-        free((void *)edges[i].project);
-        free((void *)edges[i].type);
-        free((void *)edges[i].properties_json);
+        safe_str_free(&edges[i].project);
+        safe_str_free(&edges[i].type);
+        safe_str_free(&edges[i].properties_json);
     }
     free(edges);
 }
 
 void cbm_project_free_fields(cbm_project_t *p) {
-    free((void *)p->name);
-    free((void *)p->indexed_at);
-    free((void *)p->root_path);
+    safe_str_free(&p->name);
+    safe_str_free(&p->indexed_at);
+    safe_str_free(&p->root_path);
 }
 
 void cbm_store_free_projects(cbm_project_t *projects, int count) {
@@ -4799,9 +4799,9 @@ void cbm_store_free_file_hashes(cbm_file_hash_t *hashes, int count) {
         return;
     }
     for (int i = 0; i < count; i++) {
-        free((void *)hashes[i].project);
-        free((void *)hashes[i].rel_path);
-        free((void *)hashes[i].sha256);
+        safe_str_free(&hashes[i].project);
+        safe_str_free(&hashes[i].rel_path);
+        safe_str_free(&hashes[i].sha256);
     }
     free(hashes);
 }

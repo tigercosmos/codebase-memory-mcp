@@ -31,6 +31,52 @@ static inline void *safe_realloc(void *ptr, size_t size) {
     return tmp;
 }
 
+/* Safe free: frees and NULLs a pointer to prevent double-free / use-after-free.
+ * Use via the safe_free() macro so the caller's pointer is actually cleared. */
+static inline void safe_free_impl(void **pp) {
+    if (pp && *pp) {
+        free(*pp);
+        *pp = NULL;
+    }
+}
+#define safe_free(ptr) safe_free_impl((void **)(void *)&(ptr))
+
+/* Safe const string free: frees a const char* and NULLs it.
+ * Casts away const so callers don't repeat the (void *) dance. */
+static inline void safe_str_free(const char **sp) {
+    if (sp && *sp) {
+        free((void *)*sp);
+        *sp = NULL;
+    }
+}
+
+/* Safe buffer free: frees a heap array and zeros its element count.
+ * Use for dynamic arrays paired with a size_t count. */
+static inline void safe_buf_free_impl(void **buf, size_t *count) {
+    if (buf && *buf) {
+        free(*buf);
+        *buf = NULL;
+    }
+    if (count) {
+        *count = 0;
+    }
+}
+#define safe_buf_free(buf, countp) safe_buf_free_impl((void **)(void *)&(buf), (countp))
+
+/* Safe grow: doubles capacity and reallocs when count reaches cap.
+ * Note: uses safe_realloc which frees the old buffer on failure, so this is
+ * only appropriate for arrays whose elements don't own additional heap memory.
+ * For arrays of heap-allocated pointers, prefer a manual realloc+cleanup pattern.
+ * Usage: safe_grow(arr, count, cap, growth_factor)
+ * After the call, arr is the new buffer (NULL on OOM). */
+#define safe_grow(arr, n, cap, factor)                                                             \
+    do {                                                                                           \
+        if ((size_t)(n) >= (size_t)(cap)) {                                                        \
+            (cap) *= (factor);                                                                     \
+            (arr) = safe_realloc((arr), (size_t)(cap) * sizeof(*(arr)));                           \
+        }                                                                                          \
+    } while (0)
+
 /* ── Memory mapping ────────────────────────────────────────────── */
 
 /* Map a file read-only into memory. Returns NULL on error.

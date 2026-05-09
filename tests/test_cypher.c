@@ -1026,6 +1026,30 @@ TEST(cypher_edge_filter_numeric_gte) {
     PASS();
 }
 
+TEST(cypher_bare_edge_return_exposes_properties_json) {
+    /* `RETURN r` on an edge variable, with no property accessor, should
+     * surface the edge's full properties JSON (or "{}"). Before the fix,
+     * binding_get_virtual returned an empty string, which made bare edge
+     * returns useless for callers that wanted to inspect timestamps,
+     * weights, etc. without naming each property up front. */
+    cbm_store_t *s = setup_cypher_multi_edge_store();
+    cbm_cypher_result_t r = {0};
+
+    int rc = cbm_cypher_execute(
+        s, "MATCH (a)-[r:HTTP_CALLS]->(b) WHERE r.method = 'POST' RETURN r", "testproj", 0, &r);
+    ASSERT_EQ(rc, 0);
+    ASSERT_EQ(r.row_count, 1);
+    const char *r_val = cypher_get_col(&r, 0, "r");
+    ASSERT_NOT_NULL(r_val);
+    /* Expect JSON object content rather than the previous empty string. */
+    ASSERT_NOT_NULL(strstr(r_val, "url_path"));
+    ASSERT_NOT_NULL(strstr(r_val, "/api/orders"));
+
+    cbm_cypher_result_free(&r);
+    cbm_store_close(s);
+    PASS();
+}
+
 TEST(cypher_edge_return_without_filter) {
     cbm_store_t *s = setup_cypher_multi_edge_store();
     cbm_cypher_result_t r = {0};
@@ -2142,6 +2166,7 @@ SUITE(cypher) {
     RUN_TEST(cypher_edge_type_prop);
     RUN_TEST(cypher_edge_filter_contains);
     RUN_TEST(cypher_edge_filter_numeric_gte);
+    RUN_TEST(cypher_bare_edge_return_exposes_properties_json);
     RUN_TEST(cypher_edge_return_without_filter);
     RUN_TEST(cypher_edge_filter_equals);
     RUN_TEST(cypher_edge_filter_starts_with);

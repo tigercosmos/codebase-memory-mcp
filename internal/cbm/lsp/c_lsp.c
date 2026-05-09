@@ -2213,8 +2213,10 @@ static const CBMType* c_eval_expr_type_inner(CLSPContext* ctx, TSNode node) {
 // c_lookup_member: method/field lookup with base class traversal
 // ============================================================================
 
-const CBMRegisteredFunc* c_lookup_member(CLSPContext* ctx, const char* type_qn, const char* member_name) {
+static const CBMRegisteredFunc* c_lookup_member_depth(CLSPContext* ctx,
+    const char* type_qn, const char* member_name, int depth) {
     if (!type_qn || !member_name) return NULL;
+    if (depth > CBM_LSP_MAX_LOOKUP_DEPTH) return NULL;
 
     // Direct method lookup
     const CBMRegisteredFunc* f = cbm_registry_lookup_method(ctx->registry, type_qn, member_name);
@@ -2236,7 +2238,7 @@ const CBMRegisteredFunc* c_lookup_member(CLSPContext* ctx, const char* type_qn, 
             if (underlying && !cbm_type_is_unknown(underlying)) {
                 const char* alias_target_qn = type_to_qn(underlying);
                 if (alias_target_qn) {
-                    f = c_lookup_member(ctx, alias_target_qn, member_name);
+                    f = c_lookup_member_depth(ctx, alias_target_qn, member_name, depth + 1);
                     if (f) return f;
                 }
             }
@@ -2252,20 +2254,24 @@ const CBMRegisteredFunc* c_lookup_member(CLSPContext* ctx, const char* type_qn, 
     if (rt) {
         // Alias chain
         if (rt->alias_of) {
-            f = c_lookup_member(ctx, rt->alias_of, member_name);
+            f = c_lookup_member_depth(ctx, rt->alias_of, member_name, depth + 1);
             if (f) return f;
         }
 
         // Base classes (embedded_types stores base class QNs)
         if (rt->embedded_types) {
             for (int i = 0; rt->embedded_types[i]; i++) {
-                f = c_lookup_member(ctx, rt->embedded_types[i], member_name);
+                f = c_lookup_member_depth(ctx, rt->embedded_types[i], member_name, depth + 1);
                 if (f) return f;
             }
         }
     }
 
     return NULL;
+}
+
+const CBMRegisteredFunc* c_lookup_member(CLSPContext* ctx, const char* type_qn, const char* member_name) {
+    return c_lookup_member_depth(ctx, type_qn, member_name, 0);
 }
 
 // Field type lookup

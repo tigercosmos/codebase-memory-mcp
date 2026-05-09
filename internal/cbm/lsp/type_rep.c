@@ -176,6 +176,139 @@ const CBMType* cbm_type_alias(CBMArena* a, const char* alias_qn, const CBMType* 
     return t;
 }
 
+// --- Python-flavored constructors -------------------------------------------
+
+// Dedupe members by structural equality, in place. Returns new length.
+// Preserves first-seen order so output is deterministic.
+static int union_member_dedupe(const CBMType** scratch, int count) {
+    int out = 0;
+    for (int i = 0; i < count; i++) {
+        bool seen = false;
+        for (int j = 0; j < out; j++) {
+            if (cbm_type_equal(scratch[i], scratch[j])) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen) {
+            scratch[out++] = scratch[i];
+        }
+    }
+    return out;
+}
+
+const CBMType* cbm_type_union(CBMArena* a, const CBMType** members, int count) {
+    if (!members || count <= 0) return &unknown_singleton;
+
+    // Flatten: nested UNIONs unfold their members into the parent.
+    int flat_cap = count * 2 + 4;
+    const CBMType** flat = (const CBMType**)cbm_arena_alloc(a, flat_cap * sizeof(const CBMType*));
+    if (!flat) return &unknown_singleton;
+    int flat_count = 0;
+    for (int i = 0; i < count; i++) {
+        const CBMType* m = members[i];
+        if (!m || cbm_type_is_unknown(m)) continue;
+        if (m->kind == CBM_TYPE_UNION) {
+            for (int j = 0; j < m->data.union_type.count; j++) {
+                if (flat_count < flat_cap) flat[flat_count++] = m->data.union_type.members[j];
+            }
+        } else {
+            if (flat_count < flat_cap) flat[flat_count++] = m;
+        }
+    }
+    if (flat_count == 0) return &unknown_singleton;
+
+    // Dedupe by structural equality.
+    int unique_count = union_member_dedupe(flat, flat_count);
+    if (unique_count == 1) return flat[0];
+
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_UNION;
+    const CBMType** arr = (const CBMType**)cbm_arena_alloc(a, (unique_count + 1) * sizeof(const CBMType*));
+    if (!arr) return &unknown_singleton;
+    for (int i = 0; i < unique_count; i++) arr[i] = flat[i];
+    arr[unique_count] = NULL;
+    t->data.union_type.members = arr;
+    t->data.union_type.count = unique_count;
+    return t;
+}
+
+const CBMType* cbm_type_optional(CBMArena* a, const CBMType* inner) {
+    if (!inner) return &unknown_singleton;
+    const CBMType* none_t = cbm_type_builtin(a, "None");
+    const CBMType* members[2] = { inner, none_t };
+    return cbm_type_union(a, members, 2);
+}
+
+const CBMType* cbm_type_literal(CBMArena* a, const CBMType* base, const char* literal_text) {
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_LITERAL;
+    t->data.literal.base = base ? base : &unknown_singleton;
+    t->data.literal.literal_text = literal_text ? cbm_arena_strdup(a, literal_text) : NULL;
+    return t;
+}
+
+const CBMType* cbm_type_protocol(CBMArena* a, const char* qualified_name,
+    const char** method_names, const CBMType** method_sigs) {
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_PROTOCOL;
+    t->data.protocol.qualified_name = qualified_name ? cbm_arena_strdup(a, qualified_name) : NULL;
+
+    int n = 0;
+    if (method_names) {
+        while (method_names[n]) n++;
+    }
+    if (n > 0) {
+        const char** names = (const char**)cbm_arena_alloc(a, (n + 1) * sizeof(const char*));
+        const CBMType** sigs = (const CBMType**)cbm_arena_alloc(a, (n + 1) * sizeof(const CBMType*));
+        if (names && sigs) {
+            for (int i = 0; i < n; i++) {
+                names[i] = cbm_arena_strdup(a, method_names[i]);
+                sigs[i] = method_sigs ? method_sigs[i] : NULL;
+            }
+            names[n] = NULL;
+            sigs[n] = NULL;
+            t->data.protocol.method_names = names;
+            t->data.protocol.method_sigs = sigs;
+        }
+    }
+    return t;
+}
+
+const CBMType* cbm_type_module(CBMArena* a, const char* module_qn) {
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_MODULE;
+    t->data.module.module_qn = module_qn ? cbm_arena_strdup(a, module_qn) : NULL;
+    return t;
+}
+
+const CBMType* cbm_type_callable(CBMArena* a, const CBMType** param_types, int param_count,
+    const CBMType* return_type) {
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_CALLABLE;
+    t->data.callable.param_count = param_count;
+    t->data.callable.return_type = return_type ? return_type : &unknown_singleton;
+    if (param_count > 0 && param_types) {
+        const CBMType** arr = (const CBMType**)cbm_arena_alloc(a, (param_count + 1) * sizeof(const CBMType*));
+        if (arr) {
+            for (int i = 0; i < param_count; i++) arr[i] = param_types[i];
+            arr[param_count] = NULL;
+            t->data.callable.param_types = arr;
+        }
+    }
+    return t;
+}
+
 // Operations
 
 const CBMType* cbm_type_deref(const CBMType* t) {
@@ -217,6 +350,142 @@ bool cbm_type_is_pointer(const CBMType* t) {
 
 bool cbm_type_is_reference(const CBMType* t) {
     return t && (t->kind == CBM_TYPE_REFERENCE || t->kind == CBM_TYPE_RVALUE_REF);
+}
+
+bool cbm_type_is_union(const CBMType* t) {
+    return t && t->kind == CBM_TYPE_UNION;
+}
+
+bool cbm_type_is_protocol(const CBMType* t) {
+    return t && t->kind == CBM_TYPE_PROTOCOL;
+}
+
+bool cbm_type_is_module(const CBMType* t) {
+    return t && t->kind == CBM_TYPE_MODULE;
+}
+
+static bool str_eq_or_both_null(const char* a, const char* b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    return strcmp(a, b) == 0;
+}
+
+bool cbm_type_equal(const CBMType* a, const CBMType* b) {
+    if (a == b) return true;
+    if (!a || !b) return false;
+    if (a->kind != b->kind) return false;
+
+    switch (a->kind) {
+    case CBM_TYPE_UNKNOWN:
+        return true;
+    case CBM_TYPE_NAMED:
+        return str_eq_or_both_null(a->data.named.qualified_name, b->data.named.qualified_name);
+    case CBM_TYPE_BUILTIN:
+        return str_eq_or_both_null(a->data.builtin.name, b->data.builtin.name);
+    case CBM_TYPE_TYPE_PARAM:
+        return str_eq_or_both_null(a->data.type_param.name, b->data.type_param.name);
+    case CBM_TYPE_POINTER:
+        return cbm_type_equal(a->data.pointer.elem, b->data.pointer.elem);
+    case CBM_TYPE_SLICE:
+        return cbm_type_equal(a->data.slice.elem, b->data.slice.elem);
+    case CBM_TYPE_REFERENCE:
+    case CBM_TYPE_RVALUE_REF:
+        return cbm_type_equal(a->data.reference.elem, b->data.reference.elem);
+    case CBM_TYPE_MAP:
+        return cbm_type_equal(a->data.map.key, b->data.map.key)
+            && cbm_type_equal(a->data.map.value, b->data.map.value);
+    case CBM_TYPE_CHANNEL:
+        return a->data.channel.direction == b->data.channel.direction
+            && cbm_type_equal(a->data.channel.elem, b->data.channel.elem);
+    case CBM_TYPE_TUPLE: {
+        if (a->data.tuple.count != b->data.tuple.count) return false;
+        for (int i = 0; i < a->data.tuple.count; i++) {
+            if (!cbm_type_equal(a->data.tuple.elems[i], b->data.tuple.elems[i])) return false;
+        }
+        return true;
+    }
+    case CBM_TYPE_TEMPLATE: {
+        if (!str_eq_or_both_null(a->data.template_type.template_name,
+                                  b->data.template_type.template_name)) return false;
+        if (a->data.template_type.arg_count != b->data.template_type.arg_count) return false;
+        for (int i = 0; i < a->data.template_type.arg_count; i++) {
+            if (!cbm_type_equal(a->data.template_type.template_args[i],
+                                 b->data.template_type.template_args[i])) return false;
+        }
+        return true;
+    }
+    case CBM_TYPE_ALIAS:
+        return str_eq_or_both_null(a->data.alias.alias_qn, b->data.alias.alias_qn);
+    case CBM_TYPE_UNION: {
+        if (a->data.union_type.count != b->data.union_type.count) return false;
+        // Order-independent: every a-member must appear in b's set.
+        for (int i = 0; i < a->data.union_type.count; i++) {
+            bool found = false;
+            for (int j = 0; j < b->data.union_type.count; j++) {
+                if (cbm_type_equal(a->data.union_type.members[i],
+                                    b->data.union_type.members[j])) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+        return true;
+    }
+    case CBM_TYPE_LITERAL:
+        return cbm_type_equal(a->data.literal.base, b->data.literal.base)
+            && str_eq_or_both_null(a->data.literal.literal_text, b->data.literal.literal_text);
+    case CBM_TYPE_PROTOCOL:
+        return str_eq_or_both_null(a->data.protocol.qualified_name,
+                                    b->data.protocol.qualified_name);
+    case CBM_TYPE_MODULE:
+        return str_eq_or_both_null(a->data.module.module_qn, b->data.module.module_qn);
+    case CBM_TYPE_CALLABLE: {
+        if (a->data.callable.param_count != b->data.callable.param_count) return false;
+        if (!cbm_type_equal(a->data.callable.return_type, b->data.callable.return_type)) return false;
+        if (a->data.callable.param_count > 0) {
+            for (int i = 0; i < a->data.callable.param_count; i++) {
+                if (!cbm_type_equal(a->data.callable.param_types[i],
+                                     b->data.callable.param_types[i])) return false;
+            }
+        }
+        return true;
+    }
+    case CBM_TYPE_FUNC:
+    case CBM_TYPE_INTERFACE:
+    case CBM_TYPE_STRUCT:
+        // Structural equality on these is expensive and rarely needed by callers
+        // beyond pointer identity (already checked above). Treat as not-equal.
+        return false;
+    }
+    return false;
+}
+
+bool cbm_type_protocol_satisfied_by(const CBMType* proto, const CBMType* candidate) {
+    if (!proto || proto->kind != CBM_TYPE_PROTOCOL) return false;
+    if (!candidate) return false;
+    // candidate must be a NAMED or PROTOCOL type with a method-name set we
+    // can inspect. For PROTOCOL candidates, trivially satisfied if every
+    // proto method appears in candidate's method list.
+    if (candidate->kind == CBM_TYPE_PROTOCOL) {
+        if (!proto->data.protocol.method_names) return true;
+        for (int i = 0; proto->data.protocol.method_names[i]; i++) {
+            const char* needed = proto->data.protocol.method_names[i];
+            bool found = false;
+            if (candidate->data.protocol.method_names) {
+                for (int j = 0; candidate->data.protocol.method_names[j]; j++) {
+                    if (str_eq_or_both_null(needed, candidate->data.protocol.method_names[j])) {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+            if (!found) return false;
+        }
+        return true;
+    }
+    // Nominal candidates require the registry — caller's responsibility.
+    return false;
 }
 
 const CBMType* cbm_type_resolve_alias(const CBMType* t) {

@@ -12,3 +12,5 @@
 #include "lsp/generated/cpp_stdlib_data.c"
 #include "lsp/php_lsp.c"
 #include "lsp/generated/php_stdlib_data.c"
+#include "lsp/generated/python_stdlib_data.c"
+#include "lsp/py_lsp.c"

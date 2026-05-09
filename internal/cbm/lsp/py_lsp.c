@@ -293,11 +293,16 @@ static const char* py_lookup_dict_dispatch(PyLSPContext* ctx, const char* var,
 static void py_emit_resolved_call(PyLSPContext* ctx, const char* callee_qn,
     const char* strategy, float confidence) {
     if (!ctx || !ctx->resolved_calls || !callee_qn || !ctx->enclosing_func_qn) return;
-    // Dedupe by (caller, callee). When multiple resolution paths converge
-    // on the same edge (e.g. expression typing and emission both walk a
-    // node), keep only the first entry — the path with the higher
-    // confidence wins on subsequent re-emission.
-    for (int i = 0; i < ctx->resolved_calls->count; i++) {
+    // Dedupe by (caller, callee). Bounded-window scan: most duplicate
+    // emissions are nearby in time (same expression evaluated by both
+    // resolver and emitter passes), so checking only the last DEDUP_WINDOW
+    // entries catches the common case while keeping per-emission O(1).
+    // Without this cap the dedup is O(N) per emission -> O(N^2) per file
+    // and dominates above ~1k call sites.
+    enum { DEDUP_WINDOW = 256 };
+    int n = ctx->resolved_calls->count;
+    int start = n > DEDUP_WINDOW ? n - DEDUP_WINDOW : 0;
+    for (int i = start; i < n; i++) {
         CBMResolvedCall* rc = &ctx->resolved_calls->items[i];
         if (rc->caller_qn && rc->callee_qn &&
             strcmp(rc->caller_qn, ctx->enclosing_func_qn) == 0 &&
@@ -708,14 +713,22 @@ static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node) {
             if (rt) return cbm_type_named(ctx->arena, qn);
             // Submodule: if any registered function/type has qn starting
             // with "<mod>.<attr>." then mod.attr is itself a module.
+            // Linear scan over registry funcs is O(R) per access; we
+            // skip it for the common case where mod.attr is already
+            // matched as a function/type above. With ~900 stdlib funcs
+            // and many module-attr accesses per file, this can dominate
+            // — keeping the loop tight and bailing early on first match.
             const char* prefix = cbm_arena_sprintf(ctx->arena, "%s.", qn);
             size_t prefix_len = strlen(prefix);
+            bool is_submodule = false;
             for (int i = 0; i < ctx->registry->func_count; i++) {
                 const char* fqn = ctx->registry->funcs[i].qualified_name;
                 if (fqn && strncmp(fqn, prefix, prefix_len) == 0) {
-                    return cbm_type_module(ctx->arena, qn);
+                    is_submodule = true;
+                    break;
                 }
             }
+            if (is_submodule) return cbm_type_module(ctx->arena, qn);
             return cbm_type_unknown();
         }
         if (obj_type->kind == CBM_TYPE_NAMED) {

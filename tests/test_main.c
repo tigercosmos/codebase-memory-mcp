@@ -46,6 +46,7 @@ extern void suite_type_rep(void);
 extern void suite_py_lsp(void);
 extern void suite_py_lsp_bench(void);
 extern void suite_py_lsp_stress(void);
+extern void suite_py_lsp_scale(void);
 extern void suite_store_arch(void);
 extern void suite_store_bulk(void);
 extern void suite_traces(void);
@@ -124,6 +125,7 @@ int main(void) {
     RUN_SUITE(py_lsp);
     RUN_SUITE(py_lsp_bench);
     RUN_SUITE(py_lsp_stress);
+    RUN_SUITE(py_lsp_scale);
 
     /* Architecture + ADR + Louvain */
     RUN_SUITE(store_arch);

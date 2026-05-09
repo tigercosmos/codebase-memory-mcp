@@ -2252,26 +2252,63 @@ void php_lsp_process_file(PHPLSPContext *ctx, TSNode root) {
                    strcmp(k, "function_static_declaration") == 0) {
             process_function_like(ctx, c);
         } else if (strcmp(k, "namespace_definition") == 0) {
-            /* Body-style: namespace App { ... }. Walk children. */
-            TSNode body = child_named(c, "declaration_list");
-            if (!ts_node_is_null(body)) {
-                uint32_t bn = ts_node_child_count(body);
-                for (uint32_t j = 0; j < bn; j++) {
-                    TSNode bc = ts_node_child(body, j);
-                    if (ts_node_is_null(bc)) continue;
-                    const char *bk = ts_node_type(bc);
-                    if (strcmp(bk, "class_declaration") == 0 ||
-                        strcmp(bk, "trait_declaration") == 0 ||
-                        strcmp(bk, "interface_declaration") == 0 ||
-                        strcmp(bk, "enum_declaration") == 0) {
-                        process_class_decl(ctx, bc);
-                    } else if (strcmp(bk, "function_definition") == 0) {
-                        process_function_like(ctx, bc);
-                    } else if (strcmp(bk, "expression_statement") == 0 ||
-                               strcmp(bk, "echo_statement") == 0 ||
-                               strcmp(bk, "if_statement") == 0) {
-                        /* Top-level code; just walk. */
-                        php_resolve_calls_in_node(ctx, bc);
+            /* Body-style: namespace App { ... }. Set namespace + collect
+             * use clauses inside the block, then walk children. */
+            set_namespace_from_decl(ctx, c);
+            /* Collect any namespace_use_declaration inside the block. */
+            uint32_t nc2 = ts_node_child_count(c);
+            for (uint32_t i2 = 0; i2 < nc2; i2++) {
+                TSNode ch = ts_node_child(c, i2);
+                if (ts_node_is_null(ch) || !ts_node_is_named(ch)) continue;
+                if (strcmp(ts_node_type(ch), "namespace_use_declaration") == 0) {
+                    collect_use_declaration(ctx, ch);
+                } else if (strcmp(ts_node_type(ch), "declaration_list") == 0) {
+                    /* use clauses can also appear inside the declaration_list. */
+                    uint32_t ncc = ts_node_child_count(ch);
+                    for (uint32_t k3 = 0; k3 < ncc; k3++) {
+                        TSNode cch = ts_node_child(ch, k3);
+                        if (ts_node_is_null(cch) || !ts_node_is_named(cch)) continue;
+                        if (strcmp(ts_node_type(cch), "namespace_use_declaration") == 0) {
+                            collect_use_declaration(ctx, cch);
+                        }
+                    }
+                }
+            }
+            /* The body of `namespace App { ... }` may be a `declaration_list`
+             * or a `compound_statement` depending on tree-sitter-php
+             * version. Iterate ALL named children of the namespace and
+             * dispatch any class/function/etc. seen at any depth. */
+            for (uint32_t j = 0; j < nc2; j++) {
+                TSNode bc = ts_node_child(c, j);
+                if (ts_node_is_null(bc) || !ts_node_is_named(bc)) continue;
+                const char *bk = ts_node_type(bc);
+                if (strcmp(bk, "class_declaration") == 0 ||
+                    strcmp(bk, "trait_declaration") == 0 ||
+                    strcmp(bk, "interface_declaration") == 0 ||
+                    strcmp(bk, "enum_declaration") == 0) {
+                    process_class_decl(ctx, bc);
+                } else if (strcmp(bk, "function_definition") == 0) {
+                    process_function_like(ctx, bc);
+                } else if (strcmp(bk, "declaration_list") == 0 ||
+                           strcmp(bk, "compound_statement") == 0) {
+                    /* Walk children of the body node. */
+                    uint32_t bn = ts_node_child_count(bc);
+                    for (uint32_t bi = 0; bi < bn; bi++) {
+                        TSNode bcc = ts_node_child(bc, bi);
+                        if (ts_node_is_null(bcc) || !ts_node_is_named(bcc)) continue;
+                        const char *bbk = ts_node_type(bcc);
+                        if (strcmp(bbk, "class_declaration") == 0 ||
+                            strcmp(bbk, "trait_declaration") == 0 ||
+                            strcmp(bbk, "interface_declaration") == 0 ||
+                            strcmp(bbk, "enum_declaration") == 0) {
+                            process_class_decl(ctx, bcc);
+                        } else if (strcmp(bbk, "function_definition") == 0) {
+                            process_function_like(ctx, bcc);
+                        } else if (strcmp(bbk, "expression_statement") == 0 ||
+                                   strcmp(bbk, "echo_statement") == 0 ||
+                                   strcmp(bbk, "if_statement") == 0) {
+                            php_resolve_calls_in_node(ctx, bcc);
+                        }
                     }
                 }
             }
@@ -3006,6 +3043,81 @@ static void process_class_for_fields(PHPLSPContext *ctx, CBMTypeRegistry *reg,
         apply_phpdoc_class_tags(ctx, reg, cqn, class_doc, f);
     }
 
+    /* Belt-and-suspenders: walk the class declaration's `base_clause` and
+     * `class_interface_clause` to gather extends/implements QNs and append
+     * them to the registered type's embedded_types. The unified extractor
+     * is supposed to populate base_classes for class_declaration but
+     * may miss interface_declaration's `extends Base` chain or use a
+     * raw form (with backslashes) that doesn't round-trip cleanly.
+     * Doing this AST extraction here keeps the LSP self-sufficient. */
+    {
+        const char *parent_qns[16];
+        int parent_count = 0;
+        uint32_t cnc = ts_node_child_count(class_node);
+        for (uint32_t i = 0; i < cnc && parent_count < 16; i++) {
+            TSNode c = ts_node_child(class_node, i);
+            if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
+            const char *k = ts_node_type(c);
+            if (strcmp(k, "base_clause") != 0 &&
+                strcmp(k, "class_interface_clause") != 0) {
+                continue;
+            }
+            uint32_t bnc = ts_node_child_count(c);
+            for (uint32_t j = 0; j < bnc && parent_count < 16; j++) {
+                TSNode bc = ts_node_child(c, j);
+                if (ts_node_is_null(bc) || !ts_node_is_named(bc)) continue;
+                const char *bk = ts_node_type(bc);
+                if (strcmp(bk, "name") != 0 && strcmp(bk, "qualified_name") != 0) continue;
+                char *t = php_node_text(ctx, bc);
+                if (!t) continue;
+                const char *resolved = php_resolve_class_name(ctx, t);
+                if (!resolved) continue;
+                parent_qns[parent_count++] = resolved;
+            }
+        }
+        if (parent_count > 0) {
+            for (int t = 0; t < reg->type_count; t++) {
+                if (strcmp(reg->types[t].qualified_name, cqn) != 0) continue;
+                /* Merge with existing embedded_types — dedup. */
+                int existing = 0;
+                if (reg->types[t].embedded_types) {
+                    while (reg->types[t].embedded_types[existing]) existing++;
+                }
+                int total = existing;
+                for (int p = 0; p < parent_count; p++) {
+                    bool seen = false;
+                    for (int e = 0; e < existing; e++) {
+                        if (strcmp(reg->types[t].embedded_types[e], parent_qns[p]) == 0) {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if (!seen) total++;
+                }
+                if (total == existing) break;
+                const char **expanded =
+                    (const char **)cbm_arena_alloc(ctx->arena,
+                                                    (size_t)(total + 1) * sizeof(*expanded));
+                if (!expanded) break;
+                int wi = 0;
+                for (int e = 0; e < existing; e++) expanded[wi++] = reg->types[t].embedded_types[e];
+                for (int p = 0; p < parent_count; p++) {
+                    bool seen = false;
+                    for (int e = 0; e < existing; e++) {
+                        if (strcmp(reg->types[t].embedded_types[e], parent_qns[p]) == 0) {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if (!seen) expanded[wi++] = parent_qns[p];
+                }
+                expanded[wi] = NULL;
+                reg->types[t].embedded_types = expanded;
+                break;
+            }
+        }
+    }
+
     TSNode body = ts_node_child_by_field_name(class_node, "body", 4);
     if (ts_node_is_null(body)) body = child_named(class_node, "declaration_list");
     if (ts_node_is_null(body)) body = child_named(class_node, "enum_declaration_list");
@@ -3063,9 +3175,36 @@ static void process_class_for_fields(PHPLSPContext *ctx, CBMTypeRegistry *reg,
             }
             if (is_ctor) extract_ctor_assignments(ctx, c, f);
 
+            /* Re-parse the declared return type via php_parse_type_node so
+             * generic forms like `\Generator<int, User>` end up as
+             * TEMPLATE types, not broken NAMED("Generator<int, User>")
+             * that the simpler parse_return_type_text produced earlier. */
+            TSNode rt_node = ts_node_child_by_field_name(c, "return_type", 11);
+            if (!ts_node_is_null(rt_node) && mn) {
+                const CBMType *parsed = php_parse_type_node(ctx, rt_node);
+                if (parsed && parsed->kind != CBM_TYPE_UNKNOWN) {
+                    for (int fi = 0; fi < reg->func_count; fi++) {
+                        CBMRegisteredFunc *rf = &reg->funcs[fi];
+                        if (!rf->receiver_type || !rf->short_name) continue;
+                        if (strcmp(rf->receiver_type, cqn) != 0) continue;
+                        if (strcmp(rf->short_name, mn) != 0) continue;
+                        const CBMType **rets = (const CBMType **)cbm_arena_alloc(
+                            ctx->arena, 2 * sizeof(*rets));
+                        if (rets) {
+                            rets[0] = parsed;
+                            rets[1] = NULL;
+                            rf->signature = cbm_type_func(ctx->arena, NULL, NULL, rets);
+                        }
+                        break;
+                    }
+                }
+            }
+
             /* PHPDoc @return TYPE on the method's leading docblock — when
              * the method has no declared return type, this fills in the
-             * registry's signature so chained calls can substitute through. */
+             * registry's signature so chained calls can substitute through.
+             * Runs after the declared-type pass so explicit @return wins
+             * over an inferred declared type. */
             char *mdoc = fetch_leading_phpdoc(ctx, c);
             if (mdoc && mn) {
                 const char *p = strstr(mdoc, "@return");

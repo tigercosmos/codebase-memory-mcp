@@ -527,6 +527,42 @@ static int parse_phpdoc_template_args(PHPLSPContext *ctx, const char *p,
     return count;
 }
 
+/* Add a @phpstan-type alias to ctx (idempotent — keeps first definition). */
+static void php_add_phpstan_alias(PHPLSPContext *ctx, const char *name, const CBMType *type) {
+    if (!ctx || !name || !type) return;
+    for (int i = 0; i < ctx->phpstan_alias_count; i++) {
+        if (strcmp(ctx->phpstan_alias_names[i], name) == 0) return;
+    }
+    if (ctx->phpstan_alias_count >= ctx->phpstan_alias_cap) {
+        int new_cap = ctx->phpstan_alias_cap ? ctx->phpstan_alias_cap * 2 : 8;
+        const char **nn = (const char **)cbm_arena_alloc(ctx->arena,
+                                                         (size_t)(new_cap + 1) * sizeof(*nn));
+        const CBMType **nt = (const CBMType **)cbm_arena_alloc(
+            ctx->arena, (size_t)(new_cap + 1) * sizeof(*nt));
+        if (!nn || !nt) return;
+        for (int i = 0; i < ctx->phpstan_alias_count; i++) {
+            nn[i] = ctx->phpstan_alias_names[i];
+            nt[i] = ctx->phpstan_alias_types[i];
+        }
+        ctx->phpstan_alias_names = nn;
+        ctx->phpstan_alias_types = nt;
+        ctx->phpstan_alias_cap = new_cap;
+    }
+    ctx->phpstan_alias_names[ctx->phpstan_alias_count] = cbm_arena_strdup(ctx->arena, name);
+    ctx->phpstan_alias_types[ctx->phpstan_alias_count] = type;
+    ctx->phpstan_alias_count++;
+}
+
+static const CBMType *php_lookup_phpstan_alias(PHPLSPContext *ctx, const char *name) {
+    if (!ctx || !name) return NULL;
+    for (int i = 0; i < ctx->phpstan_alias_count; i++) {
+        if (strcmp(ctx->phpstan_alias_names[i], name) == 0) {
+            return ctx->phpstan_alias_types[i];
+        }
+    }
+    return NULL;
+}
+
 static const CBMType *resolve_phpdoc_type(PHPLSPContext *ctx, const char *type_text) {
     if (!type_text || !*type_text) return cbm_type_unknown();
     /* Skip whitespace + nullable */
@@ -553,6 +589,12 @@ static const CBMType *resolve_phpdoc_type(PHPLSPContext *ctx, const char *type_t
 
     /* `array{...}` shape — treat as plain array for now. */
     if (has_array_shape) return cbm_type_builtin(ctx->arena, "array");
+
+    /* @phpstan-type alias takes precedence over name resolution. */
+    {
+        const CBMType *aliased = php_lookup_phpstan_alias(ctx, first);
+        if (aliased) return aliased;
+    }
 
     if (php_is_builtin_type_name(first)) {
         if (has_generic) {
@@ -1921,8 +1963,107 @@ static void php_resolve_calls_in_node(PHPLSPContext *ctx, TSNode node) {
     } else if (strcmp(kind, "member_call_expression") == 0 ||
                strcmp(kind, "nullsafe_member_call_expression") == 0) {
         resolve_member_call(ctx, node);
+        /* Closure binding via $f->bindTo($obj). When $f is an inline
+         * closure literal AND the bindTo call's first arg is a typed
+         * variable, walk the closure body with $this rebound. We only
+         * support this for the inline-literal pattern; tracking
+         * Closure-as-value across assignments is deferred (closure
+         * value-typing is Phase 6+ infrastructure). */
+        TSNode obj = ts_node_child_by_field_name(node, "object", 6);
+        TSNode mname = ts_node_child_by_field_name(node, "name", 4);
+        if (!ts_node_is_null(obj) && !ts_node_is_null(mname)) {
+            char *mn = php_node_text(ctx, mname);
+            const char *ok = ts_node_type(obj);
+            if (mn && strcmp(mn, "bindTo") == 0 &&
+                (strcmp(ok, "anonymous_function") == 0 ||
+                 strcmp(ok, "arrow_function") == 0 ||
+                 strcmp(ok, "parenthesized_expression") == 0)) {
+                /* Resolve the second-arg's class. */
+                TSNode args = ts_node_child_by_field_name(node, "arguments", 9);
+                if (!ts_node_is_null(args)) {
+                    uint32_t anc = ts_node_child_count(args);
+                    for (uint32_t i = 0; i < anc; i++) {
+                        TSNode a = ts_node_child(args, i);
+                        if (ts_node_is_null(a) || !ts_node_is_named(a)) continue;
+                        TSNode v = a;
+                        if (strcmp(ts_node_type(a), "argument") == 0) {
+                            uint32_t bnc = ts_node_child_count(a);
+                            for (uint32_t j = 0; j < bnc; j++) {
+                                TSNode b = ts_node_child(a, j);
+                                if (!ts_node_is_null(b) && ts_node_is_named(b)) {
+                                    v = b;
+                                    break;
+                                }
+                            }
+                        }
+                        const CBMType *t = php_eval_expr_type(ctx, v);
+                        if (t && t->kind == CBM_TYPE_NAMED) {
+                            const char *saved = ctx->enclosing_class_qn;
+                            ctx->enclosing_class_qn = t->data.named.qualified_name;
+                            php_resolve_calls_in_node(ctx, obj);
+                            ctx->enclosing_class_qn = saved;
+                        }
+                        break;
+                    }
+                }
+            }
+        }
     } else if (strcmp(kind, "scoped_call_expression") == 0) {
         resolve_static_call(ctx, node);
+        /* Closure binding via Closure::bind($f, $obj). Same shape as
+         * bindTo: rebind $this when the first arg is a closure literal
+         * and the second arg has a known class. */
+        TSNode scope = ts_node_child_by_field_name(node, "scope", 5);
+        TSNode mname2 = ts_node_child_by_field_name(node, "name", 4);
+        if (!ts_node_is_null(scope) && !ts_node_is_null(mname2)) {
+            char *cls = php_node_text(ctx, scope);
+            char *mn = php_node_text(ctx, mname2);
+            bool is_closure_bind = mn && strcmp(mn, "bind") == 0 &&
+                                   cls && (strcmp(cls, "Closure") == 0 ||
+                                            strcmp(cls, "\\Closure") == 0);
+            if (is_closure_bind) {
+                TSNode args = ts_node_child_by_field_name(node, "arguments", 9);
+                if (!ts_node_is_null(args)) {
+                    TSNode closure_arg;
+                    memset(&closure_arg, 0, sizeof(closure_arg));
+                    TSNode obj_arg;
+                    memset(&obj_arg, 0, sizeof(obj_arg));
+                    int seen = 0;
+                    uint32_t anc = ts_node_child_count(args);
+                    for (uint32_t i = 0; i < anc; i++) {
+                        TSNode a = ts_node_child(args, i);
+                        if (ts_node_is_null(a) || !ts_node_is_named(a)) continue;
+                        TSNode inner = a;
+                        if (strcmp(ts_node_type(a), "argument") == 0) {
+                            uint32_t bnc = ts_node_child_count(a);
+                            for (uint32_t j = 0; j < bnc; j++) {
+                                TSNode b = ts_node_child(a, j);
+                                if (!ts_node_is_null(b) && ts_node_is_named(b)) {
+                                    inner = b;
+                                    break;
+                                }
+                            }
+                        }
+                        if (seen == 0) closure_arg = inner;
+                        else if (seen == 1) obj_arg = inner;
+                        seen++;
+                    }
+                    if (!ts_node_is_null(closure_arg) && !ts_node_is_null(obj_arg)) {
+                        const char *ck = ts_node_type(closure_arg);
+                        if (strcmp(ck, "anonymous_function") == 0 ||
+                            strcmp(ck, "arrow_function") == 0) {
+                            const CBMType *t = php_eval_expr_type(ctx, obj_arg);
+                            if (t && t->kind == CBM_TYPE_NAMED) {
+                                const char *saved = ctx->enclosing_class_qn;
+                                ctx->enclosing_class_qn = t->data.named.qualified_name;
+                                php_resolve_calls_in_node(ctx, closure_arg);
+                                ctx->enclosing_class_qn = saved;
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 
     /* Recurse. */
@@ -2686,11 +2827,25 @@ static const char **parse_phpdoc_template_params(PHPLSPContext *ctx, const char 
     const char *p = docstring;
     while ((p = strstr(p, "@template")) != NULL) {
         p += 9;
-        /* Allow `@template-extends` / `@template-covariant` / etc. */
+        /* Skip variants that bind a type-param name with a kind suffix:
+         *   @template-covariant T   → record T
+         *   @template-contravariant T → record T
+         * but NOT @template-extends / @template-implements (those declare
+         * a parent class, not a type param). */
+        bool is_param_variant = true;
         if (*p == '-') {
-            while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
-            continue;
+            const char *suffix = p + 1;
+            if (strncmp(suffix, "covariant", 9) == 0) {
+                p += 1 + 9;
+            } else if (strncmp(suffix, "contravariant", 13) == 0) {
+                p += 1 + 13;
+            } else {
+                /* @template-extends / -implements / -use / etc. — skip line. */
+                is_param_variant = false;
+                while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
+            }
         }
+        if (!is_param_variant) continue;
         while (*p == ' ' || *p == '\t') p++;
         const char *name_start = p;
         while (*p && (isalnum((unsigned char)*p) || *p == '_')) p++;
@@ -2753,6 +2908,71 @@ static void apply_phpdoc_class_tags(PHPLSPContext *ctx, CBMTypeRegistry *reg,
                 reg->types[t].type_param_names = tparams;
                 break;
             }
+        }
+    }
+
+    /* @phpstan-type Alias TYPE_EXPR  — register a per-file alias so
+     * subsequent @var/@param/@return references to `Alias` resolve to the
+     * aliased type. This is a phpstan/psalm convention used heavily for
+     * shape descriptions and value objects.
+     *
+     * Also accept the equivalent @psalm-type and @phan-type spellings. */
+    {
+        const char *prefixes[] = {"@phpstan-type", "@psalm-type", "@phan-type", NULL};
+        for (int pi = 0; prefixes[pi]; pi++) {
+            const char *p = docstring;
+            size_t plen = strlen(prefixes[pi]);
+            while ((p = strstr(p, prefixes[pi])) != NULL) {
+                p += plen;
+                while (*p == ' ' || *p == '\t') p++;
+                /* alias name */
+                const char *name_start = p;
+                while (*p && (isalnum((unsigned char)*p) || *p == '_')) p++;
+                if (p == name_start) continue;
+                char *alias_name =
+                    cbm_arena_strndup(ctx->arena, name_start, (size_t)(p - name_start));
+                while (*p == ' ' || *p == '\t' || *p == '=') p++;
+                /* type expression, span <...> brackets */
+                const char *type_start = p;
+                int depth = 0;
+                while (*p && *p != '\n') {
+                    if (*p == '<') depth++;
+                    else if (*p == '>') depth--;
+                    else if (depth == 0 && (*p == ' ' || *p == '\t') && p > type_start) {
+                        break;
+                    }
+                    p++;
+                }
+                if (p == type_start) continue;
+                char *type_text =
+                    cbm_arena_strndup(ctx->arena, type_start, (size_t)(p - type_start));
+                /* Strip trailing whitespace in case. */
+                size_t tl = strlen(type_text);
+                while (tl > 0 && (type_text[tl - 1] == ' ' || type_text[tl - 1] == '\t')) {
+                    type_text[--tl] = '\0';
+                }
+                if (!*type_text) continue;
+                const CBMType *aliased = resolve_phpdoc_type(ctx, type_text);
+                if (aliased && aliased->kind != CBM_TYPE_UNKNOWN) {
+                    php_add_phpstan_alias(ctx, alias_name, aliased);
+                }
+            }
+        }
+    }
+
+    /* @phpstan-import-type Alias from Other — best-effort. We don't have
+     * cross-file alias indexing yet, but accept the syntax without
+     * crashing. The alias becomes UNKNOWN until the source class's
+     * @phpstan-type ends up in our table. */
+    {
+        const char *p = docstring;
+        while ((p = strstr(p, "@phpstan-import-type")) != NULL) {
+            p += 20;
+            while (*p == ' ' || *p == '\t') p++;
+            const char *name_start = p;
+            while (*p && (isalnum((unsigned char)*p) || *p == '_')) p++;
+            if (p == name_start) continue;
+            (void)name_start; /* declared imported alias — silently accept */
         }
     }
 

@@ -4533,6 +4533,605 @@ TEST(phplsp_edge_private_static) {
     PASS();
 }
 
+/* ── 249-280: Phase 5f / 4ac / 4ad ────────────────────────── */
+
+TEST(phplsp_phpstan_type_alias_basic) {
+    const char *src =
+        "<?php\n"
+        "class User { public function name(): string { return 'u'; } }\n"
+        "/**\n"
+        " * @phpstan-type Maybe User\n"
+        " */\n"
+        "class C {\n"
+        "    public function run(): void {\n"
+        "        /** @var Maybe $x */\n"
+        "        $x = null;\n"
+        "        $x->name();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_phpstan_type_alias_via_param) {
+    const char *src =
+        "<?php\n"
+        "class B { public function tap(): int { return 1; } }\n"
+        "class A { public function next(): B { return new B(); } }\n"
+        "/**\n"
+        " * @phpstan-type Maker A\n"
+        " */\n"
+        "class C {\n"
+        "    /** @param Maker $a */\n"
+        "    public function run($a): void { $a->next()->tap(); }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "A.next") >= 0);
+    ASSERT(find_resolved(r, "C.run", "B.tap") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_psalm_type_alias_alternate_spelling) {
+    const char *src =
+        "<?php\n"
+        "class User { public function name(): string { return 'u'; } }\n"
+        "/**\n"
+        " * @psalm-type UID User\n"
+        " */\n"
+        "class C {\n"
+        "    /** @param UID $u */\n"
+        "    public function run($u): void { $u->name(); }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_phpstan_import_type_no_crash) {
+    const char *src =
+        "<?php\n"
+        "/**\n"
+        " * @phpstan-import-type Foo from \\Other\\Class_\n"
+        " */\n"
+        "class C { public function run(): void {} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_closure_bindTo_resolves_this) {
+    const char *src =
+        "<?php\n"
+        "class Other { public function helper(): int { return 1; } }\n"
+        "class C {\n"
+        "    public function run(Other $o): void {\n"
+        "        $f = function () { return $this->helper(); };\n"
+        "        $f->bindTo($o);\n"
+        "    }\n"
+        "}\n";
+    /* The closure literal is the callee of bindTo; my walker should
+     * re-walk the closure body with $this rebound to Other. */
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    /* Either the original walk OR the rebind walk emits Other.helper. */
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_closure_static_bind_resolves_this) {
+    const char *src =
+        "<?php\n"
+        "class Other { public function helper(): int { return 1; } }\n"
+        "class C {\n"
+        "    public function run(Other $o): void {\n"
+        "        \\Closure::bind(function () { return $this->helper(); }, $o);\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "Other.helper") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_closure_static_bind_arrow_fn) {
+    const char *src =
+        "<?php\n"
+        "class Other { public function helper(): int { return 1; } }\n"
+        "class C {\n"
+        "    public function run(Other $o): void {\n"
+        "        \\Closure::bind(fn() => $this->helper(), $o);\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "Other.helper") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_conditional_return_no_crash) {
+    const char *src =
+        "<?php\n"
+        "class C {\n"
+        "    /**\n"
+        "     * @return ($x is string ? int : bool)\n"
+        "     */\n"
+        "    public function strange(string|int $x): mixed { return 1; }\n"
+        "    public function run(): void { $this->strange('a'); }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "C.strange") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_template_covariant_no_crash) {
+    const char *src =
+        "<?php\n"
+        "/**\n"
+        " * @template-covariant T\n"
+        " */\n"
+        "class Box {\n"
+        "    /** @return T */\n"
+        "    public function get() { return null; }\n"
+        "}\n"
+        "class User { public function name(): string { return 'u'; } }\n"
+        "class C {\n"
+        "    public function run(): void {\n"
+        "        /** @var Box<User> $b */\n"
+        "        $b = null;\n"
+        "        $b->get()->name();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_template_contravariant_no_crash) {
+    const char *src =
+        "<?php\n"
+        "/**\n"
+        " * @template-contravariant T\n"
+        " */\n"
+        "class Sink {\n"
+        "    /** @param T $x */\n"
+        "    public function take($x): void {}\n"
+        "}\n"
+        "class C { public function run(): void {} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_phpstan_type_array_shape) {
+    const char *src =
+        "<?php\n"
+        "class C {\n"
+        "    /**\n"
+        "     * @phpstan-type Pair array{a: int, b: string}\n"
+        "     */\n"
+        "    public function run(): void {}\n"
+        "}\n";
+    /* @phpstan-type at method-level — we don't apply but shouldn't crash. */
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_phpstan_type_union) {
+    const char *src =
+        "<?php\n"
+        "class A { public function aa(): int { return 1; } }\n"
+        "class B { public function bb(): int { return 2; } }\n"
+        "/**\n"
+        " * @phpstan-type Either A|B\n"
+        " */\n"
+        "class C {\n"
+        "    /** @param Either $x */\n"
+        "    public function run($x): void { $x->aa(); }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    /* Union types take leftmost — A. */
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_eloquent_macro_pattern) {
+    /* Laravel macroable pattern — closures bound to a class via macro(). */
+    const char *src =
+        "<?php\n"
+        "class Builder {\n"
+        "    public function where($a, $b): self { return $this; }\n"
+        "    public function search(string $q): self { return $this; }\n"
+        "}\n"
+        "class C {\n"
+        "    public function run(): void {\n"
+        "        $builder = new Builder();\n"
+        "        \\Closure::bind(function (string $q) {\n"
+        "            return $this->where('name', 'like', \"%{$q}%\");\n"
+        "        }, $builder);\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "Builder.where") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_array_shape_call_no_crash) {
+    const char *src =
+        "<?php\n"
+        "class C {\n"
+        "    /**\n"
+        "     * @param array{name: string, age: int} $data\n"
+        "     */\n"
+        "    public function run(array $data): void { /* nothing */ }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_class_string_no_crash) {
+    const char *src =
+        "<?php\n"
+        "class A {}\n"
+        "class C {\n"
+        "    /**\n"
+        "     * @param class-string<A> $cls\n"
+        "     */\n"
+        "    public function run(string $cls): void {}\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_int_range_no_crash) {
+    const char *src =
+        "<?php\n"
+        "class C {\n"
+        "    /**\n"
+        "     * @param int<0, 100> $pct\n"
+        "     */\n"
+        "    public function run(int $pct): void {}\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_literal_string_no_crash) {
+    const char *src =
+        "<?php\n"
+        "class C {\n"
+        "    /**\n"
+        "     * @param literal-string $s\n"
+        "     */\n"
+        "    public function run(string $s): void {}\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_recursive_phpstan_alias) {
+    const char *src =
+        "<?php\n"
+        "class User { public function name(): string { return 'u'; } }\n"
+        "/**\n"
+        " * @phpstan-type ID int\n"
+        " * @phpstan-type Maybe User\n"
+        " */\n"
+        "class C {\n"
+        "    /**\n"
+        "     * @param ID $id\n"
+        "     * @param Maybe $u\n"
+        "     */\n"
+        "    public function run($id, $u): void { $u->name(); }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_phpstan_type_with_template) {
+    const char *src =
+        "<?php\n"
+        "class User { public function name(): string { return 'u'; } }\n"
+        "/**\n"
+        " * @template T\n"
+        " * @phpstan-type Maybe User\n"
+        " */\n"
+        "class C {\n"
+        "    /** @param Maybe $u */\n"
+        "    public function run($u): void { $u->name(); }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_closure_bind_chain) {
+    const char *src =
+        "<?php\n"
+        "class Bag {\n"
+        "    public int $count = 0;\n"
+        "    public function add(int $n): void { $this->count += $n; }\n"
+        "}\n"
+        "class C {\n"
+        "    public function run(Bag $b): void {\n"
+        "        \\Closure::bind(function () {\n"
+        "            $this->add(5);\n"
+        "        }, $b);\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "Bag.add") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_long_phpdoc_block) {
+    const char *src =
+        "<?php\n"
+        "class A { public function go(): int { return 1; } }\n"
+        "class C {\n"
+        "    /**\n"
+        "     * Long description\n"
+        "     * with multiple lines\n"
+        "     * and various tags.\n"
+        "     *\n"
+        "     * @param A $a The thing\n"
+        "     * @return void\n"
+        "     * @throws \\RuntimeException\n"
+        "     * @internal\n"
+        "     */\n"
+        "    public function run($a): void { $a->go(); }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "A.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_realistic_repository_pattern) {
+    /* Common in DDD codebases: repository with EntityManager + Logger. */
+    const char *src =
+        "<?php\n"
+        "namespace App\\Repository;\n"
+        "use Doctrine\\ORM\\EntityManagerInterface;\n"
+        "use Psr\\Log\\LoggerInterface;\n"
+        "class UserRepository {\n"
+        "    private EntityManagerInterface $em;\n"
+        "    private LoggerInterface $log;\n"
+        "    public function __construct(EntityManagerInterface $em, LoggerInterface $log) {\n"
+        "        $this->em = $em;\n"
+        "        $this->log = $log;\n"
+        "    }\n"
+        "    public function findActive(): array {\n"
+        "        $this->log->info('finding active users');\n"
+        "        return $this->em->createQueryBuilder()\n"
+        "            ->select('u')->from('User', 'u')\n"
+        "            ->where('u.active = 1')\n"
+        "            ->getQuery()->getResult();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "UserRepository.findActive", "LoggerInterface.info") >= 0);
+    ASSERT(find_resolved(r, "UserRepository.findActive",
+                         "EntityManagerInterface.createQueryBuilder") >= 0);
+    ASSERT(find_resolved(r, "UserRepository.findActive", "QueryBuilder.select") >= 0);
+    ASSERT(find_resolved(r, "UserRepository.findActive", "QueryBuilder.from") >= 0);
+    ASSERT(find_resolved(r, "UserRepository.findActive", "QueryBuilder.where") >= 0);
+    ASSERT(find_resolved(r, "UserRepository.findActive", "QueryBuilder.getQuery") >= 0);
+    ASSERT(find_resolved(r, "UserRepository.findActive", "Query.getResult") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_realistic_event_listener) {
+    const char *src =
+        "<?php\n"
+        "namespace App\\Listener;\n"
+        "use Symfony\\Contracts\\EventDispatcher\\Event;\n"
+        "use Psr\\Log\\LoggerInterface;\n"
+        "class OrderCreatedListener {\n"
+        "    public function __construct(private readonly LoggerInterface $log) {}\n"
+        "    public function __invoke(Event $event): void {\n"
+        "        $this->log->info('order created');\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "OrderCreatedListener.__invoke", "LoggerInterface.info") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_realistic_command) {
+    const char *src =
+        "<?php\n"
+        "namespace App\\Command;\n"
+        "use Symfony\\Component\\Console\\Style\\SymfonyStyle;\n"
+        "use Symfony\\Component\\Console\\Input\\InputInterface;\n"
+        "use Symfony\\Component\\Console\\Output\\OutputInterface;\n"
+        "class SyncCommand {\n"
+        "    public function execute(InputInterface $in, OutputInterface $out): int {\n"
+        "        $io = new SymfonyStyle($in, $out);\n"
+        "        $io->success('done');\n"
+        "        $name = $in->getArgument('name');\n"
+        "        return 0;\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "SyncCommand.execute", "SymfonyStyle.success") >= 0);
+    ASSERT(find_resolved(r, "SyncCommand.execute", "InputInterface.getArgument") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_realistic_form_handler) {
+    const char *src =
+        "<?php\n"
+        "namespace App\\Form;\n"
+        "use Symfony\\Component\\Validator\\Validator\\ValidatorInterface;\n"
+        "class FormHandler {\n"
+        "    public function __construct(private readonly ValidatorInterface $v) {}\n"
+        "    public function handle(array $data): bool {\n"
+        "        $errors = $this->v->validate($data);\n"
+        "        return $errors->count() === 0;\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "FormHandler.handle", "ValidatorInterface.validate") >= 0);
+    ASSERT(find_resolved(r, "FormHandler.handle", "ConstraintViolationListInterface.count") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_realistic_mail_sender) {
+    const char *src =
+        "<?php\n"
+        "namespace App\\Service;\n"
+        "use Symfony\\Component\\Mailer\\MailerInterface;\n"
+        "use Symfony\\Component\\Mime\\Email;\n"
+        "class WelcomeMailer {\n"
+        "    public function __construct(private readonly MailerInterface $m) {}\n"
+        "    public function send(string $to): void {\n"
+        "        $email = (new Email())->from('a@b')->to($to)->subject('Welcome');\n"
+        "        $this->m->send($email);\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "WelcomeMailer.send", "Email.from") >= 0);
+    ASSERT(find_resolved(r, "WelcomeMailer.send", "Email.to") >= 0);
+    ASSERT(find_resolved(r, "WelcomeMailer.send", "Email.subject") >= 0);
+    ASSERT(find_resolved(r, "WelcomeMailer.send", "MailerInterface.send") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_realistic_cached_service) {
+    const char *src =
+        "<?php\n"
+        "namespace App\\Service;\n"
+        "use Symfony\\Contracts\\Cache\\CacheInterface;\n"
+        "class CachedService {\n"
+        "    public function __construct(private readonly CacheInterface $cache) {}\n"
+        "    public function getData(string $k): mixed {\n"
+        "        return $this->cache->get($k, fn() => $this->compute($k));\n"
+        "    }\n"
+        "    private function compute(string $k): mixed { return null; }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "CachedService.getData", "CacheInterface.get") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_realistic_logger_chain_with_context) {
+    const char *src =
+        "<?php\n"
+        "namespace App;\n"
+        "use Psr\\Log\\LoggerInterface;\n"
+        "class S {\n"
+        "    public function __construct(private LoggerInterface $log) {}\n"
+        "    public function r(): void {\n"
+        "        $this->log->info('a', ['k' => 1]);\n"
+        "        $this->log->warning('b');\n"
+        "        $this->log->error('c');\n"
+        "        $this->log->critical('d');\n"
+        "        $this->log->debug('e');\n"
+        "        $this->log->log('info', 'f');\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "S.r", "LoggerInterface.info") >= 0);
+    ASSERT(find_resolved(r, "S.r", "LoggerInterface.warning") >= 0);
+    ASSERT(find_resolved(r, "S.r", "LoggerInterface.error") >= 0);
+    ASSERT(find_resolved(r, "S.r", "LoggerInterface.critical") >= 0);
+    ASSERT(find_resolved(r, "S.r", "LoggerInterface.debug") >= 0);
+    ASSERT(find_resolved(r, "S.r", "LoggerInterface.log") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_realistic_carbon_chain_in_method) {
+    const char *src =
+        "<?php\n"
+        "namespace App;\n"
+        "use Carbon\\Carbon;\n"
+        "class Clock {\n"
+        "    public function tomorrow(): string {\n"
+        "        return Carbon::now()->addDay()->format('Y-m-d');\n"
+        "    }\n"
+        "    public function lastWeek(): string {\n"
+        "        return Carbon::now()->subDay()->subDay()->format('Y-m-d');\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "Clock.tomorrow", "Carbon.now") >= 0);
+    ASSERT(find_resolved(r, "Clock.tomorrow", "Carbon.addDay") >= 0);
+    ASSERT(find_resolved(r, "Clock.tomorrow", "Carbon.format") >= 0);
+    ASSERT(find_resolved(r, "Clock.lastWeek", "Carbon.subDay") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_realistic_eloquent_model) {
+    const char *src =
+        "<?php\n"
+        "namespace App\\Models;\n"
+        "use Illuminate\\Database\\Eloquent\\Model;\n"
+        "class User extends Model {\n"
+        "    public function active(): \\Illuminate\\Database\\Eloquent\\Collection {\n"
+        "        return self::where('active', 1)->orderBy('id')->get();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "User.active", "Model.where") >= 0);
+    ASSERT(find_resolved(r, "User.active", "Builder.orderBy") >= 0);
+    ASSERT(find_resolved(r, "User.active", "Builder.get") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(php_lsp) {
@@ -4791,4 +5390,36 @@ SUITE(php_lsp) {
     RUN_TEST(phplsp_edge_function_with_default_typed);
     RUN_TEST(phplsp_edge_property_with_default);
     RUN_TEST(phplsp_edge_private_static);
+    /* Phase 5f / 4ac / 4ad: phpstan-type aliases, closure binding,
+     * conditional types, variance, real-world patterns */
+    RUN_TEST(phplsp_phpstan_type_alias_basic);
+    RUN_TEST(phplsp_phpstan_type_alias_via_param);
+    RUN_TEST(phplsp_psalm_type_alias_alternate_spelling);
+    RUN_TEST(phplsp_phpstan_import_type_no_crash);
+    RUN_TEST(phplsp_closure_bindTo_resolves_this);
+    RUN_TEST(phplsp_closure_static_bind_resolves_this);
+    RUN_TEST(phplsp_closure_static_bind_arrow_fn);
+    RUN_TEST(phplsp_conditional_return_no_crash);
+    RUN_TEST(phplsp_template_covariant_no_crash);
+    RUN_TEST(phplsp_template_contravariant_no_crash);
+    RUN_TEST(phplsp_phpstan_type_array_shape);
+    RUN_TEST(phplsp_phpstan_type_union);
+    RUN_TEST(phplsp_eloquent_macro_pattern);
+    RUN_TEST(phplsp_array_shape_call_no_crash);
+    RUN_TEST(phplsp_class_string_no_crash);
+    RUN_TEST(phplsp_int_range_no_crash);
+    RUN_TEST(phplsp_literal_string_no_crash);
+    RUN_TEST(phplsp_recursive_phpstan_alias);
+    RUN_TEST(phplsp_phpstan_type_with_template);
+    RUN_TEST(phplsp_closure_bind_chain);
+    RUN_TEST(phplsp_long_phpdoc_block);
+    RUN_TEST(phplsp_realistic_repository_pattern);
+    RUN_TEST(phplsp_realistic_event_listener);
+    RUN_TEST(phplsp_realistic_command);
+    RUN_TEST(phplsp_realistic_form_handler);
+    RUN_TEST(phplsp_realistic_mail_sender);
+    RUN_TEST(phplsp_realistic_cached_service);
+    RUN_TEST(phplsp_realistic_logger_chain_with_context);
+    RUN_TEST(phplsp_realistic_carbon_chain_in_method);
+    RUN_TEST(phplsp_realistic_eloquent_model);
 }

@@ -36,6 +36,16 @@ typedef struct {
     /* Output: resolved calls accumulate here. */
     CBMResolvedCallArray *resolved_calls;
 
+    /* @phpstan-type alias map (per-file, populated from class docblocks).
+     * Used by resolve_phpdoc_type before generic name resolution so user
+     * type aliases like `@phpstan-type UserId int|string` and references
+     * to `UserId` in @var/@param/@return all resolve to the aliased type.
+     */
+    const char **phpstan_alias_names;  /* arena-allocated, NULL-terminated */
+    const CBMType **phpstan_alias_types;
+    int phpstan_alias_count;
+    int phpstan_alias_cap;
+
     /* Recursion guard for php_eval_expr_type. */
     int eval_depth;
 

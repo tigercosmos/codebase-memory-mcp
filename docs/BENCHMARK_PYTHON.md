@@ -109,6 +109,7 @@ construct (e.g. `getattr`-style dispatch).
 | 2026-05-09 | dd3a816 (Round 7: builtin/template attr dispatch, wrappers, dedup) | 178 | 52 | 51 | 98% | 11.79 ms |
 | 2026-05-09 | f35745c (Round 8: with-as, except-as, tuple unpack, dict.items, slice) | 178 | 52 | 52 | **100%** | 11.59 ms |
 | 2026-05-09 | 4ccd08c (Round 9: TypedDict, early-return narrowing, match seq pattern) | 178 | 52 | 52 | **100%** | 11.02 ms |
+| 2026-05-09 | 39f41c3 (Round 10: lambda, dict-dispatch, async, callable, next, kwargs + 21 new stress tests) | 178 | 52 | 52 | **100%** | 11.25 ms |
 
 The 65→136 fixture jump is more honest: the small fixture was
 hand-shaped to match what the resolver did well at the time. The
@@ -172,7 +173,7 @@ statically. Item 9 is achievable but a separate v1.1 task.
 
 ## Stress-test surface (test_py_lsp_stress.c)
 
-22 advanced patterns probed individually. Hard-asserted: 19. Documented gaps: 3.
+**43 advanced patterns probed individually. All hard-asserted as PASS. Zero remaining KNOWN GAPs.**
 
 **Hard-asserted (PASS clean)**:
 - NamedTuple class form
@@ -195,17 +196,32 @@ statically. Item 9 is achievable but a separate v1.1 task.
 - Generator delegation (`yield from`)
 - Async-generator iteration
 
-**Documented gaps (3)**:
-- `function-as-dict-value indirect call` — `funcs["key"]()` requires
-  CALLABLE-typed value tracking and indirect-call dispatch.
-- `match sequence pattern element typing` — `case [head, *tail]:`
-  pattern wrapper layout in tree-sitter Python varies by grammar
-  version; bracket-form pattern not yet recognized through the
-  case_pattern → ? wrapper chain. Other match patterns (class,
-  literal, capture, _) work.
-- `lambda parameter inference from call site` — `fn = lambda x:
-  x.method(); fn(Foo())` requires bidirectional inference across the
-  call boundary; needs constraint solver scope.
+**Round 10 additions (21 new patterns, all PASS)**:
+- SQLAlchemy 2.0-style Mapped[T] field
+- Pydantic-style BaseModel field
+- chained filter / map / comprehension
+- nested function call with annotated returns
+- Optional chain with walrus + None narrow
+- classmethod chained to instance method via Self
+- multi-assignment from explicit tuple
+- dict.get with default
+- @property attribute chain to method
+- async with + async for via __aenter__ / __anext__
+- recursive self-referencing method
+- Callable[[], R] return-value evaluation
+- TypedDict total=False
+- nested match patterns with multiple class arms
+- Protocol via NAMED class
+- next(iter) returning element type
+- **kwargs: T -> dict[str, T] annotation
+- yield from in chained generator
+- isinstance | branches
+- module-level constants
+- dataclass with default_factory
+
+**Round 10 gap closures**: lambda call-site inference, function-as-
+dict-value dispatch, match sequence pattern element typing — all now
+hard-asserted PASS.
 
 ## Achievable next steps (not undertaken in this iteration)
 

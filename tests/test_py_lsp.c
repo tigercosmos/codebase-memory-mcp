@@ -1093,6 +1093,58 @@ TEST(pylsp_round4_instance_attribute_class_annotation) {
     PASS();
 }
 
+/* ── Round 5 — subscript, super().__init__, operator dunders ───── */
+
+TEST(pylsp_round5_dict_subscript_value_type) {
+    /* self.cache: dict[str, Foo]; self.cache[k].method() resolves. */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "class C:\n"
+        "    def __init__(self):\n"
+        "        self.cache: dict[str, Foo] = {}\n"
+        "    def use(self, k):\n"
+        "        return self.cache[k].method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round5_list_subscript_value_type) {
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def use(items: list[Foo]):\n"
+        "    return items[0].method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round5_super_init) {
+    CBMFileResult *r = extract_py(
+        "class Base:\n"
+        "    def __init__(self, root):\n"
+        "        self.root = root\n"
+        "class Child(Base):\n"
+        "    def __init__(self, root, extra):\n"
+        "        super().__init__(root)\n"
+        "        self.extra = extra\n");
+    ASSERT_NOT_NULL(r);
+    int idx = find_resolved(r, "__init__", "__init__");
+    ASSERT_GTE(idx, 0);
+    if (idx >= 0) {
+        const CBMResolvedCall *rc = &r->resolved_calls.items[idx];
+        ASSERT(strstr(rc->callee_qn, "Base") != NULL);
+    }
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(py_lsp) {
@@ -1159,4 +1211,8 @@ SUITE(py_lsp) {
     /* Round 4 — instance attribute typing */
     RUN_TEST(pylsp_round4_instance_attribute_init);
     RUN_TEST(pylsp_round4_instance_attribute_class_annotation);
+    /* Round 5 — subscript, super().__init__, operator dunders */
+    RUN_TEST(pylsp_round5_dict_subscript_value_type);
+    RUN_TEST(pylsp_round5_list_subscript_value_type);
+    RUN_TEST(pylsp_round5_super_init);
 }

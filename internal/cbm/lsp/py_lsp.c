@@ -603,7 +603,38 @@ static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node) {
 
     if (strcmp(k, "binary_operator") == 0) {
         TSNode left = ts_node_child_by_field_name(node, "left", 4);
+        TSNode op = ts_node_child_by_field_name(node, "operator", 8);
         const CBMType* lt = py_eval_expr_type(ctx, left);
+        // Try the operator's dunder method on left's type. Falls back to
+        // left-operand type when registry has no info (most common: int+int,
+        // str+str, list+list — typing-by-left is correct in those cases).
+        if (lt && lt->kind == CBM_TYPE_NAMED && !ts_node_is_null(op)) {
+            char* op_text = py_node_text(ctx, op);
+            const char* dunder = NULL;
+            if (op_text) {
+                if (strcmp(op_text, "+") == 0) dunder = "__add__";
+                else if (strcmp(op_text, "-") == 0) dunder = "__sub__";
+                else if (strcmp(op_text, "*") == 0) dunder = "__mul__";
+                else if (strcmp(op_text, "/") == 0) dunder = "__truediv__";
+                else if (strcmp(op_text, "//") == 0) dunder = "__floordiv__";
+                else if (strcmp(op_text, "%") == 0) dunder = "__mod__";
+                else if (strcmp(op_text, "**") == 0) dunder = "__pow__";
+                else if (strcmp(op_text, "<<") == 0) dunder = "__lshift__";
+                else if (strcmp(op_text, ">>") == 0) dunder = "__rshift__";
+                else if (strcmp(op_text, "&") == 0) dunder = "__and__";
+                else if (strcmp(op_text, "|") == 0) dunder = "__or__";
+                else if (strcmp(op_text, "^") == 0) dunder = "__xor__";
+                else if (strcmp(op_text, "@") == 0) dunder = "__matmul__";
+            }
+            if (dunder) {
+                const CBMRegisteredFunc* f = py_lookup_attribute(ctx,
+                    lt->data.named.qualified_name, dunder);
+                if (f) {
+                    return py_func_return_type_recv(ctx, f->qualified_name,
+                        lt->data.named.qualified_name);
+                }
+            }
+        }
         return lt ? lt : cbm_type_unknown();
     }
 
@@ -637,6 +668,51 @@ static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node) {
         if (ts_node_named_child_count(node) > 0) {
             return py_eval_expr_type(ctx, ts_node_named_child(node, 0));
         }
+    }
+
+    // Subscript: container[index]. For TEMPLATE("dict", [K, V])[K] -> V;
+    // TEMPLATE("list"|"set"|...)[int] -> elem; TEMPLATE("tuple", [A, B,
+    // ...])[int] -> A (union when index isn't a literal int).
+    if (strcmp(k, "subscript") == 0) {
+        TSNode value = ts_node_child_by_field_name(node, "value", 5);
+        if (ts_node_is_null(value)) return cbm_type_unknown();
+        const CBMType* container = py_eval_expr_type(ctx, value);
+        if (!container || container->kind != CBM_TYPE_TEMPLATE) {
+            return cbm_type_unknown();
+        }
+        const char* tname = container->data.template_type.template_name;
+        const CBMType** args = container->data.template_type.template_args;
+        int n = container->data.template_type.arg_count;
+        if (!tname || !args || n <= 0) return cbm_type_unknown();
+        if (strcmp(tname, "dict") == 0 || strcmp(tname, "Mapping") == 0 ||
+            strcmp(tname, "MutableMapping") == 0 || strcmp(tname, "defaultdict") == 0 ||
+            strcmp(tname, "OrderedDict") == 0 || strcmp(tname, "ChainMap") == 0) {
+            // Value type is the second template arg.
+            if (n >= 2 && args[1]) return args[1];
+            return cbm_type_unknown();
+        }
+        if (strcmp(tname, "list") == 0 || strcmp(tname, "set") == 0 ||
+            strcmp(tname, "frozenset") == 0 || strcmp(tname, "Sequence") == 0 ||
+            strcmp(tname, "MutableSequence") == 0 || strcmp(tname, "deque") == 0 ||
+            strcmp(tname, "Iterable") == 0 || strcmp(tname, "Iterator") == 0) {
+            return args[0];
+        }
+        if (strcmp(tname, "tuple") == 0) {
+            // Try to index by literal integer subscript.
+            TSNode sub = ts_node_child_by_field_name(node, "subscript", 9);
+            if (!ts_node_is_null(sub) && strcmp(ts_node_type(sub), "integer") == 0) {
+                char* idx_text = py_node_text(ctx, sub);
+                if (idx_text) {
+                    int idx = atoi(idx_text);
+                    if (idx >= 0 && idx < n) return args[idx];
+                }
+            }
+            // Non-literal index: union of all elements.
+            if (n == 1) return args[0];
+            return cbm_type_union(ctx->arena, args, n);
+        }
+        // Other generics: best-effort first arg.
+        return args[0];
     }
 
     return cbm_type_unknown();
@@ -784,6 +860,16 @@ static void py_emit_call_for(PyLSPContext* ctx, TSNode call_node) {
                             if (f) {
                                 py_emit_resolved_call(ctx, f->qualified_name,
                                     "lsp_super", 0.88f);
+                                return;
+                            }
+                            // Special case: super().__init__ — most parent
+                            // classes don't register __init__ with a return,
+                            // but we still want to emit the constructor edge.
+                            if (strcmp(attr_name, "__init__") == 0) {
+                                const char* init_qn = cbm_arena_sprintf(ctx->arena,
+                                    "%s.__init__", enclosing->embedded_types[i]);
+                                py_emit_resolved_call(ctx, init_qn,
+                                    "lsp_super_init", 0.85f);
                                 return;
                             }
                         }

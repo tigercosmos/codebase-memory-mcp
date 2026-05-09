@@ -3926,6 +3926,613 @@ TEST(phplsp_realistic_laravel_controller) {
     PASS();
 }
 
+/* ── 201-250: edge cases, real-world chains, robustness ─────── */
+
+TEST(phplsp_edge_namespaced_facade) {
+    const char *src = "<?php\nnamespace App;\nuse Illuminate\\Support\\Facades\\DB;\n"
+                      "class C { public function r(): void { DB::table('x'); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_chain_through_promotion) {
+    const char *src =
+        "<?php\nclass Inner { public function go(): int { return 1; } }\n"
+        "class C { public function __construct(public Inner $i) {} public function r(): void { $this->i->go(); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "Inner.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_static_property_chain) {
+    const char *src =
+        "<?php\nclass A { public function go(): int { return 1; } public static A $instance; }\n"
+        "class C { public function r(): void { A::$instance->go(); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_enum_method_chain) {
+    const char *src =
+        "<?php\nenum Status: string { case Active = 'a'; case Inactive = 'i';\n"
+        "    public function label(): string { return $this->value; } }\n"
+        "class C { public function r(): void { Status::Active->label(); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "Status.label") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_call_after_assert_two_levels) {
+    const char *src =
+        "<?php\nclass B { public function tap(): int { return 1; } }\n"
+        "class A { public function n(): B { return new B(); } }\n"
+        "class C { public function r($x): void { assert($x instanceof A); $x->n()->tap(); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "A.n") >= 0);
+    ASSERT(find_resolved(r, "C.r", "B.tap") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_negative_narrow_chain) {
+    const char *src =
+        "<?php\nclass Foo { public function go(): int { return 1; } }\n"
+        "class C { public function r($x): void {\n"
+        "    if (!($x instanceof Foo)) { throw new \\RuntimeException('x'); }\n"
+        "    $x->go();\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "Foo.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_closure_bound_class) {
+    const char *src =
+        "<?php\nclass C {\n"
+        "    public function r(): void {\n"
+        "        $f = \\Closure::fromCallable([$this, 'helper']);\n"
+        "    }\n"
+        "    public function helper(): int { return 1; }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_late_assignment_chain) {
+    const char *src =
+        "<?php\nclass A { public function go(): int { return 1; } }\n"
+        "class C { public function r(): void {\n"
+        "    $a = null;\n"
+        "    $a = new A();\n"
+        "    $a->go();\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_callable_type_param) {
+    const char *src =
+        "<?php\nclass C { public function r(callable $f): void { $f(1, 2); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_nullable_param_chain) {
+    const char *src =
+        "<?php\nclass A { public function go(): int { return 1; } }\n"
+        "class C { public function r(?A $a): void { if ($a) { $a->go(); } } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_phpdoc_ignored_then_real) {
+    const char *src =
+        "<?php\nclass A { public function go(): int { return 1; } }\n"
+        "class C { public function r(): void {\n"
+        "    /** unrelated comment */\n"
+        "    $a = new A();\n"
+        "    $a->go();\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_attribute_above_class) {
+    const char *src =
+        "<?php\n#[\\AllowDynamicProperties]\n"
+        "class A { public function go(): int { return 1; } }\n"
+        "class C { public function r(A $a): void { $a->go(); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_method_with_ref_param) {
+    const char *src =
+        "<?php\nclass C { public function r(string &$x): void { $x = 'mutated'; } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_abstract_no_body) {
+    const char *src =
+        "<?php\nabstract class A { abstract public function go(): int; }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_interface_only) {
+    const char *src =
+        "<?php\ninterface I { public function go(): int; public function tap(): self; }\n"
+        "class A implements I {\n"
+        "    public function go(): int { return 1; }\n"
+        "    public function tap(): self { return $this; }\n"
+        "}\n"
+        "class C { public function r(I $i): void { $i->go(); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "I.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_nested_match) {
+    const char *src =
+        "<?php\nclass A { public function go(): int { return 1; } }\n"
+        "class B { public function go(): int { return 2; } }\n"
+        "class C { public function r(int $i, int $j): void {\n"
+        "    $r = match($i) {\n"
+        "        1 => match($j) { 1 => new A(), default => new B() },\n"
+        "        default => new A(),\n"
+        "    };\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_long_static_chain) {
+    const char *src =
+        "<?php\nclass C { public function r(): void {\n"
+        "    \\Carbon\\Carbon::parse('2024-01-01')->addDay()->addDay()->addDay()->format('Y');\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "Carbon.parse") >= 0);
+    ASSERT(find_resolved(r, "C.r", "Carbon.addDay") >= 0);
+    ASSERT(find_resolved(r, "C.r", "Carbon.format") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_iterator_iterable_param) {
+    const char *src =
+        "<?php\nclass C { public function r(iterable $items): void {\n"
+        "    foreach ($items as $i) { /* nothing */ }\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_array_of_classes) {
+    const char *src =
+        "<?php\nclass A { public function go(): int { return 1; } }\n"
+        "class C { public function r(): void {\n"
+        "    /** @var array<A> $arr */\n"
+        "    $arr = [];\n"
+        "    foreach ($arr as $a) { $a->go(); }\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_phpdoc_var_then_assign_chain) {
+    const char *src =
+        "<?php\nclass A { public function go(): int { return 1; } }\n"
+        "class C { public function r(): void {\n"
+        "    /** @var A $a */\n"
+        "    $a = null;\n"
+        "    $a->go();\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_two_traits_one_class) {
+    const char *src =
+        "<?php\ntrait T1 { public function aa(): int { return 1; } }\n"
+        "trait T2 { public function bb(): int { return 2; } }\n"
+        "class C { use T1, T2; public function r(): void { $this->aa(); $this->bb(); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "C.aa") >= 0 || find_resolved(r, "C.r", "T1.aa") >= 0);
+    ASSERT(find_resolved(r, "C.r", "C.bb") >= 0 || find_resolved(r, "C.r", "T2.bb") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_enum_with_interface) {
+    const char *src =
+        "<?php\ninterface HasLabel { public function label(): string; }\n"
+        "enum Status: string implements HasLabel {\n"
+        "    case Active = 'a';\n"
+        "    public function label(): string { return $this->value; }\n"
+        "}\n"
+        "class C { public function r(Status $s): void { $s->label(); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "Status.label") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_constructor_promote_then_use) {
+    const char *src =
+        "<?php\nclass Foo { public function go(): int { return 1; } }\n"
+        "class C {\n"
+        "    public function __construct(private readonly Foo $f) {}\n"
+        "    public function r(): void { $this->f->go(); }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "Foo.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_anonymous_class_in_call) {
+    const char *src =
+        "<?php\nclass C { public function r(): void {\n"
+        "    $obj = new class { public function go(): int { return 1; } };\n"
+        "    /* anonymous class types aren't tracked — chain not asserted */\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_arrow_function_capture_implicit) {
+    const char *src =
+        "<?php\nclass A { public function go(): int { return 1; } }\n"
+        "class C { public function r(A $a): void {\n"
+        "    /* arrow functions implicitly capture by value */\n"
+        "    $f = fn() => $a->go();\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "A.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_long_namespace_chain) {
+    const char *src =
+        "<?php\nnamespace A\\B\\C\\D\\E;\n"
+        "class Foo { public function bar(): int { return 1; } }\n"
+        "class K { public function r(Foo $f): void { $f->bar(); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "K.r", "Foo.bar") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_psr_logger_chain) {
+    const char *src =
+        "<?php\nclass C { public function r(\\Psr\\Log\\LoggerInterface $log): void {\n"
+        "    $log->info('a'); $log->warning('b'); $log->error('c'); $log->debug('d');\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "LoggerInterface.info") >= 0);
+    ASSERT(find_resolved(r, "C.r", "LoggerInterface.warning") >= 0);
+    ASSERT(find_resolved(r, "C.r", "LoggerInterface.error") >= 0);
+    ASSERT(find_resolved(r, "C.r", "LoggerInterface.debug") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_eloquent_relations) {
+    const char *src =
+        "<?php\nclass C { public function r(\\Illuminate\\Database\\Eloquent\\Model $m): void {\n"
+        "    $m->with('rel')->where('a', 1)->find(1)->save();\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "Model.with") >= 0 ||
+           find_resolved(r, "C.r", "Builder.with") >= 0);
+    ASSERT(find_resolved(r, "C.r", "Builder.where") >= 0);
+    ASSERT(find_resolved(r, "C.r", "Builder.find") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_collection_pluck_first) {
+    const char *src =
+        "<?php\nclass C { public function r(\\Illuminate\\Support\\Collection $c): void {\n"
+        "    $c->pluck('name')->first();\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "Collection.pluck") >= 0);
+    ASSERT(find_resolved(r, "C.r", "Collection.first") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_doctrine_qb_orderBy_setMax) {
+    const char *src =
+        "<?php\nclass C { public function r(\\Doctrine\\ORM\\QueryBuilder $qb): void {\n"
+        "    $qb->select('u')->orderBy('u.id')->setMaxResults(50)->getQuery()->getResult();\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "QueryBuilder.select") >= 0);
+    ASSERT(find_resolved(r, "C.r", "QueryBuilder.orderBy") >= 0);
+    ASSERT(find_resolved(r, "C.r", "QueryBuilder.setMaxResults") >= 0);
+    ASSERT(find_resolved(r, "C.r", "QueryBuilder.getQuery") >= 0);
+    ASSERT(find_resolved(r, "C.r", "Query.getResult") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_guzzle_chain) {
+    const char *src =
+        "<?php\nclass C { public function r(\\GuzzleHttp\\Client $h): int {\n"
+        "    return $h->get('https://x')->getStatusCode();\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "Client.get") >= 0);
+    ASSERT(find_resolved(r, "C.r", "ResponseInterface.getStatusCode") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_psr7_full_lifecycle) {
+    const char *src =
+        "<?php\nclass C { public function r(\\Psr\\Http\\Message\\RequestInterface $req): void {\n"
+        "    $req->getUri()->__toString();\n"
+        "    $req->withMethod('POST')->withUri($req->getUri());\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "RequestInterface.getUri") >= 0);
+    ASSERT(find_resolved(r, "C.r", "RequestInterface.withMethod") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_dt_immutable_chain) {
+    const char *src =
+        "<?php\nclass C { public function r(\\DateTimeImmutable $d): string {\n"
+        "    return $d->modify('+1 day')->format('Y-m-d');\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "DateTimeImmutable.modify") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_throwable_chain) {
+    const char *src =
+        "<?php\nclass C { public function r(): void {\n"
+        "    try { /* nop */ } catch (\\Throwable $t) {\n"
+        "        $t->getMessage(); $t->getCode(); $t->getFile(); $t->getLine();\n"
+        "    }\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "Throwable.getMessage") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_psr_container_resolve) {
+    const char *src =
+        "<?php\nclass C { public function r(\\Psr\\Container\\ContainerInterface $c): void {\n"
+        "    if ($c->has('logger')) { $c->get('logger'); }\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "ContainerInterface.has") >= 0);
+    ASSERT(find_resolved(r, "C.r", "ContainerInterface.get") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_nullsafe_long) {
+    const char *src =
+        "<?php\nclass D { public function ok(): int { return 1; } }\n"
+        "class C { public ?D $x; public function r(): void { $this->x?->ok(); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "D.ok") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_self_in_constructor) {
+    const char *src =
+        "<?php\nclass C { public function __construct() { self::init(); }\n"
+        "    public static function init(): void {} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.__construct", "C.init") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_static_in_constructor) {
+    const char *src =
+        "<?php\nclass C { public function __construct() { static::init(); }\n"
+        "    public static function init(): void {} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.__construct", "C.init") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_parent_method) {
+    const char *src =
+        "<?php\nclass B { public function tap(): int { return 1; } }\n"
+        "class C extends B { public function r(): void { parent::tap(); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "B.tap") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_method_visibility_modifiers) {
+    const char *src =
+        "<?php\nclass C {\n"
+        "    private function x(): int { return 1; }\n"
+        "    protected function y(): int { return 2; }\n"
+        "    public function z(): int { return $this->x() + $this->y(); }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.z", "C.x") >= 0);
+    ASSERT(find_resolved(r, "C.z", "C.y") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_final_class) {
+    const char *src =
+        "<?php\nfinal class C { public function go(): int { return 1; } }\n"
+        "class K { public function r(C $c): void { $c->go(); } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "K.r", "C.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_class_const_used_in_call) {
+    const char *src =
+        "<?php\nclass C { const NAME = 'C'; public function r(): string { return self::NAME; } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_parameter_default_value) {
+    const char *src =
+        "<?php\nclass C { public function r(int $x = 0, string $s = 'x'): int { return $x; } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_return_type_union) {
+    const char *src =
+        "<?php\nclass A { public function go(): int { return 1; } }\n"
+        "class C { public function r(): A|null { return null; } }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_multi_param_typed) {
+    const char *src =
+        "<?php\nclass A { public function aa(): int { return 1; } }\n"
+        "class B { public function bb(): int { return 2; } }\n"
+        "class C { public function r(A $a, B $b, int $i, string $s): void {\n"
+        "    $a->aa(); $b->bb();\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "A.aa") >= 0);
+    ASSERT(find_resolved(r, "C.r", "B.bb") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_function_with_default_typed) {
+    const char *src =
+        "<?php\nclass C { public function r(\\DateTimeImmutable $d = null): void {\n"
+        "    /* default null but param typed */\n"
+        "} }\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_property_with_default) {
+    const char *src =
+        "<?php\nclass C {\n"
+        "    public int $count = 0;\n"
+        "    public function r(): int { return $this->count; }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(phplsp_edge_private_static) {
+    const char *src =
+        "<?php\nclass C {\n"
+        "    private static function make(): self { return new self(); }\n"
+        "    public function go(): int { return 1; }\n"
+        "    public function r(): void { self::make()->go(); }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.r", "C.make") >= 0);
+    ASSERT(find_resolved(r, "C.r", "C.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(php_lsp) {
@@ -4135,4 +4742,53 @@ SUITE(php_lsp) {
     RUN_TEST(phplsp_foreach_kv_chain);
     RUN_TEST(phplsp_self_ref_recursive);
     RUN_TEST(phplsp_realistic_laravel_controller);
+    /* Phase 5e+ edge cases & robustness (50 more tests) */
+    RUN_TEST(phplsp_edge_namespaced_facade);
+    RUN_TEST(phplsp_edge_chain_through_promotion);
+    RUN_TEST(phplsp_edge_static_property_chain);
+    RUN_TEST(phplsp_edge_enum_method_chain);
+    RUN_TEST(phplsp_edge_call_after_assert_two_levels);
+    RUN_TEST(phplsp_edge_negative_narrow_chain);
+    RUN_TEST(phplsp_edge_closure_bound_class);
+    RUN_TEST(phplsp_edge_late_assignment_chain);
+    RUN_TEST(phplsp_edge_callable_type_param);
+    RUN_TEST(phplsp_edge_nullable_param_chain);
+    RUN_TEST(phplsp_edge_phpdoc_ignored_then_real);
+    RUN_TEST(phplsp_edge_attribute_above_class);
+    RUN_TEST(phplsp_edge_method_with_ref_param);
+    RUN_TEST(phplsp_edge_abstract_no_body);
+    RUN_TEST(phplsp_edge_interface_only);
+    RUN_TEST(phplsp_edge_nested_match);
+    RUN_TEST(phplsp_edge_long_static_chain);
+    RUN_TEST(phplsp_edge_iterator_iterable_param);
+    RUN_TEST(phplsp_edge_array_of_classes);
+    RUN_TEST(phplsp_edge_phpdoc_var_then_assign_chain);
+    RUN_TEST(phplsp_edge_two_traits_one_class);
+    RUN_TEST(phplsp_edge_enum_with_interface);
+    RUN_TEST(phplsp_edge_constructor_promote_then_use);
+    RUN_TEST(phplsp_edge_anonymous_class_in_call);
+    RUN_TEST(phplsp_edge_arrow_function_capture_implicit);
+    RUN_TEST(phplsp_edge_long_namespace_chain);
+    RUN_TEST(phplsp_edge_psr_logger_chain);
+    RUN_TEST(phplsp_edge_eloquent_relations);
+    RUN_TEST(phplsp_edge_collection_pluck_first);
+    RUN_TEST(phplsp_edge_doctrine_qb_orderBy_setMax);
+    RUN_TEST(phplsp_edge_guzzle_chain);
+    RUN_TEST(phplsp_edge_psr7_full_lifecycle);
+    RUN_TEST(phplsp_edge_dt_immutable_chain);
+    RUN_TEST(phplsp_edge_throwable_chain);
+    RUN_TEST(phplsp_edge_psr_container_resolve);
+    RUN_TEST(phplsp_edge_nullsafe_long);
+    RUN_TEST(phplsp_edge_self_in_constructor);
+    RUN_TEST(phplsp_edge_static_in_constructor);
+    RUN_TEST(phplsp_edge_parent_method);
+    RUN_TEST(phplsp_edge_method_visibility_modifiers);
+    RUN_TEST(phplsp_edge_final_class);
+    RUN_TEST(phplsp_edge_class_const_used_in_call);
+    RUN_TEST(phplsp_edge_parameter_default_value);
+    RUN_TEST(phplsp_edge_return_type_union);
+    RUN_TEST(phplsp_edge_multi_param_typed);
+    RUN_TEST(phplsp_edge_function_with_default_typed);
+    RUN_TEST(phplsp_edge_property_with_default);
+    RUN_TEST(phplsp_edge_private_static);
 }

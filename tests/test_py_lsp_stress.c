@@ -80,9 +80,7 @@ TEST(stress_typeddict_subscript) {
         "def use(d: TD):\n"
         "    return d['foo'].method()\n");
     ASSERT_NOT_NULL(r);
-    /* TypedDict["literal"] should narrow to the field type — gap if fails */
-    int idx = find_resolved(r, "use", "method");
-    if (idx < 0) printf("  KNOWN GAP: TypedDict['literal'] narrowing\n");
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
     cbm_free_result(r);
     PASS();
 }
@@ -168,7 +166,7 @@ TEST(stress_except_as_binding) {
 
 TEST(stress_isinstance_else_negative_narrow) {
     /* if not isinstance(x, Foo): return; x.method()
-     * Pyright narrows x to Foo after the early return. We don't model this. */
+     * Narrows x to Foo after the early return via py_block_terminates. */
     CBMFileResult *r = extract_py(
         "class Foo:\n"
         "    def method(self):\n"
@@ -178,8 +176,7 @@ TEST(stress_isinstance_else_negative_narrow) {
         "        return None\n"
         "    return x.method()\n");
     ASSERT_NOT_NULL(r);
-    int idx = find_resolved(r, "use", "method");
-    if (idx < 0) printf("  KNOWN GAP: post-early-return narrowing\n");
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
     cbm_free_result(r);
     PASS();
 }
@@ -390,7 +387,11 @@ TEST(stress_nested_closure) {
 }
 
 TEST(stress_match_sequence_pattern) {
-    /* match items: case [head, *tail]: head.method() */
+    /* match items: case [head, *tail]: head.method()
+     * Tree-sitter Python's pattern wrapper layout for sequence patterns
+     * doesn't expose list_pattern as our case-pattern unwrap finds it;
+     * the bracket form `[head, *tail]` parses through case_pattern ->
+     * (a wrapper that varies by grammar version). Documented as gap. */
     CBMFileResult *r = extract_py(
         "class Foo:\n"
         "    def method(self):\n"

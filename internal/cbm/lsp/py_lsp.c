@@ -840,11 +840,40 @@ static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node) {
 
     // Subscript: container[index]. For TEMPLATE("dict", [K, V])[K] -> V;
     // TEMPLATE("list"|"set"|...)[int] -> elem; TEMPLATE("tuple", [A, B,
-    // ...])[int] -> A (union when index isn't a literal int).
+    // ...])[int] -> A (union when index isn't a literal int). NAMED that
+    // resolves to a TypedDict-tagged registered type with a literal-string
+    // key returns the field's type.
     if (strcmp(k, "subscript") == 0) {
         TSNode value = ts_node_child_by_field_name(node, "value", 5);
         if (ts_node_is_null(value)) return cbm_type_unknown();
         const CBMType* container = py_eval_expr_type(ctx, value);
+
+        // TypedDict literal-key subscript: d["foo"] where d: TD and TD has
+        // class-body annotation `foo: Foo`. Field is registered via
+        // py_register_instance_field.
+        if (container && container->kind == CBM_TYPE_NAMED) {
+            TSNode sub = ts_node_child_by_field_name(node, "subscript", 9);
+            if (!ts_node_is_null(sub)) {
+                const char* sk = ts_node_type(sub);
+                if (strcmp(sk, "string") == 0) {
+                    char* lit = py_node_text(ctx, sub);
+                    if (lit) {
+                        // Strip surrounding quotes.
+                        size_t llen = strlen(lit);
+                        if (llen >= 2 && (lit[0] == '"' || lit[0] == '\'') &&
+                            lit[llen - 1] == lit[0]) {
+                            lit[llen - 1] = '\0';
+                            lit++;
+                        }
+                        const CBMType* field = py_lookup_field(ctx,
+                            container->data.named.qualified_name, lit);
+                        if (field) return field;
+                    }
+                }
+            }
+            return cbm_type_unknown();
+        }
+
         if (!container || container->kind != CBM_TYPE_TEMPLATE) {
             return cbm_type_unknown();
         }
@@ -1437,8 +1466,25 @@ static void py_bind_walrus_in(PyLSPContext* ctx, TSNode node) {
     }
 }
 
+/* Detect whether a block ends with `return`, `raise`, `break`, or
+ * `continue` — meaning execution doesn't fall through past the if-block.
+ * Used for early-return narrowing of the negated condition. */
+static bool py_block_terminates(TSNode block) {
+    if (ts_node_is_null(block)) return false;
+    uint32_t bnc = ts_node_named_child_count(block);
+    if (bnc == 0) return false;
+    TSNode last = ts_node_named_child(block, bnc - 1);
+    const char* k = ts_node_type(last);
+    return strcmp(k, "return_statement") == 0 ||
+           strcmp(k, "raise_statement") == 0 ||
+           strcmp(k, "break_statement") == 0 ||
+           strcmp(k, "continue_statement") == 0;
+}
+
 /* Walk if_statement: push scope for consequence body when narrowing
- * applies, then recurse. */
+ * applies, then recurse. If the consequence terminates (return/raise),
+ * apply the negated narrow to the *enclosing* scope so subsequent
+ * statements see the narrowed type. */
 static void py_walk_if_statement(PyLSPContext* ctx, TSNode if_node) {
     TSNode cond = ts_node_child_by_field_name(if_node, "condition", 9);
     TSNode body = ts_node_child_by_field_name(if_node, "consequence", 11);
@@ -1449,6 +1495,39 @@ static void py_walk_if_statement(PyLSPContext* ctx, TSNode if_node) {
 
     // Always evaluate the condition (may bind via walrus, currently a no-op).
     py_resolve_calls_in(ctx, cond);
+
+    // Recognize negated isinstance / is-None patterns for early-return
+    // narrowing.
+    bool neg_isinstance = false;
+    char* neg_name = NULL;
+    const CBMType* neg_type = NULL;
+    int neg_none_kind = 0;
+    char* neg_none_var = NULL;
+    if (!ts_node_is_null(cond) &&
+        strcmp(ts_node_type(cond), "not_operator") == 0 &&
+        ts_node_named_child_count(cond) > 0) {
+        TSNode inner = ts_node_named_child(cond, 0);
+        if (strcmp(ts_node_type(inner), "call") == 0) {
+            char* nm = NULL;
+            const CBMType* ty = NULL;
+            if (py_match_isinstance(ctx, inner, &nm, &ty)) {
+                neg_isinstance = true;
+                neg_name = nm;
+                neg_type = ty;
+            }
+        }
+        // `if not (x is None):` -> equivalent to `if x is not None`
+        // (rare, the next branch handles `is not None` directly).
+    }
+    // `if x is None: return` — after the if block, x is non-None.
+    {
+        char* nv = NULL;
+        int nk = py_match_is_none(ctx, cond, &nv);
+        if (nk == -1) {  // x is None
+            neg_none_kind = -1;
+            neg_none_var = nv;
+        }
+    }
 
     // Consequence: maybe narrow.
     if (!ts_node_is_null(body)) {
@@ -1482,6 +1561,24 @@ static void py_walk_if_statement(PyLSPContext* ctx, TSNode if_node) {
     // the else branch's narrowing is the negation, which we don't model in v1.
     if (!ts_node_is_null(alt)) {
         py_resolve_calls_in(ctx, alt);
+    }
+
+    // Early-return narrowing: if the consequence block terminates and the
+    // condition negates a type guard, apply the *positive* narrow to the
+    // enclosing scope so subsequent statements see the narrowed type.
+    if (!ts_node_is_null(body) && py_block_terminates(body)) {
+        if (neg_isinstance && neg_name && neg_type) {
+            cbm_scope_bind(ctx->current_scope, neg_name, neg_type);
+        }
+        if (neg_none_kind == -1 && neg_none_var) {
+            // `if x is None: return` -> narrow x to non-None afterwards.
+            const CBMType* current = cbm_scope_lookup(ctx->current_scope,
+                neg_none_var);
+            if (current && !cbm_type_is_unknown(current)) {
+                const CBMType* narrowed = py_strip_none(ctx, current);
+                cbm_scope_bind(ctx->current_scope, neg_none_var, narrowed);
+            }
+        }
     }
 }
 
@@ -1536,12 +1633,20 @@ static void py_resolve_calls_in(PyLSPContext* ctx, TSNode node) {
 
                 // The pattern field is a `case_pattern` wrapper around the
                 // actual pattern type (class_pattern, sequence_pattern, etc).
-                // Unwrap one level if needed.
+                // Some grammar versions wrap further in `pattern`. Walk
+                // through both wrappers.
                 TSNode actual_pattern = pattern;
-                if (!ts_node_is_null(pattern) &&
-                    strcmp(ts_node_type(pattern), "case_pattern") == 0 &&
-                    ts_node_named_child_count(pattern) > 0) {
-                    actual_pattern = ts_node_named_child(pattern, 0);
+                for (int unwrap = 0; unwrap < 3; unwrap++) {
+                    if (ts_node_is_null(actual_pattern)) break;
+                    const char* apk = ts_node_type(actual_pattern);
+                    if ((strcmp(apk, "case_pattern") == 0 ||
+                         strcmp(apk, "pattern") == 0 ||
+                         strcmp(apk, "_simple_pattern") == 0) &&
+                        ts_node_named_child_count(actual_pattern) > 0) {
+                        actual_pattern = ts_node_named_child(actual_pattern, 0);
+                        continue;
+                    }
+                    break;
                 }
                 // Class pattern: case Foo(a, b): -> bind subject to NAMED(Foo),
                 // bind a / b to UNKNOWN (field-type extraction is a v1.1 task).
@@ -1564,6 +1669,47 @@ static void py_resolve_calls_in(PyLSPContext* ctx, TSNode node) {
                                 char* nm = py_node_text(ctx, id);
                                 if (nm) cbm_scope_bind(ctx->current_scope, nm,
                                     cbm_type_unknown());
+                            }
+                        }
+                    }
+                }
+                // Sequence pattern: `case [head, *tail]:` / `case (a, b):`
+                // — for each capture pattern element, bind to the
+                // subject's iterable element type. Star-rest binds to
+                // list[elem].
+                if (subject_name && !ts_node_is_null(actual_pattern) &&
+                    (strcmp(ts_node_type(actual_pattern), "list_pattern") == 0 ||
+                     strcmp(ts_node_type(actual_pattern), "tuple_pattern") == 0)) {
+                    const CBMType* subj_t = cbm_scope_lookup(ctx->current_scope,
+                        subject_name);
+                    const CBMType* elem_t = py_iterable_element_type(ctx, subj_t);
+                    uint32_t pn = ts_node_named_child_count(actual_pattern);
+                    for (uint32_t j = 0; j < pn; j++) {
+                        TSNode sub = ts_node_named_child(actual_pattern, j);
+                        const char* sk = ts_node_type(sub);
+                        if (strcmp(sk, "capture_pattern") == 0) {
+                            if (ts_node_named_child_count(sub) > 0) {
+                                TSNode id = ts_node_named_child(sub, 0);
+                                char* nm = py_node_text(ctx, id);
+                                if (nm && elem_t) {
+                                    cbm_scope_bind(ctx->current_scope, nm, elem_t);
+                                }
+                            }
+                        } else if (strcmp(sk, "splat_pattern") == 0 ||
+                                   strcmp(sk, "list_splat_pattern") == 0 ||
+                                   strcmp(sk, "star_pattern") == 0) {
+                            if (ts_node_named_child_count(sub) > 0) {
+                                TSNode id = ts_node_named_child(sub, 0);
+                                if (strcmp(ts_node_type(id), "capture_pattern") == 0 &&
+                                    ts_node_named_child_count(id) > 0) {
+                                    id = ts_node_named_child(id, 0);
+                                }
+                                char* nm = py_node_text(ctx, id);
+                                if (nm && elem_t) {
+                                    const CBMType* lst = cbm_type_template(
+                                        ctx->arena, "list", &elem_t, 1);
+                                    cbm_scope_bind(ctx->current_scope, nm, lst);
+                                }
                             }
                         }
                     }

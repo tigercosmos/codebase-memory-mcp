@@ -103,6 +103,52 @@ TEST(java_interface) {
     PASS();
 }
 
+/* Regression for #279: a Java class declaring both `extends` and
+ * `implements` must produce one INHERITS edge per base — the extends parent
+ * AND every implements interface — with bare type names (not the keyword
+ * text "extends Bar" / "implements Baz, Qux"). Before the fix:
+ *   1) the field loop returned on the first match → only the superclass
+ *      was emitted, the interfaces were dropped.
+ *   2) the emitted name was the full field text including the keyword. */
+TEST(java_class_extends_and_implements) {
+    CBMFileResult *r = extract(
+        "public class DefaultLinkTool extends DefaultDiagramTool implements ILinkTool, Closeable { }",
+        CBM_LANG_JAVA, "t", "DefaultLinkTool.java");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+
+    /* Find the class def and inspect its base_classes list. */
+    CBMDefinition *cls = NULL;
+    for (int i = 0; i < r->defs.count; i++) {
+        if (strcmp(r->defs.items[i].label, "Class") == 0 &&
+            strcmp(r->defs.items[i].name, "DefaultLinkTool") == 0) {
+            cls = &r->defs.items[i];
+            break;
+        }
+    }
+    ASSERT_NOT_NULL(cls);
+    ASSERT_NOT_NULL(cls->base_classes);
+
+    bool saw_super = false;
+    bool saw_iface_a = false;
+    bool saw_iface_b = false;
+    for (const char **b = cls->base_classes; *b; b++) {
+        /* The keyword-text bug would surface as "extends ..." or
+         * "implements ..." literally inside one of the entries. */
+        ASSERT_NULL(strstr(*b, "extends"));
+        ASSERT_NULL(strstr(*b, "implements"));
+        if (strcmp(*b, "DefaultDiagramTool") == 0) saw_super = true;
+        if (strcmp(*b, "ILinkTool") == 0) saw_iface_a = true;
+        if (strcmp(*b, "Closeable") == 0) saw_iface_b = true;
+    }
+    ASSERT_TRUE(saw_super);
+    ASSERT_TRUE(saw_iface_a);
+    ASSERT_TRUE(saw_iface_b);
+
+    cbm_free_result(r);
+    PASS();
+}
+
 /* --- PHP --- */
 TEST(php_class) {
     CBMFileResult *r = extract("<?php\nclass User { public string $name; public function "
@@ -2226,6 +2272,7 @@ SUITE(extraction) {
     RUN_TEST(java_class);
     RUN_TEST(java_method);
     RUN_TEST(java_interface);
+    RUN_TEST(java_class_extends_and_implements);
     RUN_TEST(php_class);
     RUN_TEST(php_function);
     RUN_TEST(ruby_class);

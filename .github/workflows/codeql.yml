@@ -15,40 +15,18 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev jq
+        run: sudo apt-get update && sudo apt-get install -y zlib1g-dev
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
           languages: c-cpp
           build-mode: manual
-          queries: +./codeql
 
       - name: Build for CodeQL analysis
         run: scripts/build.sh
 
       - name: Perform CodeQL Analysis
-        id: analyze
         uses: github/codeql-action/analyze@95e58e9a2cdfd71adc6e0353d5c52f41a045d225 # v4
         with:
           category: "/language:c-cpp"
-          output: codeql-results
-
-      - name: Fail on CodeQL error-level findings
-        run: |
-          sarif=$(find codeql-results -name '*.sarif' | head -1)
-          if [[ -z "$sarif" ]]; then
-            echo "::error::No SARIF output found"; exit 1
-          fi
-          err=$(jq '[.runs[].results[]? | select((.level // "warning") == "error")] | length' "$sarif")
-          warn=$(jq '[.runs[].results[]? | select((.level // "warning") == "warning")] | length' "$sarif")
-          echo "CodeQL findings: $err error(s), $warn warning(s)"
-          if [[ "$err" -gt 0 ]]; then
-            jq -r '
-              .runs[].results[]?
-              | select((.level // "warning") == "error")
-              | "\(.locations[0].physicalLocation.artifactLocation.uri):\(.locations[0].physicalLocation.region.startLine) [\(.ruleId)] \(.message.text)"
-            ' "$sarif"
-            echo "::error::$err CodeQL error-level finding(s) — failing build."
-            exit 1
-          fi

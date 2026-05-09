@@ -2922,7 +2922,12 @@ static void flatten_trait_into_class(PHPLSPContext *ctx, CBMTypeRegistry *reg,
     if (!t) t = lookup_type_with_project(ctx, trait_qn);
     const char *canonical_trait_qn = t ? t->qualified_name : trait_qn;
 
-    /* Iterate registry funcs whose receiver_type is the trait. */
+    /* Iterate registry funcs whose receiver_type is the trait.
+     *
+     * Self-substitution: when the trait's method has a return type that
+     * names the trait itself (e.g. `tap(): self` registered as
+     * NAMED(trait_qn)), rewrite it to NAMED(using_class_qn) so chains
+     * like `$c->tap()->classMethod()` resolve correctly. */
     for (int i = 0; i < reg->func_count; i++) {
         const CBMRegisteredFunc *src = &reg->funcs[i];
         if (!src->receiver_type || strcmp(src->receiver_type, canonical_trait_qn) != 0) {
@@ -2940,8 +2945,26 @@ static void flatten_trait_into_class(PHPLSPContext *ctx, CBMTypeRegistry *reg,
         rf.qualified_name = cbm_arena_sprintf(ctx->arena, "%s.%s", class_qn, new_short);
         rf.short_name = cbm_arena_strdup(ctx->arena, new_short);
         rf.receiver_type = class_qn;
-        rf.signature = src->signature;
         rf.min_params = src->min_params;
+
+        /* Self-substitute the return type: any NAMED(trait_qn) in the
+         * signature's return becomes NAMED(class_qn). */
+        const CBMType *new_sig = src->signature;
+        if (src->signature && src->signature->kind == CBM_TYPE_FUNC &&
+            src->signature->data.func.return_types) {
+            const CBMType *ret0 = src->signature->data.func.return_types[0];
+            if (ret0 && ret0->kind == CBM_TYPE_NAMED && ret0->data.named.qualified_name &&
+                strcmp(ret0->data.named.qualified_name, canonical_trait_qn) == 0) {
+                const CBMType **rets =
+                    (const CBMType **)cbm_arena_alloc(ctx->arena, 2 * sizeof(*rets));
+                if (rets) {
+                    rets[0] = cbm_type_named(ctx->arena, class_qn);
+                    rets[1] = NULL;
+                    new_sig = cbm_type_func(ctx->arena, NULL, NULL, rets);
+                }
+            }
+        }
+        rf.signature = new_sig;
         cbm_registry_add_func(reg, rf);
     }
 }
@@ -3295,23 +3318,36 @@ static void process_class_for_fields(PHPLSPContext *ctx, CBMTypeRegistry *reg,
 static void php_lsp_collect_class_fields(PHPLSPContext *ctx, CBMTypeRegistry *reg, TSNode root,
                                           php_class_field_table_t *tab) {
     if (ts_node_is_null(root)) return;
-    /* Iterative DFS so namespace { class { ... } } nests are handled. */
-    TSNode stack[256];
-    int top = 0;
-    stack[top++] = root;
-    while (top > 0) {
-        TSNode n = stack[--top];
-        if (ts_node_is_null(n)) continue;
-        const char *k = ts_node_type(n);
-        if (strcmp(k, "class_declaration") == 0 || strcmp(k, "trait_declaration") == 0 ||
-            strcmp(k, "interface_declaration") == 0 ||
-            strcmp(k, "enum_declaration") == 0) {
-            process_class_for_fields(ctx, reg, n, tab);
-        }
-        uint32_t nc = ts_node_child_count(n);
-        for (uint32_t i = 0; i < nc && top < 256; i++) {
-            TSNode c = ts_node_child(n, i);
-            if (!ts_node_is_null(c) && ts_node_is_named(c)) stack[top++] = c;
+    /* TWO PASSES so trait/interface declared-return-types get patched
+     * BEFORE classes that use them — otherwise flatten_trait_into_class
+     * sees stale (BUILTIN/UNKNOWN) signatures and can't perform the
+     * trait `self` substitution.
+     *
+     * Pass 1: traits and interfaces (declarators that don't pull from
+     * other classes via `use`).
+     * Pass 2: classes and enums (which may `use Trait;` and need the
+     * trait's signatures already patched).
+     */
+    for (int pass = 0; pass < 2; pass++) {
+        TSNode stack[256];
+        int top = 0;
+        stack[top++] = root;
+        while (top > 0) {
+            TSNode n = stack[--top];
+            if (ts_node_is_null(n)) continue;
+            const char *k = ts_node_type(n);
+            bool is_trait_or_iface = (strcmp(k, "trait_declaration") == 0 ||
+                                       strcmp(k, "interface_declaration") == 0);
+            bool is_class_or_enum = (strcmp(k, "class_declaration") == 0 ||
+                                       strcmp(k, "enum_declaration") == 0);
+            if ((pass == 0 && is_trait_or_iface) || (pass == 1 && is_class_or_enum)) {
+                process_class_for_fields(ctx, reg, n, tab);
+            }
+            uint32_t nc = ts_node_child_count(n);
+            for (uint32_t i = 0; i < nc && top < 256; i++) {
+                TSNode c = ts_node_child(n, i);
+                if (!ts_node_is_null(c) && ts_node_is_named(c)) stack[top++] = c;
+            }
         }
     }
 }

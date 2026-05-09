@@ -3345,9 +3345,10 @@ TEST(phplsp_nested_ternary_instance) {
     PASS();
 }
 
-/* ── 172. Trait used in chain - tap() resolves via flatten ─
- * (Full self-substitution through trait flattening is Phase 5+ work; we
- * only assert the trait method resolves at all here.) */
+/* ── 172. Trait used in chain — tap() returns class, .ok() resolves ─
+ * Trait self-substitution: T::tap() declared as `self` becomes the
+ * USING class's type when flattened into C, so $c->tap() returns C
+ * and ->ok() resolves on C. */
 
 TEST(phplsp_trait_in_chain) {
     const char *src =
@@ -3360,6 +3361,7 @@ TEST(phplsp_trait_in_chain) {
     CBMFileResult *r = extract_php(src);
     ASSERT(r);
     ASSERT(find_resolved(r, "Caller.run", ".tap") >= 0);
+    ASSERT(find_resolved(r, "Caller.run", "C.ok") >= 0);
     cbm_free_result(r);
     PASS();
 }

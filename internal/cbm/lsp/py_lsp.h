@@ -7,6 +7,23 @@
 #include "../cbm.h"
 #include "go_lsp.h"  // CBMLSPDef, CBMResolvedCallArray reused across languages
 
+// Lambda body record. When a lambda is assigned to a name (`fn =
+// lambda x: x.method()`), we stash its parameter list + body so the
+// next call site (`fn(arg)`) can do call-site driven inference.
+typedef struct {
+    const char* name;            // bound name, e.g. "fn"
+    TSNode lambda_node;          // the lambda AST node
+} CBMLambdaEntry;
+
+// Function-as-dict-value entry. When `funcs = {"a": foo, "b": bar}` is
+// seen, we record the per-key target QN so `funcs["a"]()` emits an
+// edge to foo.
+typedef struct {
+    const char* var_name;        // e.g. "funcs"
+    const char* literal_key;     // e.g. "a"
+    const char* target_qn;       // e.g. "test.main.foo"
+} CBMDictLiteralEntry;
+
 // PyLSPContext holds state for one Python file's type evaluation.
 typedef struct {
     CBMArena* arena;
@@ -29,6 +46,16 @@ typedef struct {
 
     // Output: resolved calls accumulate here.
     CBMResolvedCallArray* resolved_calls;
+
+    // Lambda registry: simple linear list, looked up by name.
+    CBMLambdaEntry* lambdas;
+    int lambda_count;
+    int lambda_cap;
+
+    // Dict-literal-as-dispatch-table tracking.
+    CBMDictLiteralEntry* dict_literals;
+    int dict_literal_count;
+    int dict_literal_cap;
 
     // Debug mode (CBM_LSP_DEBUG env, shared across all language LSPs).
     bool debug;

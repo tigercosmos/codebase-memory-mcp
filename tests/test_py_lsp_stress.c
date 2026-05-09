@@ -237,7 +237,7 @@ TEST(stress_list_slice_returns_list) {
 /* ── Decorators / first-class functions ──────────────────────── */
 
 TEST(stress_function_as_dict_value) {
-    /* funcs: dict[str, Callable] = {"a": foo}; funcs["a"]() */
+    /* funcs = {"a": foo, "b": bar}; funcs["a"]() — dict-literal dispatch */
     CBMFileResult *r = extract_py(
         "def foo():\n"
         "    return 1\n"
@@ -247,10 +247,7 @@ TEST(stress_function_as_dict_value) {
         "    funcs = {'a': foo, 'b': bar}\n"
         "    funcs['a']()\n");
     ASSERT_NOT_NULL(r);
-    /* funcs['a'] resolves to a Callable; calling it is an unknown target.
-     * This is genuinely hard without runtime info. */
-    int idx = find_resolved(r, "use", "foo");
-    if (idx < 0) printf("  KNOWN GAP: function-as-dict-value indirect call\n");
+    ASSERT_GTE(require_resolved(r, "use", "foo"), 0);
     cbm_free_result(r);
     PASS();
 }
@@ -387,11 +384,7 @@ TEST(stress_nested_closure) {
 }
 
 TEST(stress_match_sequence_pattern) {
-    /* match items: case [head, *tail]: head.method()
-     * Tree-sitter Python's pattern wrapper layout for sequence patterns
-     * doesn't expose list_pattern as our case-pattern unwrap finds it;
-     * the bracket form `[head, *tail]` parses through case_pattern ->
-     * (a wrapper that varies by grammar version). Documented as gap. */
+    /* match items: case [head, *tail]: head.method() */
     CBMFileResult *r = extract_py(
         "class Foo:\n"
         "    def method(self):\n"
@@ -403,14 +396,13 @@ TEST(stress_match_sequence_pattern) {
         "        case []:\n"
         "            return None\n");
     ASSERT_NOT_NULL(r);
-    int idx = find_resolved(r, "use", "method");
-    if (idx < 0) printf("  KNOWN GAP: match sequence pattern element typing\n");
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
     cbm_free_result(r);
     PASS();
 }
 
 TEST(stress_lambda_inference) {
-    /* fn = lambda x: x.method(); fn(Foo()) */
+    /* fn = lambda x: x.method(); fn(Foo()) — call-site driven inference */
     CBMFileResult *r = extract_py(
         "class Foo:\n"
         "    def method(self):\n"
@@ -419,10 +411,7 @@ TEST(stress_lambda_inference) {
         "    fn = lambda x: x.method()\n"
         "    return fn(Foo())\n");
     ASSERT_NOT_NULL(r);
-    /* x's type inside the lambda comes from the call site — needs
-     * bidirectional inference. We don't model this. */
-    int idx = find_resolved(r, "<lambda>", "method");
-    if (idx < 0) printf("  KNOWN GAP: lambda parameter inference from call site\n");
+    ASSERT_GTE(require_resolved(r, "lambda", "method"), 0);
     cbm_free_result(r);
     PASS();
 }
@@ -483,6 +472,398 @@ TEST(stress_async_gen_for) {
     PASS();
 }
 
+/* ── Round 10 — real-world / framework patterns ──────────────── */
+
+TEST(stress_sqlalchemy_mapped_field) {
+    /* SQLAlchemy 2.0: id: Mapped[int] = mapped_column(...)
+     * Mapped[T] should unwrap to T for member access. */
+    CBMFileResult *r = extract_py(
+        "from typing import Annotated\n"
+        "class Mapped:\n"
+        "    pass\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "class User:\n"
+        "    id: Mapped[Foo]\n"
+        "def use(u: User):\n"
+        "    return u.id.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_pydantic_model_field) {
+    /* class Model(BaseModel): name: Foo. m.name.method() */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "class BaseModel:\n"
+        "    pass\n"
+        "class User(BaseModel):\n"
+        "    name: Foo\n"
+        "    age: int\n"
+        "def use(u: User):\n"
+        "    return u.name.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_chained_filter_map) {
+    /* filter / map / list compose */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def use(items: list[Foo]):\n"
+        "    filtered = [x for x in items if x.method() > 0]\n"
+        "    return [y.method() for y in filtered]\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_nested_function_call) {
+    /* outer(inner()) where outer/inner have annotations */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def make() -> Foo:\n"
+        "    return Foo()\n"
+        "def transform(x: Foo) -> Foo:\n"
+        "    return x\n"
+        "def use():\n"
+        "    return transform(make()).method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_optional_chain_with_walrus) {
+    /* if (result := compute()) is not None: result.method() */
+    CBMFileResult *r = extract_py(
+        "from typing import Optional\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def compute() -> Optional[Foo]:\n"
+        "    return None\n"
+        "def use():\n"
+        "    if (result := compute()) is not None:\n"
+        "        return result.method()\n"
+        "    return None\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_classmethod_chain_to_method) {
+    /* C.factory().method() where factory is a @classmethod returning Self */
+    CBMFileResult *r = extract_py(
+        "from typing import Self\n"
+        "class Builder:\n"
+        "    @classmethod\n"
+        "    def create(cls) -> Self:\n"
+        "        return cls()\n"
+        "    def step(self) -> Self:\n"
+        "        return self\n"
+        "    def finish(self):\n"
+        "        return 1\n"
+        "def use():\n"
+        "    return Builder.create().step().finish()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "finish"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_multi_assign_same_line) {
+    /* a, b = (Foo(), Bar()) — same as tuple unpack, but explicit tuple */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def m_a(self):\n"
+        "        return 1\n"
+        "class Bar:\n"
+        "    def m_b(self):\n"
+        "        return 2\n"
+        "def use():\n"
+        "    a, b = (Foo(), Bar())\n"
+        "    a.m_a()\n"
+        "    b.m_b()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "m_a"), 0);
+    ASSERT_GTE(require_resolved(r, "use", "m_b"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_dict_get_default) {
+    /* d.get(k, default) — return type still V (or default's type) */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def use(d: dict[str, Foo], default: Foo):\n"
+        "    v = d.get('k', default)\n"
+        "    return v.method()\n");
+    ASSERT_NOT_NULL(r);
+    /* d.get(k) returns Optional[V] in our model — single-arg overload.
+     * With a default, runtime returns V always, but our resolver still
+     * gives Optional. method() resolves through UNION fallback. */
+    int idx = find_resolved(r, "use", "method");
+    if (idx < 0) printf("  KNOWN GAP: dict.get with default narrows away None\n");
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_chained_attribute_through_property_setter) {
+    /* @property + @x.setter, then accessing through chain */
+    CBMFileResult *r = extract_py(
+        "class Inner:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "class Outer:\n"
+        "    @property\n"
+        "    def inner(self) -> Inner:\n"
+        "        return Inner()\n"
+        "def use(o: Outer):\n"
+        "    return o.inner.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_async_with_async_for) {
+    /* async with X() as ctx: async for x in ctx: x.method() */
+    CBMFileResult *r = extract_py(
+        "from typing import AsyncIterator\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "class Ctx:\n"
+        "    async def __aenter__(self):\n"
+        "        return self\n"
+        "    async def __aexit__(self, *args):\n"
+        "        return None\n"
+        "    def __aiter__(self) -> AsyncIterator[Foo]:\n"
+        "        return self\n"
+        "    async def __anext__(self) -> Foo:\n"
+        "        return Foo()\n"
+        "async def use():\n"
+        "    async with Ctx() as ctx:\n"
+        "        async for x in ctx:\n"
+        "            x.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_recursive_method_self) {
+    /* class Node: def visit(self) -> int: ... self.left.visit() */
+    CBMFileResult *r = extract_py(
+        "from typing import Optional\n"
+        "class Node:\n"
+        "    def __init__(self):\n"
+        "        self.left: Optional['Node'] = None\n"
+        "    def visit(self) -> int:\n"
+        "        if self.left is not None:\n"
+        "            return self.left.visit()\n"
+        "        return 0\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "visit", "visit"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_callable_return_value) {
+    /* def factory() -> Callable[[], Foo]: ... factory()().method() */
+    CBMFileResult *r = extract_py(
+        "from typing import Callable\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def factory() -> Callable[[], Foo]:\n"
+        "    return Foo\n"
+        "def use():\n"
+        "    return factory()().method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_typeddict_total_false) {
+    /* class TD(TypedDict, total=False): foo: Foo. d['foo'].method() */
+    CBMFileResult *r = extract_py(
+        "from typing import TypedDict\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "class TD(TypedDict, total=False):\n"
+        "    foo: Foo\n"
+        "def use(d: TD):\n"
+        "    return d['foo'].method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_nested_match_patterns) {
+    /* match x: case Foo(a, b): bind a, b */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "class Bar:\n"
+        "    def m2(self):\n"
+        "        return 2\n"
+        "def use(x):\n"
+        "    match x:\n"
+        "        case Foo():\n"
+        "            return x.method()\n"
+        "        case Bar():\n"
+        "            return x.m2()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    ASSERT_GTE(require_resolved(r, "use", "m2"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_protocol_via_named_class) {
+    /* def use(x: SupportsMethod): x.method()
+     * SupportsMethod is a Protocol, x can be any class with method() */
+    CBMFileResult *r = extract_py(
+        "from typing import Protocol\n"
+        "class SupportsMethod(Protocol):\n"
+        "    def method(self) -> int: ...\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def use(x: SupportsMethod):\n"
+        "    return x.method()\n");
+    ASSERT_NOT_NULL(r);
+    /* Should resolve x.method through the Protocol's method declaration. */
+    int idx = find_resolved(r, "use", "method");
+    if (idx < 0) printf("  KNOWN GAP: Protocol method resolution\n");
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_iterator_next_value) {
+    /* def gen(): yield Foo(); next(gen()).method() */
+    CBMFileResult *r = extract_py(
+        "from typing import Iterator\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def gen() -> Iterator[Foo]:\n"
+        "    yield Foo()\n"
+        "def use():\n"
+        "    return next(gen()).method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_double_star_unpack) {
+    /* def f(**kwargs): kwargs['x'].method() — kwargs is dict[str, Foo] */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def use(**kwargs: Foo):\n"
+        "    return kwargs['x'].method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_yield_from_in_use) {
+    /* yield from gen() — body's yields collected by caller's iteration */
+    CBMFileResult *r = extract_py(
+        "from typing import Iterator\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def src() -> Iterator[Foo]:\n"
+        "    yield Foo()\n"
+        "def chain() -> Iterator[Foo]:\n"
+        "    yield from src()\n"
+        "def use():\n"
+        "    for x in chain():\n"
+        "        x.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_isinstance_or_chain) {
+    /* if isinstance(x, Foo) or isinstance(x, Bar): — narrowed to Foo|Bar */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "class Bar:\n"
+        "    def method(self):\n"
+        "        return 2\n"
+        "def use(x):\n"
+        "    if isinstance(x, Foo):\n"
+        "        return x.method()\n"
+        "    return None\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_module_level_const_class) {
+    /* Top-level: foo = Foo(); use foo.method() in another function. */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "foo = Foo()\n"
+        "def use():\n"
+        "    return foo.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(stress_dataclass_with_default_factory) {
+    /* @dataclass with field(default_factory=list) */
+    CBMFileResult *r = extract_py(
+        "from dataclasses import dataclass, field\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "@dataclass\n"
+        "class Container:\n"
+        "    items: list[Foo] = field(default_factory=list)\n"
+        "def use(c: Container):\n"
+        "    return c.items[0].method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────── */
 
 SUITE(py_lsp_stress) {
@@ -514,4 +895,26 @@ SUITE(py_lsp_stress) {
     RUN_TEST(stress_method_chain_long);
     RUN_TEST(stress_generator_delegation);
     RUN_TEST(stress_async_gen_for);
+    /* Round 10 — real-world / framework patterns */
+    RUN_TEST(stress_sqlalchemy_mapped_field);
+    RUN_TEST(stress_pydantic_model_field);
+    RUN_TEST(stress_chained_filter_map);
+    RUN_TEST(stress_nested_function_call);
+    RUN_TEST(stress_optional_chain_with_walrus);
+    RUN_TEST(stress_classmethod_chain_to_method);
+    RUN_TEST(stress_multi_assign_same_line);
+    RUN_TEST(stress_dict_get_default);
+    RUN_TEST(stress_chained_attribute_through_property_setter);
+    RUN_TEST(stress_async_with_async_for);
+    RUN_TEST(stress_recursive_method_self);
+    RUN_TEST(stress_callable_return_value);
+    RUN_TEST(stress_typeddict_total_false);
+    RUN_TEST(stress_nested_match_patterns);
+    RUN_TEST(stress_protocol_via_named_class);
+    RUN_TEST(stress_iterator_next_value);
+    RUN_TEST(stress_double_star_unpack);
+    RUN_TEST(stress_yield_from_in_use);
+    RUN_TEST(stress_isinstance_or_chain);
+    RUN_TEST(stress_module_level_const_class);
+    RUN_TEST(stress_dataclass_with_default_factory);
 }

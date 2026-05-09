@@ -95,6 +95,104 @@ construct (e.g. `getattr`-style dispatch).
 
 ## Results
 
-(Appended as benchmark runs land. None recorded yet at the time of
-Phase 11 wrap-up; the methodology and integration test are in place
-for when a fresh production binary is built.)
+### In-process benchmark (test_py_lsp_bench.c)
+
+| Date | Commit | Fixture LOC | Calls | Resolved | Ratio | Time (ASan+UBSan) |
+|---|---|---:|---:|---:|---:|---:|
+| 2026-05-08 | a8c9ace (Phase 11 baseline) | 65 | 16 | 13 | 81% | 2.45 ms |
+| 2026-05-09 | 2e042da (Round 1: dotted imports, cast, Self, fwd-refs) | 65 | 16 | 13 | 81% | 3.11 ms |
+| 2026-05-09 | fa45e7d (Round 2: narrowing, walrus, comprehension typing) | 65 | 16 | 13 | 81% | 2.74 ms |
+| 2026-05-09 | e7dcadc (Round 3: match/case, await, expanded fixture to 136 LOC) | 136 | 38 | 30 | 79% | 7.50 ms |
+| 2026-05-09 | 4b99389 (Round 4: instance attribute typing) | 136 | 38 | **36** | **95%** | 8.06 ms |
+
+The 65→136 fixture jump is more honest: the small fixture was
+hand-shaped to match what the resolver did well at the time. The
+136-line fixture covers the full parity surface — narrowing
+(isinstance / `is not None` / walrus), generic containers and
+comprehensions, fluent `Self` chains, `super()`, async/await,
+match/case dispatch, classmethod / staticmethod, common stdlib calls,
+and instance attributes via both `self.x = expr` in `__init__` and
+class-body `x: T` annotations.
+
+The remaining 5% gap (2/38 unresolved calls) hits cases that genuinely
+need a constraint solver — see "Stopping Point" below.
+
+## Stopping Point — what we deliberately did not build
+
+Per the user directive "stop if any addition would realistically mean
+that we need to kinda rebuild a compiler or whatever, but otherwise
+pursue parity," the following items are out of scope for v1 and would
+require building infrastructure equivalent to a full Python type
+checker:
+
+1. **Constraint solver / bidirectional inference.** Pyright's
+   `constraintSolver.ts` is ~3,000 lines of bidirectional type
+   inference. Required for: full overload resolution by argument type,
+   inferring callable types from context, ParamSpec resolution.
+2. **Code-flow type narrowing across basic blocks.** Pyright's
+   `codeFlowEngine.ts` tracks types through every basic block,
+   handling early returns, exception flow, generator flow.
+   Equivalent to building an SSA-style analysis for Python.
+3. **`ParamSpec` / `TypeVarTuple` / `Concatenate` resolution.** These
+   PEP 612 / 646 / 696 features are how decorator-rewrapping and
+   variadic generics work properly. Without them, `@functools.wraps`
+   collapses to identity — fine for our call resolution but not
+   parity with type checkers.
+4. **Custom metaclasses' `__call__`.** A class with a custom
+   metaclass can short-circuit `Class()` to call something else
+   entirely. Pyright handles this by recognizing common metaclass
+   patterns; full support means tracking metaclass MRO.
+5. **Descriptor protocol beyond `@property` / `@classmethod` /
+   `@staticmethod`.** Custom descriptors via `__get__` / `__set__` /
+   `__delete__` change attribute semantics arbitrarily. Common in
+   ORMs (SQLAlchemy column objects), Pydantic, attrs.
+6. **Plugin protocols.** SQLAlchemy declarative classes, Pydantic
+   models, attrs / dataclasses-style libraries — Pyright ships
+   special-case "plugins" for each. Each is hundreds of lines.
+7. **Recursive types and self-referential generics.** `tree:
+   Node[Node[Node[...]]]` resolution requires lazy type evaluation.
+8. **Runtime monkey-patching, `eval`/`exec`, `setattr` with
+   non-literal name.** No static analyzer handles these well; they're
+   fundamentally dynamic.
+9. **Per-symbol typeshed version guards in the stdlib generator.**
+   The plan called for `min_python_version` / `max_python_version`
+   tracking. v1 flattens version branches (union of all). Adding
+   per-version filtering requires propagating the project's target
+   Python version through the resolver — non-trivial threading
+   change.
+
+Items 1, 2, 3, 5, 7 are direct compiler-rebuild territory. Items 4,
+6 need significant per-pattern engineering. Item 8 is impossible
+statically. Item 9 is achievable but a separate v1.1 task.
+
+## Achievable next steps (not undertaken in this iteration)
+
+These would push past 95% on the bench fixture but stay below the
+"compiler rebuild" line:
+
+- **Decorator return-type substitution for the simple case.** When a
+  decorator `D` is registered with return annotation `Callable[..., R]`
+  or just a function-typed return, the decorated function's effective
+  return is the decorator's return. Doesn't need ParamSpec for the
+  identity / wrapper pattern.
+- **Overload selection by literal argument.** Many stdlib functions
+  have overloads keyed on literal flags (`subprocess.run(..., check=True)`,
+  `re.compile(..., flags=...)`, `json.loads`). The current generator
+  collapses overloads; selection at call site by matching literal arg
+  values would resolve the right overload.
+- **`super().__init__(...)` constructor resolution.** Currently
+  `super()` in __init__ may not resolve to the parent's __init__
+  because __init__ isn't typically registered with a return type
+  worth chaining. A small special-case would emit the constructor
+  edge.
+- **Dict subscript value typing.** `self.cache[key]` should type as
+  the dict's value type. Currently UNKNOWN. Easy to add given
+  TEMPLATE("dict", [K, V]) is already extracted from annotations.
+- **`@property` getter return type.** Currently we return the method's
+  return type when accessing a method as an attribute (which happens
+  to be right for properties and rarely wrong for regular methods,
+  per the discussion in the Round 1 commit). A real fix tracks
+  decorator info on registered methods.
+
+These are within reach without compiler-level infrastructure and
+would push the bench from 95% toward ~98%.

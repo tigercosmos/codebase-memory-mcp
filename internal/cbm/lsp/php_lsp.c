@@ -174,16 +174,17 @@ static const char *find_use(PHPLSPContext *ctx, const char *local_name, int kind
  * Returns an arena-allocated string in dotted form. May return NULL for builtins. */
 const char *php_resolve_class_name(PHPLSPContext *ctx, const char *name) {
     if (!name || !*name) return NULL;
-    if (php_is_builtin_type_name(name)) return NULL;
 
-    /* Self / static / parent are resolved by caller; still translate here for
-     * cases where they slip through. */
+    /* Self / static / parent are class-relative pseudo-types and must be
+     * checked BEFORE the builtin-name check, since they're listed as
+     * builtins above for type-parsing purposes. */
     if (strcmp(name, "self") == 0 || strcmp(name, "static") == 0) {
         return ctx->enclosing_class_qn;
     }
     if (strcmp(name, "parent") == 0) {
         return ctx->enclosing_parent_qn;
     }
+    if (php_is_builtin_type_name(name)) return NULL;
 
     /* Fully-qualified — leading backslash. */
     if (name[0] == '\\') {
@@ -1852,6 +1853,9 @@ static void process_if_statement(PHPLSPContext *ctx, TSNode node) {
         if (!past_cond) {
             if (strcmp(k, "parenthesized_expression") == 0) {
                 past_cond = true;
+                /* Walk the condition expression so calls inside it (e.g.
+                 * `$it->valid()` in `if ($it->valid())`) get resolved. */
+                php_resolve_calls_in_node(ctx, c);
                 continue;
             }
             /* Non-condition child encountered before the condition: keep walking. */
@@ -3178,10 +3182,20 @@ static void process_class_for_fields(PHPLSPContext *ctx, CBMTypeRegistry *reg,
             /* Re-parse the declared return type via php_parse_type_node so
              * generic forms like `\Generator<int, User>` end up as
              * TEMPLATE types, not broken NAMED("Generator<int, User>")
-             * that the simpler parse_return_type_text produced earlier. */
+             * that the simpler parse_return_type_text produced earlier.
+             *
+             * We temporarily set ctx->enclosing_class_qn so that
+             * `self`/`static` in the return-type position resolve to the
+             * current class. */
             TSNode rt_node = ts_node_child_by_field_name(c, "return_type", 11);
             if (!ts_node_is_null(rt_node) && mn) {
+                const char *saved_class = ctx->enclosing_class_qn;
+                const char *saved_parent = ctx->enclosing_parent_qn;
+                ctx->enclosing_class_qn = cqn;
+                /* ctx->enclosing_parent_qn left as-is (best-effort). */
                 const CBMType *parsed = php_parse_type_node(ctx, rt_node);
+                ctx->enclosing_class_qn = saved_class;
+                ctx->enclosing_parent_qn = saved_parent;
                 if (parsed && parsed->kind != CBM_TYPE_UNKNOWN) {
                     for (int fi = 0; fi < reg->func_count; fi++) {
                         CBMRegisteredFunc *rf = &reg->funcs[fi];
@@ -3224,9 +3238,18 @@ static void process_class_for_fields(PHPLSPContext *ctx, CBMTypeRegistry *reg,
                         char *type_text = cbm_arena_strndup(ctx->arena, type_start,
                                                             (size_t)(p - type_start));
                         const CBMType *ret_t = NULL;
-                        /* First: does the raw token match a class @template
+                        /* `@return $this` / `@return static` / `@return self`
+                         * → return the enclosing class type. Critical for
+                         * fluent-builder chains. */
+                        if (strcmp(type_text, "$this") == 0 ||
+                            strcmp(type_text, "static") == 0 ||
+                            strcmp(type_text, "self") == 0) {
+                            ret_t = cbm_type_named(ctx->arena, cqn);
+                        }
+                        /* Else: does the raw token match a class @template
                          * param name? If so, build NAMED(name) so call-site
                          * substitution can rewrite it later. */
+                        if (!ret_t)
                         for (int t = 0; t < reg->type_count; t++) {
                             if (strcmp(reg->types[t].qualified_name, cqn) != 0)
                                 continue;

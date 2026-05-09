@@ -536,9 +536,150 @@ void cbm_php_stdlib_register(CBMTypeRegistry *reg, CBMArena *arena) {
         REG_METHOD(em, "firstOrCreate", self);
     }
 
-    /* ── \Generator (return type from yield) ──────────────────── */
-    REG_TYPE("Generator", "Generator", false, generator_parents);
-    /* Generator extends Iterator → Iterator methods already registered. */
+    /* (Generator already registered in the SPL section above.) */
+
+    /* ── Symfony Cache ─────────────────────────────────────── */
+    static const char *cache_parents[] = {NULL};
+    REG_TYPE("Symfony.Contracts.Cache.CacheInterface", "CacheInterface", true, cache_parents);
+    REG_TYPE("Symfony.Contracts.Cache.ItemInterface", "ItemInterface", true, cache_parents);
+    REG_TYPE("Psr.Cache.CacheItemPoolInterface", "CacheItemPoolInterface", true, cache_parents);
+    REG_TYPE("Psr.Cache.CacheItemInterface", "CacheItemInterface", true, cache_parents);
+    REG_METHOD("Symfony.Contracts.Cache.CacheInterface", "get", MIXED);
+    REG_METHOD("Symfony.Contracts.Cache.CacheInterface", "delete", cbm_type_builtin(arena, "bool"));
+    REG_METHOD("Symfony.Contracts.Cache.ItemInterface", "set",
+               cbm_type_named(arena, "Symfony.Contracts.Cache.ItemInterface"));
+    REG_METHOD("Symfony.Contracts.Cache.ItemInterface", "expiresAfter",
+               cbm_type_named(arena, "Symfony.Contracts.Cache.ItemInterface"));
+    REG_METHOD("Symfony.Contracts.Cache.ItemInterface", "get", MIXED);
+    REG_METHOD("Psr.Cache.CacheItemPoolInterface", "getItem",
+               cbm_type_named(arena, "Psr.Cache.CacheItemInterface"));
+    REG_METHOD("Psr.Cache.CacheItemPoolInterface", "save",
+               cbm_type_builtin(arena, "bool"));
+    REG_METHOD("Psr.Cache.CacheItemInterface", "get", MIXED);
+    REG_METHOD("Psr.Cache.CacheItemInterface", "set",
+               cbm_type_named(arena, "Psr.Cache.CacheItemInterface"));
+
+    /* ── Symfony EventDispatcher ────────────────────────────── */
+    static const char *event_parents[] = {NULL};
+    REG_TYPE("Symfony.Contracts.EventDispatcher.EventDispatcherInterface",
+             "EventDispatcherInterface", true, event_parents);
+    REG_TYPE("Symfony.Contracts.EventDispatcher.Event", "Event", false, event_parents);
+    REG_METHOD("Symfony.Contracts.EventDispatcher.EventDispatcherInterface", "dispatch", MIXED);
+
+    /* ── Symfony Mailer ─────────────────────────────────────── */
+    static const char *mailer_parents[] = {NULL};
+    REG_TYPE("Symfony.Component.Mailer.MailerInterface", "MailerInterface", true, mailer_parents);
+    REG_TYPE("Symfony.Component.Mime.Email", "Email", false, mailer_parents);
+    REG_METHOD("Symfony.Component.Mailer.MailerInterface", "send",
+               cbm_type_builtin(arena, "void"));
+    {
+        const char *e = "Symfony.Component.Mime.Email";
+        const CBMType *self = cbm_type_named(arena, "Symfony.Component.Mime.Email");
+        REG_METHOD(e, "from", self);
+        REG_METHOD(e, "to", self);
+        REG_METHOD(e, "cc", self);
+        REG_METHOD(e, "bcc", self);
+        REG_METHOD(e, "subject", self);
+        REG_METHOD(e, "text", self);
+        REG_METHOD(e, "html", self);
+        REG_METHOD(e, "attachFromPath", self);
+    }
+
+    /* ── Symfony Validator ─────────────────────────────────── */
+    static const char *validator_parents[] = {NULL};
+    REG_TYPE("Symfony.Component.Validator.Validator.ValidatorInterface", "ValidatorInterface",
+             true, validator_parents);
+    REG_TYPE("Symfony.Component.Validator.ConstraintViolationListInterface",
+             "ConstraintViolationListInterface", true, validator_parents);
+    REG_METHOD("Symfony.Component.Validator.Validator.ValidatorInterface", "validate",
+               cbm_type_named(arena,
+                              "Symfony.Component.Validator.ConstraintViolationListInterface"));
+    REG_METHOD("Symfony.Component.Validator.ConstraintViolationListInterface", "count",
+               cbm_type_builtin(arena, "int"));
+
+    /* ── Laravel HTTP Request / Response ──────────────────── */
+    static const char *laravel_request_parents[] = {"Symfony.Component.HttpFoundation.Request",
+                                                     NULL};
+    REG_TYPE("Illuminate.Http.Request", "Request", false, laravel_request_parents);
+    REG_TYPE("Illuminate.Http.Response", "Response", false, laravel_request_parents);
+    REG_TYPE("Illuminate.Http.JsonResponse", "JsonResponse", false, laravel_request_parents);
+    REG_METHOD("Illuminate.Http.Request", "input", MIXED);
+    REG_METHOD("Illuminate.Http.Request", "query", MIXED);
+    REG_METHOD("Illuminate.Http.Request", "all", cbm_type_builtin(arena, "array"));
+    REG_METHOD("Illuminate.Http.Request", "user", MIXED);
+    REG_METHOD("Illuminate.Http.Request", "validate", cbm_type_builtin(arena, "array"));
+    REG_METHOD("Illuminate.Http.Response", "header",
+               cbm_type_named(arena, "Illuminate.Http.Response"));
+    REG_METHOD("Illuminate.Http.Response", "withHeaders",
+               cbm_type_named(arena, "Illuminate.Http.Response"));
+    REG_METHOD("Illuminate.Http.JsonResponse", "header",
+               cbm_type_named(arena, "Illuminate.Http.JsonResponse"));
+
+    /* ── Laravel Auth ─────────────────────────────────────── */
+    static const char *auth_parents[] = {NULL};
+    REG_TYPE("Illuminate.Contracts.Auth.Authenticatable", "Authenticatable", true,
+             auth_parents);
+    REG_TYPE("Illuminate.Contracts.Auth.Guard", "Guard", true, auth_parents);
+    REG_METHOD("Illuminate.Contracts.Auth.Authenticatable", "getAuthIdentifier", MIXED);
+    REG_METHOD("Illuminate.Contracts.Auth.Authenticatable", "getAuthPassword",
+               cbm_type_builtin(arena, "string"));
+    REG_METHOD("Illuminate.Contracts.Auth.Guard", "user",
+               cbm_type_named(arena, "Illuminate.Contracts.Auth.Authenticatable"));
+    REG_METHOD("Illuminate.Contracts.Auth.Guard", "check", cbm_type_builtin(arena, "bool"));
+    REG_METHOD("Illuminate.Contracts.Auth.Guard", "id", MIXED);
+
+    /* ── Laravel Session / View ──────────────────────────── */
+    static const char *session_parents[] = {NULL};
+    REG_TYPE("Illuminate.Contracts.Session.Session", "Session", true, session_parents);
+    REG_METHOD("Illuminate.Contracts.Session.Session", "get", MIXED);
+    REG_METHOD("Illuminate.Contracts.Session.Session", "put", cbm_type_builtin(arena, "void"));
+    REG_METHOD("Illuminate.Contracts.Session.Session", "has", cbm_type_builtin(arena, "bool"));
+    REG_METHOD("Illuminate.Contracts.Session.Session", "flash", cbm_type_builtin(arena, "void"));
+
+    REG_TYPE("Illuminate.View.View", "View", false, session_parents);
+    REG_METHOD("Illuminate.View.View", "render", cbm_type_builtin(arena, "string"));
+    REG_METHOD("Illuminate.View.View", "with",
+               cbm_type_named(arena, "Illuminate.View.View"));
+
+    /* ── ReactPHP / Promise ───────────────────────────────── */
+    static const char *promise_parents[] = {NULL};
+    REG_TYPE("React.Promise.PromiseInterface", "PromiseInterface", true, promise_parents);
+    REG_TYPE("GuzzleHttp.Promise.PromiseInterface", "PromiseInterface", true, promise_parents);
+    REG_METHOD("React.Promise.PromiseInterface", "then",
+               cbm_type_named(arena, "React.Promise.PromiseInterface"));
+    REG_METHOD("React.Promise.PromiseInterface", "catch",
+               cbm_type_named(arena, "React.Promise.PromiseInterface"));
+    REG_METHOD("React.Promise.PromiseInterface", "finally",
+               cbm_type_named(arena, "React.Promise.PromiseInterface"));
+    REG_METHOD("GuzzleHttp.Promise.PromiseInterface", "then",
+               cbm_type_named(arena, "GuzzleHttp.Promise.PromiseInterface"));
+
+    /* ── Monolog (popular logger) ───────────────────────── */
+    static const char *monolog_parents[] = {"Psr.Log.LoggerInterface", NULL};
+    REG_TYPE("Monolog.Logger", "Logger", false, monolog_parents);
+    /* Logger inherits info/warning/error/etc. methods from PSR LoggerInterface. */
+    REG_METHOD("Monolog.Logger", "pushHandler",
+               cbm_type_named(arena, "Monolog.Logger"));
+    REG_METHOD("Monolog.Logger", "pushProcessor",
+               cbm_type_named(arena, "Monolog.Logger"));
+
+    /* ── Reflection API ──────────────────────────────────── */
+    static const char *reflection_parents[] = {NULL};
+    REG_TYPE("ReflectionClass", "ReflectionClass", false, reflection_parents);
+    REG_TYPE("ReflectionMethod", "ReflectionMethod", false, reflection_parents);
+    REG_TYPE("ReflectionProperty", "ReflectionProperty", false, reflection_parents);
+    REG_TYPE("ReflectionFunction", "ReflectionFunction", false, reflection_parents);
+    REG_METHOD("ReflectionClass", "getName", cbm_type_builtin(arena, "string"));
+    REG_METHOD("ReflectionClass", "getMethods", cbm_type_builtin(arena, "array"));
+    REG_METHOD("ReflectionClass", "getMethod",
+               cbm_type_named(arena, "ReflectionMethod"));
+    REG_METHOD("ReflectionClass", "newInstance", MIXED);
+    REG_METHOD("ReflectionClass", "newInstanceArgs", MIXED);
+    REG_METHOD("ReflectionMethod", "invoke", MIXED);
+    REG_METHOD("ReflectionMethod", "invokeArgs", MIXED);
+    REG_METHOD("ReflectionMethod", "getName", cbm_type_builtin(arena, "string"));
+    REG_METHOD("ReflectionProperty", "getValue", MIXED);
+    REG_METHOD("ReflectionProperty", "setValue", cbm_type_builtin(arena, "void"));
 }
 
 #undef REG_TYPE

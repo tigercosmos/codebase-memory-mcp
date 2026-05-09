@@ -525,6 +525,56 @@ TEST(tool_get_architecture_empty) {
     PASS();
 }
 
+/* Regression for #281: handle_get_architecture must actually call
+ * cbm_store_get_architecture and surface its sections. Before the fix
+ * only label/edge histograms were emitted regardless of which aspects
+ * were requested. The store-side arch_entry_points query reads
+ * properties.is_entry_point on Function nodes, so we tag one node and
+ * assert the resulting JSON surfaces an "entry_points" array containing
+ * the tagged function — which is impossible without the wiring. */
+TEST(tool_get_architecture_emits_populated_sections) {
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+
+    cbm_store_t *st = cbm_mcp_server_store(srv);
+    ASSERT_NOT_NULL(st);
+
+    const char *proj = "arch-test";
+    cbm_mcp_server_set_project(srv, proj);
+    cbm_store_upsert_project(st, proj, "/tmp/arch-test");
+
+    cbm_node_t main_fn = {0};
+    main_fn.project = proj;
+    main_fn.label = "Function";
+    main_fn.name = "main";
+    main_fn.qualified_name = "arch-test.cmd.main";
+    main_fn.file_path = "cmd/main.go";
+    main_fn.start_line = 1;
+    main_fn.end_line = 3;
+    main_fn.properties_json = "{\"is_entry_point\":true}";
+    ASSERT_GT(cbm_store_upsert_node(st, &main_fn), 0);
+
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":91,\"method\":\"tools/call\","
+             "\"params\":{\"name\":\"get_architecture\","
+             "\"arguments\":{\"project\":\"arch-test\",\"aspects\":[\"all\"]}}}");
+    ASSERT_NOT_NULL(resp);
+    char *inner = extract_text_content(resp);
+    ASSERT_NOT_NULL(inner);
+
+    /* The handler always emits node/edge counts and schema histograms;
+     * those existed before #281. The "entry_points" array only appears
+     * when cbm_store_get_architecture is actually called and its result
+     * is serialized — which is exactly what #281 wires up. */
+    ASSERT_NOT_NULL(strstr(inner, "\"entry_points\""));
+    ASSERT_NOT_NULL(strstr(inner, "main"));
+
+    free(inner);
+    free(resp);
+    cbm_mcp_server_free(srv);
+    PASS();
+}
+
 TEST(tool_query_graph_missing_query) {
     cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
 
@@ -1001,6 +1051,13 @@ static char *extract_text_content(const char *mcp_result) {
         return strdup(mcp_result); /* fallback */
     yyjson_val *root = yyjson_doc_get_root(doc);
     yyjson_val *content = yyjson_obj_get(root, "content");
+    if (!content) {
+        /* Handle JSON-RPC wrapper: {"jsonrpc":...,"result":{"content":[...]}} */
+        yyjson_val *rpc_result = yyjson_obj_get(root, "result");
+        if (rpc_result) {
+            content = yyjson_obj_get(rpc_result, "content");
+        }
+    }
     if (!content || !yyjson_is_arr(content)) {
         yyjson_doc_free(doc);
         return strdup(mcp_result);
@@ -1739,6 +1796,7 @@ SUITE(mcp) {
     RUN_TEST(tool_trace_missing_function_name);
     RUN_TEST(tool_delete_project_not_found);
     RUN_TEST(tool_get_architecture_empty);
+    RUN_TEST(tool_get_architecture_emits_populated_sections);
     RUN_TEST(tool_query_graph_missing_query);
 
     /* Pipeline-dependent tool handlers */

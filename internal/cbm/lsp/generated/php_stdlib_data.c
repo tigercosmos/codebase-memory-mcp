@@ -213,6 +213,197 @@ void cbm_php_stdlib_register(CBMTypeRegistry *reg, CBMArena *arena) {
     REG_TYPE("Illuminate.Support.Facades.URL", "URL", false, facade_child_parents);
     REG_TYPE("Illuminate.Support.Facades.View", "View", false, facade_child_parents);
     REG_TYPE("Illuminate.Support.Facades.App", "App", false, facade_child_parents);
+
+    /* ── Eloquent + Query Builder ───────────────────────────────── *
+     *
+     * The query builder is the single highest-leverage chain in any Laravel
+     * codebase: `Model::query()->where(...)->orderBy(...)->first()`. We
+     * register a fluent builder where every "where/order/group/select/take/
+     * skip/limit/distinct/join" method returns `Builder` so chains keep
+     * resolving. Terminal methods (get/first/find/value/exists) return
+     * Collection or the model. */
+
+    REG_TYPE("Illuminate.Database.Eloquent.Builder", "Builder", false, throwable_parents);
+    REG_TYPE("Illuminate.Database.Query.Builder", "Builder", false, throwable_parents);
+    REG_TYPE("Illuminate.Database.Eloquent.Model", "Model", false, throwable_parents);
+    REG_TYPE("Illuminate.Database.Eloquent.Collection", "Collection", false,
+             traversable_parents);
+    REG_TYPE("Illuminate.Support.Collection", "Collection", false, traversable_parents);
+
+    /* Eloquent Builder chain methods. */
+    {
+        const char *eb = "Illuminate.Database.Eloquent.Builder";
+        const CBMType *self = cbm_type_named(arena, "Illuminate.Database.Eloquent.Builder");
+        const CBMType *coll = cbm_type_named(arena, "Illuminate.Database.Eloquent.Collection");
+        const CBMType *model = cbm_type_named(arena, "Illuminate.Database.Eloquent.Model");
+        REG_METHOD(eb, "where", self);
+        REG_METHOD(eb, "orWhere", self);
+        REG_METHOD(eb, "whereIn", self);
+        REG_METHOD(eb, "whereNull", self);
+        REG_METHOD(eb, "whereNotNull", self);
+        REG_METHOD(eb, "whereHas", self);
+        REG_METHOD(eb, "with", self);
+        REG_METHOD(eb, "without", self);
+        REG_METHOD(eb, "select", self);
+        REG_METHOD(eb, "distinct", self);
+        REG_METHOD(eb, "orderBy", self);
+        REG_METHOD(eb, "orderByDesc", self);
+        REG_METHOD(eb, "groupBy", self);
+        REG_METHOD(eb, "having", self);
+        REG_METHOD(eb, "join", self);
+        REG_METHOD(eb, "leftJoin", self);
+        REG_METHOD(eb, "rightJoin", self);
+        REG_METHOD(eb, "limit", self);
+        REG_METHOD(eb, "take", self);
+        REG_METHOD(eb, "skip", self);
+        REG_METHOD(eb, "offset", self);
+        REG_METHOD(eb, "tap", self);
+        REG_METHOD(eb, "when", self);
+        REG_METHOD(eb, "unless", self);
+        REG_METHOD(eb, "scopeQuery", self);
+        REG_METHOD(eb, "get", coll);
+        REG_METHOD(eb, "all", coll);
+        REG_METHOD(eb, "pluck", coll);
+        REG_METHOD(eb, "first", model);
+        REG_METHOD(eb, "firstOrFail", model);
+        REG_METHOD(eb, "find", model);
+        REG_METHOD(eb, "findOrFail", model);
+        REG_METHOD(eb, "create", model);
+        REG_METHOD(eb, "firstOrCreate", model);
+        REG_METHOD(eb, "updateOrCreate", model);
+        REG_METHOD(eb, "exists", cbm_type_builtin(arena, "bool"));
+        REG_METHOD(eb, "count", cbm_type_builtin(arena, "int"));
+        REG_METHOD(eb, "sum", cbm_type_builtin(arena, "int"));
+        REG_METHOD(eb, "value", MIXED);
+        REG_METHOD(eb, "toSql", cbm_type_builtin(arena, "string"));
+    }
+
+    /* Eloquent Model: convenience static-call entry points. */
+    {
+        const char *em = "Illuminate.Database.Eloquent.Model";
+        const CBMType *eb = cbm_type_named(arena, "Illuminate.Database.Eloquent.Builder");
+        const CBMType *self = cbm_type_named(arena, "Illuminate.Database.Eloquent.Model");
+        const CBMType *coll = cbm_type_named(arena, "Illuminate.Database.Eloquent.Collection");
+        REG_METHOD(em, "query", eb);
+        REG_METHOD(em, "newQuery", eb);
+        REG_METHOD(em, "where", eb);
+        REG_METHOD(em, "with", eb);
+        REG_METHOD(em, "all", coll);
+        REG_METHOD(em, "find", self);
+        REG_METHOD(em, "findOrFail", self);
+        REG_METHOD(em, "create", self);
+        REG_METHOD(em, "save", cbm_type_builtin(arena, "bool"));
+        REG_METHOD(em, "update", cbm_type_builtin(arena, "bool"));
+        REG_METHOD(em, "delete", cbm_type_builtin(arena, "bool"));
+        REG_METHOD(em, "fresh", self);
+        REG_METHOD(em, "refresh", self);
+        REG_METHOD(em, "load", self);
+        REG_METHOD(em, "loadMissing", self);
+        REG_METHOD(em, "toArray", cbm_type_builtin(arena, "array"));
+        REG_METHOD(em, "toJson", cbm_type_builtin(arena, "string"));
+        REG_METHOD(em, "getKey", MIXED);
+        REG_METHOD(em, "getAttribute", MIXED);
+    }
+
+    /* Illuminate\Support\Collection — chain returns self. */
+    {
+        const char *coll_qn = "Illuminate.Support.Collection";
+        const CBMType *self = cbm_type_named(arena, "Illuminate.Support.Collection");
+        REG_METHOD(coll_qn, "map", self);
+        REG_METHOD(coll_qn, "filter", self);
+        REG_METHOD(coll_qn, "reject", self);
+        REG_METHOD(coll_qn, "where", self);
+        REG_METHOD(coll_qn, "values", self);
+        REG_METHOD(coll_qn, "keys", self);
+        REG_METHOD(coll_qn, "sort", self);
+        REG_METHOD(coll_qn, "sortBy", self);
+        REG_METHOD(coll_qn, "sortByDesc", self);
+        REG_METHOD(coll_qn, "groupBy", self);
+        REG_METHOD(coll_qn, "keyBy", self);
+        REG_METHOD(coll_qn, "merge", self);
+        REG_METHOD(coll_qn, "concat", self);
+        REG_METHOD(coll_qn, "unique", self);
+        REG_METHOD(coll_qn, "take", self);
+        REG_METHOD(coll_qn, "skip", self);
+        REG_METHOD(coll_qn, "chunk", self);
+        REG_METHOD(coll_qn, "flatten", self);
+        REG_METHOD(coll_qn, "flatMap", self);
+        REG_METHOD(coll_qn, "pluck", self);
+        REG_METHOD(coll_qn, "tap", self);
+        REG_METHOD(coll_qn, "each", self);
+        REG_METHOD(coll_qn, "reverse", self);
+        REG_METHOD(coll_qn, "first", MIXED);
+        REG_METHOD(coll_qn, "last", MIXED);
+        REG_METHOD(coll_qn, "count", cbm_type_builtin(arena, "int"));
+        REG_METHOD(coll_qn, "isEmpty", cbm_type_builtin(arena, "bool"));
+        REG_METHOD(coll_qn, "isNotEmpty", cbm_type_builtin(arena, "bool"));
+        REG_METHOD(coll_qn, "contains", cbm_type_builtin(arena, "bool"));
+        REG_METHOD(coll_qn, "toArray", cbm_type_builtin(arena, "array"));
+        REG_METHOD(coll_qn, "toJson", cbm_type_builtin(arena, "string"));
+        REG_METHOD(coll_qn, "implode", cbm_type_builtin(arena, "string"));
+        REG_METHOD(coll_qn, "sum", cbm_type_builtin(arena, "int"));
+        REG_METHOD(coll_qn, "avg", cbm_type_builtin(arena, "float"));
+        REG_METHOD(coll_qn, "max", MIXED);
+        REG_METHOD(coll_qn, "min", MIXED);
+    }
+
+    /* ── Symfony HttpFoundation (used by Laravel + Symfony) ─────── */
+    static const char *symfony_request_parents[] = {NULL};
+    REG_TYPE("Symfony.Component.HttpFoundation.Request", "Request", false,
+             symfony_request_parents);
+    REG_TYPE("Symfony.Component.HttpFoundation.Response", "Response", false,
+             symfony_request_parents);
+    REG_TYPE("Symfony.Component.HttpFoundation.HeaderBag", "HeaderBag", false,
+             symfony_request_parents);
+    REG_TYPE("Symfony.Component.HttpFoundation.ParameterBag", "ParameterBag", false,
+             symfony_request_parents);
+    REG_METHOD("Symfony.Component.HttpFoundation.Request", "getMethod",
+               cbm_type_builtin(arena, "string"));
+    REG_METHOD("Symfony.Component.HttpFoundation.Request", "getPathInfo",
+               cbm_type_builtin(arena, "string"));
+    REG_METHOD("Symfony.Component.HttpFoundation.Request", "getUri",
+               cbm_type_builtin(arena, "string"));
+    REG_METHOD("Symfony.Component.HttpFoundation.Response", "getStatusCode",
+               cbm_type_builtin(arena, "int"));
+    REG_METHOD("Symfony.Component.HttpFoundation.Response", "getContent",
+               cbm_type_builtin(arena, "string"));
+
+    /* ── Carbon (Laravel's date/time wrapper) ───────────────────── */
+    static const char *carbon_parents[] = {"DateTimeImmutable", NULL};
+    REG_TYPE("Carbon.Carbon", "Carbon", false, carbon_parents);
+    REG_TYPE("Carbon.CarbonImmutable", "CarbonImmutable", false, carbon_parents);
+    {
+        const char *c = "Carbon.Carbon";
+        const CBMType *self = cbm_type_named(arena, "Carbon.Carbon");
+        REG_METHOD(c, "addDay", self);
+        REG_METHOD(c, "addDays", self);
+        REG_METHOD(c, "subDay", self);
+        REG_METHOD(c, "addMonth", self);
+        REG_METHOD(c, "addYear", self);
+        REG_METHOD(c, "startOfDay", self);
+        REG_METHOD(c, "endOfDay", self);
+        REG_METHOD(c, "format", cbm_type_builtin(arena, "string"));
+        REG_METHOD(c, "toDateString", cbm_type_builtin(arena, "string"));
+        REG_METHOD(c, "toDateTimeString", cbm_type_builtin(arena, "string"));
+        REG_METHOD(c, "diffInDays", cbm_type_builtin(arena, "int"));
+        REG_METHOD(c, "diffInHours", cbm_type_builtin(arena, "int"));
+        REG_METHOD(c, "diffInMinutes", cbm_type_builtin(arena, "int"));
+        REG_METHOD(c, "now", self);
+        REG_METHOD(c, "today", self);
+        REG_METHOD(c, "yesterday", self);
+        REG_METHOD(c, "tomorrow", self);
+        REG_METHOD(c, "parse", self);
+    }
+
+    /* ── PSR-7 / PSR-15 extras (used by Symfony stack) ──────────── */
+    REG_METHOD("Psr.Http.Message.RequestInterface", "withMethod",
+               cbm_type_named(arena, "Psr.Http.Message.RequestInterface"));
+    REG_METHOD("Psr.Http.Message.RequestInterface", "withUri",
+               cbm_type_named(arena, "Psr.Http.Message.RequestInterface"));
+    REG_METHOD("Psr.Http.Message.ResponseInterface", "withStatus",
+               cbm_type_named(arena, "Psr.Http.Message.ResponseInterface"));
+    REG_METHOD("Psr.Http.Message.ResponseInterface", "withHeader",
+               cbm_type_named(arena, "Psr.Http.Message.ResponseInterface"));
 }
 
 #undef REG_TYPE

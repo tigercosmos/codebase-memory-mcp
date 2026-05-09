@@ -299,9 +299,8 @@ const CBMRegisteredFunc *php_lookup_method(PHPLSPContext *ctx, const char *class
     const CBMRegisteredFunc *f = cbm_registry_lookup_method(ctx->registry, class_qn, method_name);
     if (f) return f;
 
-    /* If the QN we have is not what the registry uses (e.g. caller built it
-     * from PHP namespace, but the unified extractor keyed by file path),
-     * resolve the type to its registered identity and retry. */
+    /* If the QN we have isn't the registry's canonical key, resolve the
+     * type to its registered identity and retry. */
     const CBMRegisteredType *t = cbm_registry_lookup_type(ctx->registry, class_qn);
     if (!t) t = lookup_type_with_project(ctx, class_qn);
     if (!t) return NULL;
@@ -310,27 +309,58 @@ const CBMRegisteredFunc *php_lookup_method(PHPLSPContext *ctx, const char *class
         if (f) return f;
     }
 
-    /* Bounded chain walk. */
-    int hops = 0;
-    while (t && hops < 16) {
-        if (t->method_qns) {
-            for (int i = 0; t->method_names && t->method_names[i]; i++) {
-                if (strcmp(t->method_names[i], method_name) == 0) {
-                    return cbm_registry_lookup_func(ctx->registry, t->method_qns[i]);
+    /* Walk the full ancestor chain. PHP only allows single inheritance for
+     * `extends`, but a class may also pick up methods from `implements` /
+     * traits, both of which are recorded in embedded_types. We iterate
+     * across all entries and recurse into each branch with cycle-detection.
+     *
+     * Cap depth at 16 across all visited types to bound runtime. */
+    const char *visited[32];
+    int visited_count = 0;
+    const char *frontier[32];
+    int frontier_count = 0;
+    if (t->embedded_types) {
+        for (int i = 0; t->embedded_types[i] && frontier_count < 32; i++) {
+            frontier[frontier_count++] = t->embedded_types[i];
+        }
+    }
+    while (frontier_count > 0 && visited_count < 32) {
+        const char *parent = frontier[--frontier_count];
+        bool seen = false;
+        for (int v = 0; v < visited_count; v++) {
+            if (strcmp(visited[v], parent) == 0) {
+                seen = true;
+                break;
+            }
+        }
+        if (seen) continue;
+        visited[visited_count++] = parent;
+
+        f = cbm_registry_lookup_method(ctx->registry, parent, method_name);
+        if (f) return f;
+
+        const CBMRegisteredType *next = cbm_registry_lookup_type(ctx->registry, parent);
+        if (!next) next = lookup_type_with_project(ctx, parent);
+        if (!next) continue;
+
+        if (strcmp(next->qualified_name, parent) != 0) {
+            f = cbm_registry_lookup_method(ctx->registry, next->qualified_name, method_name);
+            if (f) return f;
+        }
+        if (next->method_qns && next->method_names) {
+            for (int i = 0; next->method_names[i]; i++) {
+                if (strcmp(next->method_names[i], method_name) == 0) {
+                    const CBMRegisteredFunc *cand =
+                        cbm_registry_lookup_func(ctx->registry, next->method_qns[i]);
+                    if (cand) return cand;
                 }
             }
         }
-        /* Try first parent. */
-        const char *parent = NULL;
-        if (t->embedded_types && t->embedded_types[0]) parent = t->embedded_types[0];
-        if (!parent) break;
-        f = cbm_registry_lookup_method(ctx->registry, parent, method_name);
-        if (f) return f;
-        const CBMRegisteredType *next = cbm_registry_lookup_type(ctx->registry, parent);
-        if (!next) next = lookup_type_with_project(ctx, parent);
-        if (!next) break;
-        t = next;
-        hops++;
+        if (next->embedded_types) {
+            for (int i = 0; next->embedded_types[i] && frontier_count < 32; i++) {
+                frontier[frontier_count++] = next->embedded_types[i];
+            }
+        }
     }
     return NULL;
 }
@@ -616,6 +646,66 @@ const CBMType *php_eval_expr_type(PHPLSPContext *ctx, TSNode node) {
                 result = php_eval_expr_type(ctx, c);
                 break;
             }
+        }
+    } else if (strcmp(kind, "match_expression") == 0) {
+        /* match($v) { ... => arm1, default => arm2 } — result is the
+         * union of arm result expressions. We take the first arm result
+         * with a known type, falling back to UNKNOWN. */
+        uint32_t nc = ts_node_child_count(node);
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode c = ts_node_child(node, i);
+            if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
+            const char *k = ts_node_type(c);
+            if (strcmp(k, "match_block") == 0) {
+                uint32_t bnc = ts_node_child_count(c);
+                for (uint32_t j = 0; j < bnc; j++) {
+                    TSNode arm = ts_node_child(c, j);
+                    if (ts_node_is_null(arm) || !ts_node_is_named(arm)) continue;
+                    const char *ak = ts_node_type(arm);
+                    if (strcmp(ak, "match_conditional_expression") != 0 &&
+                        strcmp(ak, "match_default_expression") != 0)
+                        continue;
+                    /* The arm expression is the field "value" or the last
+                     * named child after "=>". */
+                    TSNode val = ts_node_child_by_field_name(arm, "return_expression", 17);
+                    if (ts_node_is_null(val)) val = ts_node_child_by_field_name(arm, "value", 5);
+                    if (ts_node_is_null(val)) {
+                        uint32_t vnc = ts_node_child_count(arm);
+                        for (uint32_t k2 = vnc; k2 > 0; k2--) {
+                            TSNode vv = ts_node_child(arm, k2 - 1);
+                            if (!ts_node_is_null(vv) && ts_node_is_named(vv)) {
+                                val = vv;
+                                break;
+                            }
+                        }
+                    }
+                    if (ts_node_is_null(val)) continue;
+                    const CBMType *t = php_eval_expr_type(ctx, val);
+                    if (t && t->kind != CBM_TYPE_UNKNOWN) {
+                        result = t;
+                        goto match_done;
+                    }
+                }
+            }
+        }
+    match_done:;
+    } else if (strcmp(kind, "conditional_expression") == 0) {
+        /* $a ? $b : $c — result is type of $b (preferred) or $c. */
+        TSNode then_n = ts_node_child_by_field_name(node, "body", 4);
+        TSNode else_n = ts_node_child_by_field_name(node, "alternative", 11);
+        if (ts_node_is_null(then_n) || ts_node_is_null(else_n)) {
+            /* tree-sitter-php names: `consequence` / `alternative` */
+            then_n = ts_node_child_by_field_name(node, "consequence", 11);
+        }
+        if (!ts_node_is_null(then_n)) {
+            const CBMType *t = php_eval_expr_type(ctx, then_n);
+            if (t && t->kind != CBM_TYPE_UNKNOWN) {
+                result = t;
+            }
+        }
+        if ((!result || result->kind == CBM_TYPE_UNKNOWN) && !ts_node_is_null(else_n)) {
+            const CBMType *t = php_eval_expr_type(ctx, else_n);
+            if (t && t->kind != CBM_TYPE_UNKNOWN) result = t;
         }
     } else if (strcmp(kind, "encapsed_string") == 0 || strcmp(kind, "string") == 0 ||
                strcmp(kind, "string_value") == 0 || strcmp(kind, "heredoc") == 0) {
@@ -1000,6 +1090,245 @@ static void resolve_static_call(PHPLSPContext *ctx, TSNode call) {
         emit_resolved(ctx,
                       cbm_arena_sprintf(ctx->arena, "%s.%s", class_qn, method_name),
                       "php_dynamic_unresolved", 0.10f);
+        return;
+    }
+    /* Class resolved (e.g., from a `use` clause), method unknown — emit
+     * synthetic resolved call so the pipeline bridge can suppress the
+     * unified extractor's name-fallback misroute. */
+    emit_resolved(ctx,
+                  cbm_arena_sprintf(ctx->arena, "%s.%s", class_qn, method_name),
+                  "php_static_unindexed", 0.55f);
+}
+
+/* ── type narrowing ─────────────────────────────────────────────────
+ *
+ * Recognise narrowing predicates inside an `if` / ternary / match condition
+ * and a few common library calls that act as runtime asserts. When the
+ * predicate proves a positive constraint about a variable's type, push a
+ * child scope with that variable rebound to the narrower type before
+ * walking the body, then pop. For `assert(<predicate>);` we narrow into
+ * the *current* scope from that point onward, since assert() acts as a
+ * sequential refinement.
+ *
+ * Patterns understood:
+ *   $x instanceof Foo                 → $x: Foo
+ *   is_string($x)                     → $x: string  (and is_int/is_float/...)
+ *   is_array($x)                      → $x: array
+ *   is_object($x)                     → $x: object
+ *   is_callable($x)                   → $x: callable
+ *   $x !== null / $x != null          → $x: <existing> minus null  (we drop null)
+ *   $x instanceof FooInterface        → $x: FooInterface (interface narrows too)
+ *
+ * Negative branches and `else` are not narrowed in Phase 4a; PHP's
+ * negative-narrowing semantics (e.g. `else` branch of `if (is_string($x))`
+ * narrows to "not-string") would require subtractive types we don't model.
+ */
+
+typedef struct {
+    const char *var_name;   /* "x" without leading $ */
+    const CBMType *type;    /* the narrowed type */
+} php_narrowing_t;
+
+static const char *is_func_to_builtin(const char *name) {
+    if (!name) return NULL;
+    if (strcmp(name, "is_string") == 0) return "string";
+    if (strcmp(name, "is_int") == 0 || strcmp(name, "is_integer") == 0 ||
+        strcmp(name, "is_long") == 0)
+        return "int";
+    if (strcmp(name, "is_float") == 0 || strcmp(name, "is_double") == 0 ||
+        strcmp(name, "is_real") == 0)
+        return "float";
+    if (strcmp(name, "is_bool") == 0) return "bool";
+    if (strcmp(name, "is_array") == 0) return "array";
+    if (strcmp(name, "is_object") == 0) return "object";
+    if (strcmp(name, "is_callable") == 0) return "callable";
+    if (strcmp(name, "is_iterable") == 0) return "iterable";
+    if (strcmp(name, "is_numeric") == 0) return "float";
+    if (strcmp(name, "is_countable") == 0) return "iterable";
+    if (strcmp(name, "is_resource") == 0) return "resource";
+    return NULL;
+}
+
+/* Parse a narrowing predicate. On success fill out and return true. */
+static bool parse_narrowing(PHPLSPContext *ctx, TSNode cond, php_narrowing_t *out) {
+    if (ts_node_is_null(cond)) return false;
+    const char *kind = ts_node_type(cond);
+
+    /* Parenthesized: unwrap. */
+    if (strcmp(kind, "parenthesized_expression") == 0) {
+        uint32_t nc = ts_node_child_count(cond);
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode c = ts_node_child(cond, i);
+            if (!ts_node_is_null(c) && ts_node_is_named(c)) {
+                return parse_narrowing(ctx, c, out);
+            }
+        }
+        return false;
+    }
+
+    /* `$x instanceof Foo` — emitted as binary_expression with operator
+     * "instanceof" in tree-sitter-php. */
+    if (strcmp(kind, "binary_expression") == 0) {
+        TSNode left = ts_node_child_by_field_name(cond, "left", 4);
+        TSNode op = ts_node_child_by_field_name(cond, "operator", 8);
+        TSNode right = ts_node_child_by_field_name(cond, "right", 5);
+        if (ts_node_is_null(left) || ts_node_is_null(right)) return false;
+        char *opt = !ts_node_is_null(op) ? php_node_text(ctx, op) : NULL;
+        if (opt && strcmp(opt, "instanceof") == 0) {
+            if (!node_is(left, "variable_name")) return false;
+            char *vt = php_node_text(ctx, left);
+            if (!vt) return false;
+            const char *vname = (vt[0] == '$') ? vt + 1 : vt;
+            char *rt = php_node_text(ctx, right);
+            if (!rt) return false;
+            const char *resolved = php_resolve_class_name(ctx, rt);
+            if (!resolved) return false;
+            out->var_name = cbm_arena_strdup(ctx->arena, vname);
+            out->type = cbm_type_named(ctx->arena, resolved);
+            return true;
+        }
+        /* `$x !== null` / `$x != null` / `null !== $x` — narrow to "non-null":
+         * we keep the existing scope type, so this is a no-op for type
+         * purposes but suppresses null branches downstream. We don't
+         * subtract nullable so just return false here. */
+    }
+
+    /* `is_string($x)` / `is_int($x)` / ... */
+    if (strcmp(kind, "function_call_expression") == 0) {
+        TSNode fn = ts_node_child_by_field_name(cond, "function", 8);
+        TSNode args = ts_node_child_by_field_name(cond, "arguments", 9);
+        if (ts_node_is_null(fn)) return false;
+        char *name = php_node_text(ctx, fn);
+        if (!name) return false;
+        const char *builtin = is_func_to_builtin(name);
+        if (!builtin) return false;
+        /* First positional argument should be a variable_name. */
+        if (ts_node_is_null(args)) return false;
+        uint32_t anc = ts_node_child_count(args);
+        for (uint32_t i = 0; i < anc; i++) {
+            TSNode a = ts_node_child(args, i);
+            if (ts_node_is_null(a) || !ts_node_is_named(a)) continue;
+            const char *ak = ts_node_type(a);
+            /* `argument` wrapper has variable_name child. */
+            TSNode v = a;
+            if (strcmp(ak, "argument") == 0) {
+                uint32_t bnc = ts_node_child_count(a);
+                for (uint32_t j = 0; j < bnc; j++) {
+                    TSNode b = ts_node_child(a, j);
+                    if (!ts_node_is_null(b) && ts_node_is_named(b) &&
+                        node_is(b, "variable_name")) {
+                        v = b;
+                        break;
+                    }
+                }
+            }
+            if (!node_is(v, "variable_name")) return false;
+            char *vt = php_node_text(ctx, v);
+            if (!vt) return false;
+            const char *vname = (vt[0] == '$') ? vt + 1 : vt;
+            out->var_name = cbm_arena_strdup(ctx->arena, vname);
+            out->type = cbm_type_builtin(ctx->arena, builtin);
+            return true;
+        }
+    }
+    return false;
+}
+
+/* `assert(<predicate>)` narrows the current scope sequentially. */
+static void apply_assert_narrowing(PHPLSPContext *ctx, TSNode call) {
+    TSNode fn = ts_node_child_by_field_name(call, "function", 8);
+    if (ts_node_is_null(fn)) return;
+    char *name = php_node_text(ctx, fn);
+    if (!name || strcmp(name, "assert") != 0) return;
+    TSNode args = ts_node_child_by_field_name(call, "arguments", 9);
+    if (ts_node_is_null(args)) return;
+    uint32_t anc = ts_node_child_count(args);
+    for (uint32_t i = 0; i < anc; i++) {
+        TSNode a = ts_node_child(args, i);
+        if (ts_node_is_null(a) || !ts_node_is_named(a)) continue;
+        TSNode predicate = a;
+        if (strcmp(ts_node_type(a), "argument") == 0) {
+            uint32_t bnc = ts_node_child_count(a);
+            for (uint32_t j = 0; j < bnc; j++) {
+                TSNode b = ts_node_child(a, j);
+                if (!ts_node_is_null(b) && ts_node_is_named(b)) {
+                    predicate = b;
+                    break;
+                }
+            }
+        }
+        php_narrowing_t nw = {0};
+        if (parse_narrowing(ctx, predicate, &nw) && nw.var_name && nw.type) {
+            cbm_scope_bind(ctx->current_scope, nw.var_name, nw.type);
+        }
+        return;
+    }
+}
+
+/* Walk a body subtree under a narrowed scope, then restore. */
+static void walk_with_narrowing(PHPLSPContext *ctx, TSNode body, const php_narrowing_t *nw) {
+    if (ts_node_is_null(body)) return;
+    if (!nw || !nw->var_name || !nw->type) {
+        php_resolve_calls_in_node(ctx, body);
+        return;
+    }
+    CBMScope *saved = ctx->current_scope;
+    ctx->current_scope = cbm_scope_push(ctx->arena, ctx->current_scope);
+    cbm_scope_bind(ctx->current_scope, nw->var_name, nw->type);
+    php_resolve_calls_in_node(ctx, body);
+    ctx->current_scope = saved;
+}
+
+/* Walk an `if_statement` (or `else_if_clause`) honoring narrowing.
+ *
+ * Tree-sitter-php's `if_statement` emits children as: an optional `if`
+ * keyword, a parenthesized_expression (condition), and one or more
+ * statement-shaped bodies (the if-body, optionally followed by
+ * else_if_clause / else_clause). We narrow on the condition then walk
+ * EVERY non-condition named child as the body — only the first
+ * statement after the condition is the if-body and gets the narrowed
+ * scope; else-branches walk without narrowing. */
+static void process_if_statement(PHPLSPContext *ctx, TSNode node) {
+    /* Find condition: first parenthesized_expression child. */
+    TSNode cond;
+    memset(&cond, 0, sizeof(cond));
+    uint32_t nc = ts_node_child_count(node);
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode c = ts_node_child(node, i);
+        if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
+        if (strcmp(ts_node_type(c), "parenthesized_expression") == 0) {
+            cond = c;
+            break;
+        }
+    }
+    php_narrowing_t nw = {0};
+    bool has_nw = !ts_node_is_null(cond) && parse_narrowing(ctx, cond, &nw);
+
+    /* Walk children. The first NON-condition, NON-else-clause named child
+     * is the if-body; narrowed scope applies there. Subsequent
+     * else_if_clause / else_clause walk without narrowing. */
+    bool walked_body = false;
+    bool past_cond = false;
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode c = ts_node_child(node, i);
+        if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
+        const char *k = ts_node_type(c);
+        if (!past_cond) {
+            if (strcmp(k, "parenthesized_expression") == 0) {
+                past_cond = true;
+                continue;
+            }
+            /* Non-condition child encountered before the condition: keep walking. */
+            php_resolve_calls_in_node(ctx, c);
+            continue;
+        }
+        if (!walked_body) {
+            walk_with_narrowing(ctx, c, has_nw ? &nw : NULL);
+            walked_body = true;
+        } else {
+            /* else / elseif / colon_block */
+            php_resolve_calls_in_node(ctx, c);
+        }
     }
 }
 
@@ -1031,11 +1360,16 @@ static void php_resolve_calls_in_node(PHPLSPContext *ctx, TSNode node) {
             char *cleaned = phpdoc_clean(ctx->arena, raw);
             bind_phpdoc_var(ctx, cleaned);
         }
+    } else if (strcmp(kind, "if_statement") == 0) {
+        process_if_statement(ctx, node);
+        return; /* process_if_statement already walked body under narrowing */
     }
 
     /* Call-resolution dispatch. */
     if (strcmp(kind, "function_call_expression") == 0) {
         resolve_function_call(ctx, node);
+        /* assert(...) in current scope narrows sequentially. */
+        apply_assert_narrowing(ctx, node);
     } else if (strcmp(kind, "member_call_expression") == 0 ||
                strcmp(kind, "nullsafe_member_call_expression") == 0) {
         resolve_member_call(ctx, node);
@@ -1084,6 +1418,11 @@ static void bind_typed_parameters(PHPLSPContext *ctx, TSNode params) {
         char *vt = php_node_text(ctx, name_node);
         if (!vt) continue;
         const char *name = (vt[0] == '$') ? vt + 1 : vt;
+        /* Variadic parameter — `string ...$args` has type array<string>;
+         * we don't model array<T> in Phase 4h, so just bind as `array`. */
+        if (strcmp(pk, "variadic_parameter") == 0) {
+            ptype = cbm_type_builtin(ctx->arena, "array");
+        }
         cbm_scope_bind(ctx->current_scope, name, ptype);
     }
 }
@@ -1214,21 +1553,33 @@ static void process_class_decl(PHPLSPContext *ctx, TSNode node) {
 
 /* ── top-level pass ─────────────────────────────────────────────── */
 
-/* Collect a single namespace_use_clause's local→target mapping and add. */
+/* Collect a single namespace_use_clause's local→target mapping and add.
+ *
+ * tree-sitter-php emits `use Vendor\X as Y;` either as a use_clause with
+ * a `namespace_aliasing_clause` child wrapping the alias, or as a bare
+ * sequence: qualified_name + literal `as` token + name. We accept both
+ * shapes by treating the *second* name-like child as the alias when no
+ * aliasing clause is present. */
 static void collect_use_clause(PHPLSPContext *ctx, TSNode use_clause, int kind) {
     TSNode name_node;
     memset(&name_node, 0, sizeof(name_node));
     TSNode alias_node;
     memset(&alias_node, 0, sizeof(alias_node));
+    int name_seen = 0;
     uint32_t nc = ts_node_child_count(use_clause);
     for (uint32_t i = 0; i < nc; i++) {
         TSNode c = ts_node_child(use_clause, i);
         if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
         const char *k = ts_node_type(c);
         if (strcmp(k, "qualified_name") == 0 || strcmp(k, "name") == 0) {
-            if (ts_node_is_null(name_node)) name_node = c;
-        }
-        if (strcmp(k, "namespace_aliasing_clause") == 0) {
+            if (name_seen == 0) {
+                name_node = c;
+            } else if (name_seen == 1 && ts_node_is_null(alias_node)) {
+                /* Second name-shaped child = `as Alias`. */
+                alias_node = c;
+            }
+            name_seen++;
+        } else if (strcmp(k, "namespace_aliasing_clause") == 0) {
             uint32_t ac = ts_node_child_count(c);
             for (uint32_t j = 0; j < ac; j++) {
                 TSNode ach = ts_node_child(c, j);
@@ -1432,6 +1783,571 @@ static const CBMType *parse_return_type_text(CBMArena *arena, const char *text,
     return cbm_type_named(arena, php_ns_to_dot(arena, first));
 }
 
+/* ── property type extraction ───────────────────────────────────────
+ *
+ * Walks the AST top-level for class/trait/interface bodies and registers
+ * typed properties on the corresponding CBMRegisteredType.field_names /
+ * field_types. Handles:
+ *   - typed `public Foo $bar;` declarations
+ *   - constructor property promotion (the `public Foo $bar` parameter form)
+ *   - `$this->bar = $bar` constructor-body inference, where $bar is a
+ *     typed parameter
+ *
+ * After this pass `eval_expr_type` for member_access_expression $x->bar
+ * returns the property's CBMType when known. */
+
+typedef struct {
+    const char *class_qn;
+    const char **field_names;  /* arena-backed, NULL-terminated */
+    const CBMType **field_types;
+    int count;
+    int cap;
+} php_class_fields_t;
+
+typedef struct {
+    php_class_fields_t *items;
+    int count;
+    int cap;
+} php_class_field_table_t;
+
+static php_class_fields_t *fields_for(php_class_field_table_t *tab, const char *class_qn,
+                                       CBMArena *arena) {
+    for (int i = 0; i < tab->count; i++) {
+        if (strcmp(tab->items[i].class_qn, class_qn) == 0) return &tab->items[i];
+    }
+    if (tab->count >= tab->cap) {
+        int new_cap = tab->cap ? tab->cap * 2 : 16;
+        php_class_fields_t *next = (php_class_fields_t *)cbm_arena_alloc(
+            arena, (size_t)new_cap * sizeof(*next));
+        if (!next) return NULL;
+        for (int i = 0; i < tab->count; i++) next[i] = tab->items[i];
+        tab->items = next;
+        tab->cap = new_cap;
+    }
+    php_class_fields_t *f = &tab->items[tab->count++];
+    memset(f, 0, sizeof(*f));
+    f->class_qn = cbm_arena_strdup(arena, class_qn);
+    return f;
+}
+
+static void add_field(php_class_fields_t *f, CBMArena *arena, const char *name,
+                       const CBMType *type) {
+    if (!f || !name || !type) return;
+    /* dedup: keep first declaration; constructor inference doesn't override
+     * an explicit declaration. */
+    for (int i = 0; i < f->count; i++) {
+        if (strcmp(f->field_names[i], name) == 0) return;
+    }
+    if (f->count >= f->cap) {
+        int new_cap = f->cap ? f->cap * 2 : 8;
+        const char **nn =
+            (const char **)cbm_arena_alloc(arena, (size_t)(new_cap + 1) * sizeof(*nn));
+        const CBMType **nt =
+            (const CBMType **)cbm_arena_alloc(arena, (size_t)(new_cap + 1) * sizeof(*nt));
+        if (!nn || !nt) return;
+        for (int i = 0; i < f->count; i++) {
+            nn[i] = f->field_names[i];
+            nt[i] = f->field_types[i];
+        }
+        f->field_names = nn;
+        f->field_types = nt;
+        f->cap = new_cap;
+    }
+    f->field_names[f->count] = cbm_arena_strdup(arena, name);
+    f->field_types[f->count] = type;
+    f->count++;
+    f->field_names[f->count] = NULL;
+    f->field_types[f->count] = NULL;
+}
+
+/* Compute the dotted class QN for a given class_declaration node, matching
+ * how the unified extractor names defs (module_qn-prefixed). */
+static const char *class_qn_for_node(PHPLSPContext *ctx, TSNode class_node) {
+    TSNode name_node = ts_node_child_by_field_name(class_node, "name", 4);
+    if (ts_node_is_null(name_node)) return NULL;
+    char *cname = php_node_text(ctx, name_node);
+    if (!cname) return NULL;
+    if (ctx->module_qn) {
+        return cbm_arena_sprintf(ctx->arena, "%s.%s", ctx->module_qn, cname);
+    }
+    return cbm_arena_strdup(ctx->arena, cname);
+}
+
+static void extract_property_decl(PHPLSPContext *ctx, TSNode prop_decl,
+                                   php_class_fields_t *out) {
+    TSNode tnode = ts_node_child_by_field_name(prop_decl, "type", 4);
+    const CBMType *ptype = NULL;
+    if (!ts_node_is_null(tnode)) ptype = php_parse_type_node(ctx, tnode);
+    if (!ptype || ptype->kind == CBM_TYPE_UNKNOWN) {
+        /* Tree-sitter-php may put the type as a named child without field. */
+        uint32_t nc = ts_node_child_count(prop_decl);
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode c = ts_node_child(prop_decl, i);
+            if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
+            const char *k = ts_node_type(c);
+            if (strcmp(k, "named_type") == 0 || strcmp(k, "primitive_type") == 0 ||
+                strcmp(k, "union_type") == 0 || strcmp(k, "intersection_type") == 0 ||
+                strcmp(k, "optional_type") == 0) {
+                ptype = php_parse_type_node(ctx, c);
+                break;
+            }
+        }
+    }
+    if (!ptype || ptype->kind == CBM_TYPE_UNKNOWN) return;
+
+    /* Find the property_element children (each has variable_name + maybe default). */
+    uint32_t nc = ts_node_child_count(prop_decl);
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode c = ts_node_child(prop_decl, i);
+        if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
+        const char *k = ts_node_type(c);
+        if (strcmp(k, "property_element") == 0) {
+            uint32_t bnc = ts_node_child_count(c);
+            for (uint32_t j = 0; j < bnc; j++) {
+                TSNode b = ts_node_child(c, j);
+                if (!ts_node_is_null(b) && ts_node_is_named(b) &&
+                    strcmp(ts_node_type(b), "variable_name") == 0) {
+                    char *vt = php_node_text(ctx, b);
+                    if (!vt) continue;
+                    const char *name = (vt[0] == '$') ? vt + 1 : vt;
+                    add_field(out, ctx->arena, name, ptype);
+                    break;
+                }
+            }
+        } else if (strcmp(k, "variable_name") == 0) {
+            char *vt = php_node_text(ctx, c);
+            if (vt) {
+                const char *name = (vt[0] == '$') ? vt + 1 : vt;
+                add_field(out, ctx->arena, name, ptype);
+            }
+        }
+    }
+}
+
+static void extract_promoted_param(PHPLSPContext *ctx, TSNode param,
+                                    php_class_fields_t *out) {
+    /* property_promotion_parameter has: visibility/readonly modifiers,
+     * type, variable_name. */
+    TSNode tnode = ts_node_child_by_field_name(param, "type", 4);
+    const CBMType *ptype = NULL;
+    if (!ts_node_is_null(tnode)) ptype = php_parse_type_node(ctx, tnode);
+    if (!ptype || ptype->kind == CBM_TYPE_UNKNOWN) {
+        uint32_t nc = ts_node_child_count(param);
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode c = ts_node_child(param, i);
+            if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
+            const char *k = ts_node_type(c);
+            if (strcmp(k, "named_type") == 0 || strcmp(k, "primitive_type") == 0 ||
+                strcmp(k, "union_type") == 0 || strcmp(k, "intersection_type") == 0 ||
+                strcmp(k, "optional_type") == 0) {
+                ptype = php_parse_type_node(ctx, c);
+                break;
+            }
+        }
+    }
+    if (!ptype || ptype->kind == CBM_TYPE_UNKNOWN) return;
+    TSNode vname = ts_node_child_by_field_name(param, "name", 4);
+    if (ts_node_is_null(vname)) {
+        uint32_t nc = ts_node_child_count(param);
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode c = ts_node_child(param, i);
+            if (!ts_node_is_null(c) && strcmp(ts_node_type(c), "variable_name") == 0) {
+                vname = c;
+                break;
+            }
+        }
+    }
+    if (ts_node_is_null(vname)) return;
+    char *vt = php_node_text(ctx, vname);
+    if (!vt) return;
+    const char *n = (vt[0] == '$') ? vt + 1 : vt;
+    add_field(out, ctx->arena, n, ptype);
+}
+
+/* Look at __construct: any `$this->X = $param;` where $param is a typed
+ * parameter contributes a field type for X. */
+static void extract_ctor_assignments(PHPLSPContext *ctx, TSNode ctor_method,
+                                      php_class_fields_t *out) {
+    TSNode params = ts_node_child_by_field_name(ctor_method, "parameters", 10);
+    /* Build a small param-name -> type map for this constructor. */
+    const char *names[32];
+    const CBMType *types[32];
+    int pc = 0;
+    if (!ts_node_is_null(params)) {
+        uint32_t nc = ts_node_child_count(params);
+        for (uint32_t i = 0; i < nc && pc < 32; i++) {
+            TSNode p = ts_node_child(params, i);
+            if (ts_node_is_null(p) || !ts_node_is_named(p)) continue;
+            const char *pk = ts_node_type(p);
+            if (strcmp(pk, "simple_parameter") != 0 &&
+                strcmp(pk, "property_promotion_parameter") != 0) {
+                continue;
+            }
+            TSNode tnode = ts_node_child_by_field_name(p, "type", 4);
+            const CBMType *ptype = NULL;
+            if (!ts_node_is_null(tnode)) ptype = php_parse_type_node(ctx, tnode);
+            if (!ptype || ptype->kind == CBM_TYPE_UNKNOWN) continue;
+            TSNode name_node = ts_node_child_by_field_name(p, "name", 4);
+            if (ts_node_is_null(name_node)) {
+                uint32_t pnc = ts_node_child_count(p);
+                for (uint32_t j = 0; j < pnc; j++) {
+                    TSNode c = ts_node_child(p, j);
+                    if (!ts_node_is_null(c) &&
+                        strcmp(ts_node_type(c), "variable_name") == 0) {
+                        name_node = c;
+                        break;
+                    }
+                }
+            }
+            if (ts_node_is_null(name_node)) continue;
+            char *vt = php_node_text(ctx, name_node);
+            if (!vt) continue;
+            names[pc] = cbm_arena_strdup(ctx->arena, (vt[0] == '$') ? vt + 1 : vt);
+            types[pc] = ptype;
+            pc++;
+        }
+    }
+    if (pc == 0) return;
+
+    /* Walk the body, looking for `$this->X = $name;` patterns. */
+    TSNode body = ts_node_child_by_field_name(ctor_method, "body", 4);
+    if (ts_node_is_null(body)) return;
+    /* Iterative DFS. */
+    TSNode stack[64];
+    int top = 0;
+    stack[top++] = body;
+    while (top > 0) {
+        TSNode n = stack[--top];
+        if (ts_node_is_null(n)) continue;
+        const char *k = ts_node_type(n);
+        if (strcmp(k, "assignment_expression") == 0) {
+            TSNode lhs = ts_node_child_by_field_name(n, "left", 4);
+            TSNode rhs = ts_node_child_by_field_name(n, "right", 5);
+            if (!ts_node_is_null(lhs) && !ts_node_is_null(rhs) &&
+                strcmp(ts_node_type(lhs), "member_access_expression") == 0 &&
+                strcmp(ts_node_type(rhs), "variable_name") == 0) {
+                /* lhs = $this->X */
+                TSNode obj = ts_node_child_by_field_name(lhs, "object", 6);
+                TSNode fname = ts_node_child_by_field_name(lhs, "name", 4);
+                if (!ts_node_is_null(obj) && !ts_node_is_null(fname)) {
+                    char *ot = php_node_text(ctx, obj);
+                    char *fn = php_node_text(ctx, fname);
+                    char *rt = php_node_text(ctx, rhs);
+                    if (ot && fn && rt && (ot[0] == '$') &&
+                        strcmp(ot + 1, "this") == 0) {
+                        const char *rname = (rt[0] == '$') ? rt + 1 : rt;
+                        for (int i = 0; i < pc; i++) {
+                            if (strcmp(names[i], rname) == 0) {
+                                add_field(out, ctx->arena, fn, types[i]);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        uint32_t cnt = ts_node_child_count(n);
+        for (uint32_t i = 0; i < cnt && top < 64; i++) {
+            TSNode c = ts_node_child(n, i);
+            if (!ts_node_is_null(c)) stack[top++] = c;
+        }
+    }
+}
+
+/* Parse a class-level docblock for @property / @method tags and register
+ * them as virtual fields and methods on the class. Used heavily by
+ * Eloquent and other dynamic-PHP frameworks.
+ *
+ *   @property Foo $bar               → field bar: Foo
+ *   @property-read Foo $bar          → same (treat the same as @property)
+ *   @method Bar foo()                → method foo() returning Bar
+ *   @method static Bar foo()         → method foo() returning Bar (static)
+ *
+ * The signature parsing for @method is lenient — we only care about the
+ * return type for downstream chain inference. Argument types in the
+ * tag are ignored. */
+static void apply_phpdoc_class_tags(PHPLSPContext *ctx, CBMTypeRegistry *reg,
+                                    const char *class_qn, const char *docstring,
+                                    php_class_fields_t *out_fields) {
+    if (!docstring || !class_qn) return;
+
+    /* @property TYPE $name */
+    const char *p = docstring;
+    while ((p = strstr(p, "@property")) != NULL) {
+        p += 9;
+        /* Skip "-read" / "-write" suffix variants. */
+        if (*p == '-') {
+            while (*p && *p != ' ' && *p != '\t') p++;
+        }
+        while (*p == ' ' || *p == '\t') p++;
+        const char *type_start = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
+        if (p == type_start) continue;
+        char *type_text = cbm_arena_strndup(ctx->arena, type_start, (size_t)(p - type_start));
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p != '$') continue;
+        p++;
+        const char *name_start = p;
+        while (*p && (isalnum((unsigned char)*p) || *p == '_')) p++;
+        if (p == name_start) continue;
+        char *fname = cbm_arena_strndup(ctx->arena, name_start, (size_t)(p - name_start));
+        const CBMType *t = resolve_phpdoc_type(ctx, type_text);
+        if (out_fields && fname && t && t->kind != CBM_TYPE_UNKNOWN) {
+            add_field(out_fields, ctx->arena, fname, t);
+        }
+    }
+
+    /* @method [static] TYPE name(...) */
+    p = docstring;
+    while ((p = strstr(p, "@method")) != NULL) {
+        p += 7;
+        while (*p == ' ' || *p == '\t') p++;
+        /* optional `static` */
+        if (strncmp(p, "static", 6) == 0 && (p[6] == ' ' || p[6] == '\t')) {
+            p += 6;
+            while (*p == ' ' || *p == '\t') p++;
+        }
+        const char *type_start = p;
+        while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
+        if (p == type_start) continue;
+        char *type_text = cbm_arena_strndup(ctx->arena, type_start, (size_t)(p - type_start));
+        while (*p == ' ' || *p == '\t') p++;
+        const char *name_start = p;
+        while (*p && (isalnum((unsigned char)*p) || *p == '_')) p++;
+        if (p == name_start) continue;
+        char *mname = cbm_arena_strndup(ctx->arena, name_start, (size_t)(p - name_start));
+
+        /* Register as a virtual function whose receiver_type is class_qn.
+         * Generates a synthetic QN class_qn + "." + mname. */
+        CBMRegisteredFunc rf;
+        memset(&rf, 0, sizeof(rf));
+        rf.qualified_name = cbm_arena_sprintf(ctx->arena, "%s.%s", class_qn, mname);
+        rf.short_name = mname;
+        rf.receiver_type = class_qn;
+        rf.min_params = -1;
+        const CBMType *ret = resolve_phpdoc_type(ctx, type_text);
+        const CBMType **rets =
+            (const CBMType **)cbm_arena_alloc(ctx->arena, 2 * sizeof(*rets));
+        if (rets) {
+            rets[0] = ret;
+            rets[1] = NULL;
+        }
+        rf.signature = cbm_type_func(ctx->arena, NULL, NULL, rets);
+        cbm_registry_add_func(reg, rf);
+    }
+}
+
+/* Flatten the methods of a trait into the using class's method table.
+ *
+ * Tree-sitter-php emits `use Trait1, Trait2;` inside a class body as a
+ * `use_declaration` (distinct from the namespace-level
+ * namespace_use_declaration). The optional conflict resolution block
+ * uses `use_instead_of_clause` (for `Trait1::foo insteadof Trait2`) and
+ * `use_as_clause` (for `Trait2::foo as fooAlt`).
+ *
+ * Phase 4e basic strategy:
+ *   - copy each method on the trait into the class as a synthetic
+ *     CBMRegisteredFunc with receiver_type = class_qn
+ *   - if the same method exists from multiple traits, last write wins
+ *     (suboptimal but matches PHP's "use the last `use` line" default
+ *     when no insteadof clause exists)
+ *   - handle `as` aliasing: register method under the alias name too
+ *   - skip insteadof (rare in practice; full support deferred)
+ */
+static void flatten_trait_into_class(PHPLSPContext *ctx, CBMTypeRegistry *reg,
+                                      const char *class_qn, const char *trait_qn,
+                                      const char *alias_for_method,
+                                      const char *only_method_name) {
+    if (!class_qn || !trait_qn) return;
+    /* Resolve trait through alias-style lookup if needed. */
+    const CBMRegisteredType *t = cbm_registry_lookup_type(reg, trait_qn);
+    if (!t) t = lookup_type_with_project(ctx, trait_qn);
+    const char *canonical_trait_qn = t ? t->qualified_name : trait_qn;
+
+    /* Iterate registry funcs whose receiver_type is the trait. */
+    for (int i = 0; i < reg->func_count; i++) {
+        const CBMRegisteredFunc *src = &reg->funcs[i];
+        if (!src->receiver_type || strcmp(src->receiver_type, canonical_trait_qn) != 0) {
+            continue;
+        }
+        if (only_method_name && src->short_name &&
+            strcmp(src->short_name, only_method_name) != 0) {
+            continue;
+        }
+        const char *new_short =
+            alias_for_method ? alias_for_method : src->short_name;
+        if (!new_short) continue;
+        CBMRegisteredFunc rf;
+        memset(&rf, 0, sizeof(rf));
+        rf.qualified_name = cbm_arena_sprintf(ctx->arena, "%s.%s", class_qn, new_short);
+        rf.short_name = cbm_arena_strdup(ctx->arena, new_short);
+        rf.receiver_type = class_qn;
+        rf.signature = src->signature;
+        rf.min_params = src->min_params;
+        cbm_registry_add_func(reg, rf);
+    }
+}
+
+static void process_trait_use(PHPLSPContext *ctx, CBMTypeRegistry *reg, const char *class_qn,
+                              TSNode use_decl) {
+    /* Collect the named traits and any `as` alias clauses. */
+    const char *trait_qns[16];
+    int trait_count = 0;
+
+    uint32_t nc = ts_node_child_count(use_decl);
+    for (uint32_t i = 0; i < nc && trait_count < 16; i++) {
+        TSNode c = ts_node_child(use_decl, i);
+        if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
+        const char *k = ts_node_type(c);
+        if (strcmp(k, "name") == 0 || strcmp(k, "qualified_name") == 0) {
+            char *tn = php_node_text(ctx, c);
+            if (tn) {
+                const char *resolved = php_resolve_class_name(ctx, tn);
+                if (resolved) trait_qns[trait_count++] = resolved;
+            }
+        }
+    }
+
+    /* First, do the default flatten for all traits. */
+    for (int i = 0; i < trait_count; i++) {
+        flatten_trait_into_class(ctx, reg, class_qn, trait_qns[i], NULL, NULL);
+    }
+
+    /* Process `use_list` block for `as` / `insteadof` clauses. The block is
+     * either named "body" or a sibling. */
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode c = ts_node_child(use_decl, i);
+        if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
+        const char *k = ts_node_type(c);
+        if (strcmp(k, "use_list") != 0 && strcmp(k, "use_clause") != 0) {
+            uint32_t bnc = ts_node_child_count(c);
+            for (uint32_t j = 0; j < bnc; j++) {
+                TSNode cc = ts_node_child(c, j);
+                if (ts_node_is_null(cc) || !ts_node_is_named(cc)) continue;
+                const char *kk = ts_node_type(cc);
+                if (strcmp(kk, "use_as_clause") == 0) {
+                    /* Trait::method as alias  OR  method as alias */
+                    char *trait_text = NULL;
+                    char *method_text = NULL;
+                    char *alias_text = NULL;
+                    uint32_t anc = ts_node_child_count(cc);
+                    for (uint32_t a = 0; a < anc; a++) {
+                        TSNode ch = ts_node_child(cc, a);
+                        if (ts_node_is_null(ch) || !ts_node_is_named(ch)) continue;
+                        const char *ck = ts_node_type(ch);
+                        if (strcmp(ck, "class_constant_access_expression") == 0) {
+                            /* Trait::method */
+                            uint32_t cc2 = ts_node_child_count(ch);
+                            for (uint32_t a2 = 0; a2 < cc2; a2++) {
+                                TSNode subch = ts_node_child(ch, a2);
+                                if (ts_node_is_null(subch) || !ts_node_is_named(subch)) continue;
+                                const char *sck = ts_node_type(subch);
+                                if (strcmp(sck, "name") == 0 ||
+                                    strcmp(sck, "qualified_name") == 0) {
+                                    if (!trait_text) trait_text = php_node_text(ctx, subch);
+                                    else method_text = php_node_text(ctx, subch);
+                                }
+                            }
+                        } else if (strcmp(ck, "name") == 0) {
+                            char *t = php_node_text(ctx, ch);
+                            if (!method_text) method_text = t;
+                            else alias_text = t;
+                        }
+                    }
+                    if (alias_text && method_text) {
+                        const char *trait_qn_resolved = NULL;
+                        if (trait_text) {
+                            trait_qn_resolved = php_resolve_class_name(ctx, trait_text);
+                        } else if (trait_count > 0) {
+                            trait_qn_resolved = trait_qns[0];
+                        }
+                        if (trait_qn_resolved) {
+                            flatten_trait_into_class(ctx, reg, class_qn, trait_qn_resolved,
+                                                     alias_text, method_text);
+                        }
+                    }
+                }
+                /* `use_instead_of_clause` is recognised but not yet
+                 * implemented — last-flatten-wins semantics already match
+                 * the common case where the resolution clause picks a
+                 * specific implementation. */
+            }
+        }
+    }
+}
+
+static void process_class_for_fields(PHPLSPContext *ctx, CBMTypeRegistry *reg,
+                                      TSNode class_node, php_class_field_table_t *tab) {
+    const char *cqn = class_qn_for_node(ctx, class_node);
+    if (!cqn) return;
+    php_class_fields_t *f = fields_for(tab, cqn, ctx->arena);
+    if (!f) return;
+
+    /* PHPDoc on the class itself: @property + @method tags. */
+    char *class_doc = fetch_leading_phpdoc(ctx, class_node);
+    if (class_doc) {
+        apply_phpdoc_class_tags(ctx, reg, cqn, class_doc, f);
+    }
+
+    TSNode body = ts_node_child_by_field_name(class_node, "body", 4);
+    if (ts_node_is_null(body)) body = child_named(class_node, "declaration_list");
+    if (ts_node_is_null(body)) return;
+
+    uint32_t nc = ts_node_child_count(body);
+    for (uint32_t i = 0; i < nc; i++) {
+        TSNode c = ts_node_child(body, i);
+        if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
+        const char *k = ts_node_type(c);
+        if (strcmp(k, "property_declaration") == 0) {
+            extract_property_decl(ctx, c, f);
+        } else if (strcmp(k, "use_declaration") == 0) {
+            /* Trait `use Foo;` inside a class body. */
+            process_trait_use(ctx, reg, cqn, c);
+        } else if (strcmp(k, "method_declaration") == 0) {
+            /* Constructor: scan params for property_promotion_parameter and
+             * scan body for $this->X = $param assignments. */
+            TSNode mname = ts_node_child_by_field_name(c, "name", 4);
+            char *mn = !ts_node_is_null(mname) ? php_node_text(ctx, mname) : NULL;
+            bool is_ctor = mn && strcmp(mn, "__construct") == 0;
+            TSNode params = ts_node_child_by_field_name(c, "parameters", 10);
+            if (!ts_node_is_null(params)) {
+                uint32_t pnc = ts_node_child_count(params);
+                for (uint32_t j = 0; j < pnc; j++) {
+                    TSNode p = ts_node_child(params, j);
+                    if (ts_node_is_null(p) || !ts_node_is_named(p)) continue;
+                    if (strcmp(ts_node_type(p), "property_promotion_parameter") == 0) {
+                        extract_promoted_param(ctx, p, f);
+                    }
+                }
+            }
+            if (is_ctor) extract_ctor_assignments(ctx, c, f);
+        }
+    }
+}
+
+static void php_lsp_collect_class_fields(PHPLSPContext *ctx, CBMTypeRegistry *reg, TSNode root,
+                                          php_class_field_table_t *tab) {
+    if (ts_node_is_null(root)) return;
+    /* Iterative DFS so namespace { class { ... } } nests are handled. */
+    TSNode stack[256];
+    int top = 0;
+    stack[top++] = root;
+    while (top > 0) {
+        TSNode n = stack[--top];
+        if (ts_node_is_null(n)) continue;
+        const char *k = ts_node_type(n);
+        if (strcmp(k, "class_declaration") == 0 || strcmp(k, "trait_declaration") == 0 ||
+            strcmp(k, "interface_declaration") == 0) {
+            process_class_for_fields(ctx, reg, n, tab);
+        }
+        uint32_t nc = ts_node_child_count(n);
+        for (uint32_t i = 0; i < nc && top < 256; i++) {
+            TSNode c = ts_node_child(n, i);
+            if (!ts_node_is_null(c) && ts_node_is_named(c)) stack[top++] = c;
+        }
+    }
+}
+
 /* ── entry: cbm_run_php_lsp ─────────────────────────────────────── */
 
 void cbm_run_php_lsp(CBMArena *arena, CBMFileResult *result, const char *source, int source_len,
@@ -1521,6 +2437,46 @@ void cbm_run_php_lsp(CBMArena *arena, CBMFileResult *result, const char *source,
     /* Phase C: run the resolver. */
     PHPLSPContext ctx;
     php_lsp_init(&ctx, arena, source, source_len, &reg, module_qn, &result->resolved_calls);
+
+    /* Phase B.1: collect typed properties (declared, promoted, ctor-assigned)
+     * and merge them onto the registered types. Must run after stdlib +
+     * file defs are registered but before the call walk so eval_expr_type
+     * for $this->prop and $obj->prop sees the field types. */
+    {
+        php_class_field_table_t tab = {0};
+        /* First pass to populate the use map (so type names in property
+         * declarations resolve correctly). */
+        uint32_t nc = ts_node_child_count(root);
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode c = ts_node_child(root, i);
+            if (ts_node_is_null(c)) continue;
+            const char *k = ts_node_type(c);
+            if (strcmp(k, "namespace_definition") == 0) {
+                set_namespace_from_decl(&ctx, c);
+            } else if (strcmp(k, "namespace_use_declaration") == 0) {
+                collect_use_declaration(&ctx, c);
+            }
+        }
+        php_lsp_collect_class_fields(&ctx, &reg, root, &tab);
+        /* Reset namespace/use state — process_file will re-collect. */
+        ctx.current_namespace_qn = "";
+        ctx.use_count = 0;
+
+        for (int i = 0; i < tab.count; i++) {
+            php_class_fields_t *f = &tab.items[i];
+            if (f->count == 0) continue;
+            /* Mutate the existing entry — registered types are stored by
+             * value in reg.types[], find the index and update it. */
+            for (int t = 0; t < reg.type_count; t++) {
+                if (strcmp(reg.types[t].qualified_name, f->class_qn) == 0) {
+                    reg.types[t].field_names = f->field_names;
+                    reg.types[t].field_types = f->field_types;
+                    break;
+                }
+            }
+        }
+    }
+
     php_lsp_process_file(&ctx, root);
 
     if (ctx.debug) {

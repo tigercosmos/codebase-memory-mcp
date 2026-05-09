@@ -991,6 +991,53 @@ TEST(pylsp_round3_optional_narrow_with_union) {
     PASS();
 }
 
+/* ── Round 3 — match/case + async ──────────────────────────── */
+
+TEST(pylsp_round3_match_case_class_pattern) {
+    /* match x: case Foo(): subject narrows to Foo */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "class Bar:\n"
+        "    def method(self):\n"
+        "        return 2\n"
+        "def use(x):\n"
+        "    match x:\n"
+        "        case Foo():\n"
+        "            return x.method()\n"
+        "        case _:\n"
+        "            return None\n");
+    ASSERT_NOT_NULL(r);
+    int idx = find_resolved(r, "use", "method");
+    ASSERT_GTE(idx, 0);
+    /* Should be the Foo.method binding, not Bar.method */
+    if (idx >= 0) {
+        const CBMResolvedCall *rc = &r->resolved_calls.items[idx];
+        ASSERT(strstr(rc->callee_qn, "Foo") != NULL);
+    }
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round3_async_await_pass_through) {
+    /* await expr returns expr's type. async def f() -> int registers
+     * with return int. await f() should resolve as int. */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "async def make() -> Foo:\n"
+        "    return Foo()\n"
+        "async def use():\n"
+        "    f = await make()\n"
+        "    return f.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(py_lsp) {
@@ -1051,4 +1098,7 @@ SUITE(py_lsp) {
     RUN_TEST(pylsp_round3_listcomp_element_method);
     RUN_TEST(pylsp_round3_for_loop_element_method);
     RUN_TEST(pylsp_round3_optional_narrow_with_union);
+    /* Round 3 — match/case + async */
+    RUN_TEST(pylsp_round3_match_case_class_pattern);
+    RUN_TEST(pylsp_round3_async_await_pass_through);
 }

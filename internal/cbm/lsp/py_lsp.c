@@ -523,6 +523,15 @@ static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node) {
         }
     }
 
+    // `await expr` — for resolution purposes we treat as identity. async
+    // functions register their declared return type as the registered
+    // return; callers use it directly without modeling Coroutine[A, A, T].
+    if (strcmp(k, "await") == 0 || strcmp(k, "await_expression") == 0) {
+        if (ts_node_named_child_count(node) > 0) {
+            return py_eval_expr_type(ctx, ts_node_named_child(node, 0));
+        }
+    }
+
     return cbm_type_unknown();
 }
 
@@ -922,6 +931,81 @@ static void py_resolve_calls_in(PyLSPContext* ctx, TSNode node) {
     // if_statement gets special-case narrowing.
     if (strcmp(k, "if_statement") == 0) {
         py_walk_if_statement(ctx, node);
+        return;
+    }
+
+    // match/case (PEP 634): subject narrows per case-pattern.
+    if (strcmp(k, "match_statement") == 0) {
+        TSNode subject = ts_node_child_by_field_name(node, "subject", 7);
+        TSNode body = ts_node_child_by_field_name(node, "body", 4);
+        // Subject identifier (best-effort — only narrow when the subject
+        // is a single identifier).
+        char* subject_name = NULL;
+        if (!ts_node_is_null(subject) &&
+            strcmp(ts_node_type(subject), "identifier") == 0) {
+            subject_name = py_node_text(ctx, subject);
+        }
+        py_resolve_calls_in(ctx, subject);
+        if (!ts_node_is_null(body)) {
+            uint32_t bcc = ts_node_named_child_count(body);
+            for (uint32_t i = 0; i < bcc; i++) {
+                TSNode case_clause = ts_node_named_child(body, i);
+                if (strcmp(ts_node_type(case_clause), "case_clause") != 0) continue;
+                CBMScope* saved = ctx->current_scope;
+                ctx->current_scope = cbm_scope_push(ctx->arena, ctx->current_scope);
+
+                // Pattern is the first non-block named child; consequence
+                // is the block.
+                TSNode pattern = {0}, conseq = {0};
+                uint32_t cnc = ts_node_named_child_count(case_clause);
+                for (uint32_t j = 0; j < cnc; j++) {
+                    TSNode c = ts_node_named_child(case_clause, j);
+                    const char* ck = ts_node_type(c);
+                    if (strcmp(ck, "block") == 0) { conseq = c; break; }
+                    if (ts_node_is_null(pattern)) pattern = c;
+                }
+
+                // The pattern field is a `case_pattern` wrapper around the
+                // actual pattern type (class_pattern, sequence_pattern, etc).
+                // Unwrap one level if needed.
+                TSNode actual_pattern = pattern;
+                if (!ts_node_is_null(pattern) &&
+                    strcmp(ts_node_type(pattern), "case_pattern") == 0 &&
+                    ts_node_named_child_count(pattern) > 0) {
+                    actual_pattern = ts_node_named_child(pattern, 0);
+                }
+                // Class pattern: case Foo(a, b): -> bind subject to NAMED(Foo),
+                // bind a / b to UNKNOWN (field-type extraction is a v1.1 task).
+                if (subject_name && !ts_node_is_null(actual_pattern) &&
+                    strcmp(ts_node_type(actual_pattern), "class_pattern") == 0) {
+                    if (ts_node_named_child_count(actual_pattern) > 0) {
+                        TSNode cls = ts_node_named_child(actual_pattern, 0);
+                        char* cls_text = py_node_text(ctx, cls);
+                        if (cls_text) {
+                            const CBMType* narrowed = py_resolve_annotation(ctx, cls_text);
+                            cbm_scope_bind(ctx->current_scope, subject_name, narrowed);
+                        }
+                    }
+                    // Bind capture sub-patterns to UNKNOWN.
+                    for (uint32_t j = 1; j < ts_node_named_child_count(actual_pattern); j++) {
+                        TSNode sub = ts_node_named_child(actual_pattern, j);
+                        if (strcmp(ts_node_type(sub), "capture_pattern") == 0) {
+                            if (ts_node_named_child_count(sub) > 0) {
+                                TSNode id = ts_node_named_child(sub, 0);
+                                char* nm = py_node_text(ctx, id);
+                                if (nm) cbm_scope_bind(ctx->current_scope, nm,
+                                    cbm_type_unknown());
+                            }
+                        }
+                    }
+                }
+
+                if (!ts_node_is_null(conseq)) {
+                    py_resolve_calls_in(ctx, conseq);
+                }
+                ctx->current_scope = saved;
+            }
+        }
         return;
     }
 

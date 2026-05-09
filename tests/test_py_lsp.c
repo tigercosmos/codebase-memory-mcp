@@ -1038,6 +1038,61 @@ TEST(pylsp_round3_async_await_pass_through) {
     PASS();
 }
 
+/* ── Round 4 — instance attribute typing ──────────────────────── */
+
+TEST(pylsp_round4_instance_attribute_init) {
+    /* class C:
+     *   def __init__(self, cfg: Config):
+     *     self.cfg = cfg     # field cfg : Config
+     *   def use(self):
+     *     return self.cfg.display()  # resolves through field type */
+    CBMFileResult *r = extract_py(
+        "class Config:\n"
+        "    def display(self):\n"
+        "        return 1\n"
+        "class App:\n"
+        "    def __init__(self, cfg: Config):\n"
+        "        self.cfg = cfg\n"
+        "    def use(self):\n"
+        "    self.cfg.display()\n");
+    /* Note: extra indentation simulates a body block; real test
+     * mirrors realistic Python code. */
+    ASSERT_NOT_NULL(r);
+    /* The above source has bad indent — replace with proper test source. */
+    cbm_free_result(r);
+    r = extract_py(
+        "class Config:\n"
+        "    def display(self):\n"
+        "        return 1\n"
+        "class App:\n"
+        "    def __init__(self, cfg: Config):\n"
+        "        self.cfg = cfg\n"
+        "    def use(self):\n"
+        "        return self.cfg.display()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "display"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round4_instance_attribute_class_annotation) {
+    /* class C:
+     *   x: Foo
+     *   def use(self): return self.x.method() */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "class C:\n"
+        "    x: Foo\n"
+        "    def use(self):\n"
+        "        return self.x.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(py_lsp) {
@@ -1101,4 +1156,7 @@ SUITE(py_lsp) {
     /* Round 3 — match/case + async */
     RUN_TEST(pylsp_round3_match_case_class_pattern);
     RUN_TEST(pylsp_round3_async_await_pass_through);
+    /* Round 4 — instance attribute typing */
+    RUN_TEST(pylsp_round4_instance_attribute_init);
+    RUN_TEST(pylsp_round4_instance_attribute_class_annotation);
 }

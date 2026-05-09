@@ -28,6 +28,10 @@ static void py_emit_resolved_call(PyLSPContext* ctx, const char* callee_qn,
     const char* strategy, float confidence);
 static const CBMType* py_resolve_annotation(PyLSPContext* ctx, const char* ann);
 static const CBMType* py_iterable_element_type(PyLSPContext* ctx, const CBMType* iter_type);
+static const CBMType* py_lookup_field(PyLSPContext* ctx, const char* type_qn,
+    const char* field_name);
+static void py_register_instance_field(PyLSPContext* ctx, const char* class_qn,
+    const char* field_name, const CBMType* field_type);
 
 void py_lsp_init(PyLSPContext* ctx, CBMArena* arena, const char* source, int source_len,
     const CBMTypeRegistry* registry, const char* module_qn, CBMResolvedCallArray* out) {
@@ -212,6 +216,94 @@ static const CBMRegisteredFunc* py_lookup_attribute(PyLSPContext* ctx,
     return py_lookup_attribute_depth(ctx, type_qn, member_name, 0);
 }
 
+/* Look up a field on a registered type. Walks alias / embedded chain
+ * with the same depth cap as method lookup. Returns the field's type
+ * or NULL if no match. */
+static const CBMType* py_lookup_field_depth(PyLSPContext* ctx, const char* type_qn,
+    const char* field_name, int depth) {
+    if (!ctx || !ctx->registry || !type_qn || !field_name) return NULL;
+    if (depth > CBM_LSP_MAX_LOOKUP_DEPTH) return NULL;
+
+    const CBMRegisteredType* rt = cbm_registry_lookup_type(ctx->registry, type_qn);
+    if (!rt) return NULL;
+    if (rt->field_names && rt->field_types) {
+        for (int i = 0; rt->field_names[i]; i++) {
+            if (strcmp(rt->field_names[i], field_name) == 0) {
+                return rt->field_types[i];
+            }
+        }
+    }
+    if (rt->alias_of) {
+        const CBMType* a = py_lookup_field_depth(ctx, rt->alias_of, field_name, depth + 1);
+        if (a) return a;
+    }
+    if (rt->embedded_types) {
+        for (int i = 0; rt->embedded_types[i]; i++) {
+            const CBMType* e = py_lookup_field_depth(ctx,
+                rt->embedded_types[i], field_name, depth + 1);
+            if (e) return e;
+        }
+    }
+    return NULL;
+}
+
+static const CBMType* py_lookup_field(PyLSPContext* ctx, const char* type_qn,
+    const char* field_name) {
+    return py_lookup_field_depth(ctx, type_qn, field_name, 0);
+}
+
+/* Append a (name, type) entry to a registered class's field arrays.
+ * Idempotent — re-registering the same name overwrites the existing
+ * entry. Mutates the array in place by allocating a new (slightly
+ * larger) array on each call; not a hot path so the cost is acceptable. */
+static void py_register_instance_field(PyLSPContext* ctx, const char* class_qn,
+    const char* field_name, const CBMType* field_type) {
+    if (!ctx || !ctx->registry || !class_qn || !field_name || !field_type) return;
+
+    // Find the type entry. cbm_registry_lookup_type returns a const pointer;
+    // we need a mutable pointer into the registry's array.
+    CBMRegisteredType* rt = NULL;
+    for (int i = 0; i < ctx->registry->type_count; i++) {
+        const char* qn = ctx->registry->types[i].qualified_name;
+        if (qn && strcmp(qn, class_qn) == 0) {
+            rt = &ctx->registry->types[i];
+            break;
+        }
+    }
+    if (!rt) return;
+
+    // Overwrite if name already registered.
+    if (rt->field_names && rt->field_types) {
+        for (int i = 0; rt->field_names[i]; i++) {
+            if (strcmp(rt->field_names[i], field_name) == 0) {
+                ((const CBMType**)rt->field_types)[i] = field_type;
+                return;
+            }
+        }
+    }
+
+    int existing = 0;
+    if (rt->field_names) {
+        while (rt->field_names[existing]) existing++;
+    }
+    int new_count = existing + 1;
+    const char** new_names = (const char**)cbm_arena_alloc(ctx->arena,
+        (size_t)(new_count + 1) * sizeof(const char*));
+    const CBMType** new_types = (const CBMType**)cbm_arena_alloc(ctx->arena,
+        (size_t)(new_count + 1) * sizeof(const CBMType*));
+    if (!new_names || !new_types) return;
+    for (int i = 0; i < existing; i++) {
+        new_names[i] = rt->field_names[i];
+        new_types[i] = rt->field_types[i];
+    }
+    new_names[existing] = cbm_arena_strdup(ctx->arena, field_name);
+    new_types[existing] = field_type;
+    new_names[new_count] = NULL;
+    new_types[new_count] = NULL;
+    rt->field_names = new_names;
+    rt->field_types = new_types;
+}
+
 /* ── expression typing ────────────────────────────────────────── */
 
 /* Map a tree-sitter Python literal node to a BUILTIN type. Returns NULL if
@@ -387,6 +479,10 @@ static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node) {
                 obj_type->data.named.qualified_name, attr_name);
             if (f) return py_func_return_type_recv(ctx, f->qualified_name,
                 obj_type->data.named.qualified_name);
+            // Field fallback: instance attributes from __init__'s self.x = expr.
+            const CBMType* field = py_lookup_field(ctx,
+                obj_type->data.named.qualified_name, attr_name);
+            if (field) return field;
         }
         if (obj_type->kind == CBM_TYPE_UNION) {
             int matches = 0;
@@ -406,6 +502,17 @@ static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node) {
             if (matches == 1 && hit) {
                 return py_func_return_type_recv(ctx, hit->qualified_name, hit_recv);
             }
+            // Field fallback for UNION: same single-match heuristic.
+            int field_matches = 0;
+            const CBMType* field_hit = NULL;
+            for (int i = 0; i < obj_type->data.union_type.count; i++) {
+                const CBMType* m = obj_type->data.union_type.members[i];
+                if (!m || m->kind != CBM_TYPE_NAMED) continue;
+                const CBMType* fld = py_lookup_field(ctx,
+                    m->data.named.qualified_name, attr_name);
+                if (fld) { field_matches++; field_hit = fld; }
+            }
+            if (field_matches == 1 && field_hit) return field_hit;
         }
         return cbm_type_unknown();
     }
@@ -551,14 +658,11 @@ static void py_process_statement(PyLSPContext* ctx, TSNode node) {
             : py_eval_expr_type(ctx, right);
 
         // Annotated assignment: x: T = expr — annotation wins.
-        if (!ts_node_is_null(ann)) {
+        bool has_annotation = !ts_node_is_null(ann);
+        if (has_annotation) {
             char* ann_text = py_node_text(ctx, ann);
             if (ann_text && ann_text[0]) {
-                const CBMType* ann_t = cbm_scope_lookup(ctx->current_scope, ann_text);
-                if (cbm_type_is_unknown(ann_t)) {
-                    ann_t = cbm_type_named(ctx->arena, ann_text);
-                }
-                rhs_type = ann_t;
+                rhs_type = py_resolve_annotation(ctx, ann_text);
             }
         }
 
@@ -568,8 +672,22 @@ static void py_process_statement(PyLSPContext* ctx, TSNode node) {
             char* name = py_node_text(ctx, left);
             if (name) cbm_scope_bind(ctx->current_scope, name, rhs_type);
         } else if (strcmp(lk, "attribute") == 0) {
-            // self.x = expr — record on the enclosing class via a synthetic
-            // type entry. For now we just don't bind locally.
+            // self.x = expr — record as instance field on the enclosing
+            // class. Effective inside any method that resolves obj.x where
+            // obj is an instance of the class.
+            TSNode obj = ts_node_child_by_field_name(left, "object", 6);
+            TSNode attr = ts_node_child_by_field_name(left, "attribute", 9);
+            if (!ts_node_is_null(obj) && !ts_node_is_null(attr) &&
+                strcmp(ts_node_type(obj), "identifier") == 0 &&
+                ctx->enclosing_class_qn) {
+                char* obj_name = py_node_text(ctx, obj);
+                char* attr_name = py_node_text(ctx, attr);
+                if (obj_name && attr_name &&
+                    (strcmp(obj_name, "self") == 0 || strcmp(obj_name, "cls") == 0)) {
+                    py_register_instance_field(ctx, ctx->enclosing_class_qn,
+                        attr_name, rhs_type);
+                }
+            }
         }
         return;
     }
@@ -1484,6 +1602,14 @@ static void py_process_function(PyLSPContext* ctx, TSNode func_node, const char*
     ctx->enclosing_func_qn = prev_func;
 }
 
+/* Return true iff func_node's name is __init__ or __post_init__. */
+static bool py_is_init_method(PyLSPContext* ctx, TSNode func_node) {
+    TSNode name = ts_node_child_by_field_name(func_node, "name", 4);
+    if (ts_node_is_null(name)) return false;
+    char* nm = py_node_text(ctx, name);
+    return nm && (strcmp(nm, "__init__") == 0 || strcmp(nm, "__post_init__") == 0);
+}
+
 static void py_process_class(PyLSPContext* ctx, TSNode class_node) {
     TSNode name_node = ts_node_child_by_field_name(class_node, "name", 4);
     if (ts_node_is_null(name_node)) return;
@@ -1496,19 +1622,68 @@ static void py_process_class(PyLSPContext* ctx, TSNode class_node) {
     TSNode body = ts_node_child_by_field_name(class_node, "body", 4);
     if (!ts_node_is_null(body)) {
         uint32_t bnc = ts_node_named_child_count(body);
+        // First pass: process class-level annotated assignments (PEP 526
+        // class-body field annotations like `x: int`) and dunder __init__
+        // methods so fields are registered before sibling methods that
+        // reference them.
+        for (uint32_t i = 0; i < bnc; i++) {
+            TSNode c = ts_node_named_child(body, i);
+            const char* ck = ts_node_type(c);
+            if (strcmp(ck, "expression_statement") == 0 &&
+                ts_node_named_child_count(c) > 0) {
+                TSNode inner = ts_node_named_child(c, 0);
+                const char* ik = ts_node_type(inner);
+                // class C: x: int = 1   → bind x as field
+                if (strcmp(ik, "assignment") == 0) {
+                    TSNode left = ts_node_child_by_field_name(inner, "left", 4);
+                    TSNode ann = ts_node_child_by_field_name(inner, "type", 4);
+                    if (!ts_node_is_null(left) && !ts_node_is_null(ann) &&
+                        strcmp(ts_node_type(left), "identifier") == 0) {
+                        char* fname = py_node_text(ctx, left);
+                        char* atext = py_node_text(ctx, ann);
+                        if (fname && atext) {
+                            const CBMType* ft = py_resolve_annotation(ctx, atext);
+                            py_register_instance_field(ctx,
+                                ctx->enclosing_class_qn, fname, ft);
+                        }
+                    }
+                }
+            }
+        }
+        // Second pass: __init__ (so self.x assignments populate fields).
+        for (uint32_t i = 0; i < bnc; i++) {
+            TSNode c = ts_node_named_child(body, i);
+            const char* ck = ts_node_type(c);
+            TSNode fn_node = c;
+            bool is_decorated = strcmp(ck, "decorated_definition") == 0;
+            if (is_decorated) {
+                fn_node = ts_node_child_by_field_name(c, "definition", 10);
+                if (ts_node_is_null(fn_node) ||
+                    strcmp(ts_node_type(fn_node), "function_definition") != 0) continue;
+            } else if (strcmp(ck, "function_definition") != 0) {
+                continue;
+            }
+            if (py_is_init_method(ctx, fn_node)) {
+                py_process_function(ctx, fn_node, ctx->enclosing_class_qn);
+            }
+        }
+        // Third pass: every other method (and nested classes).
         for (uint32_t i = 0; i < bnc; i++) {
             TSNode c = ts_node_named_child(body, i);
             const char* ck = ts_node_type(c);
             if (strcmp(ck, "function_definition") == 0) {
-                py_process_function(ctx, c, ctx->enclosing_class_qn);
+                if (!py_is_init_method(ctx, c)) {
+                    py_process_function(ctx, c, ctx->enclosing_class_qn);
+                }
             } else if (strcmp(ck, "decorated_definition") == 0) {
                 TSNode def = ts_node_child_by_field_name(c, "definition", 10);
                 if (!ts_node_is_null(def) &&
-                    strcmp(ts_node_type(def), "function_definition") == 0) {
+                    strcmp(ts_node_type(def), "function_definition") == 0 &&
+                    !py_is_init_method(ctx, def)) {
                     py_process_function(ctx, def, ctx->enclosing_class_qn);
                 }
             } else if (strcmp(ck, "class_definition") == 0) {
-                py_process_class(ctx, c);  // nested class
+                py_process_class(ctx, c);
             }
         }
     }

@@ -22,8 +22,10 @@
 #define CBM_PIPELINE_LSP_RESOLVE_H
 
 #include "cbm.h"
+#include "graph_buffer/graph_buffer.h"
 #include "foundation/constants.h"
 
+#include <stdio.h>
 #include <string.h>
 
 /* Confidence floor below which LSP-resolved calls are ignored and the
@@ -73,6 +75,48 @@ cbm_pipeline_find_lsp_resolution(const CBMResolvedCallArray *arr, const CBMCall 
         }
     }
     return best;
+}
+
+/* Resolve an LSP-emitted callee_qn to a graph-buffer node.
+ *
+ * Per-file LSPs (notably py_lsp) sometimes emit `callee_qn` as the raw
+ * import-module path the source code uses (e.g. `greeter.Greeter` from
+ * `from greeter import Greeter`) rather than the project-qualified QN
+ * the gbuf actually stores (`<project>.greeter.Greeter`). This is
+ * unavoidable at the per-file LSP layer: the LSP cannot tell in-project
+ * imports (qualify) from external imports (don't qualify, e.g. `os.path`)
+ * without consulting the gbuf, which is built downstream.
+ *
+ * The fallback rule: try the LSP-emitted QN as-is first; on miss, retry
+ * with `<project>.<callee_qn>`. If that also misses, the target is
+ * external/unknown and the caller drops the edge — same as today.
+ *
+ * Returns the matching node, or NULL if neither lookup hits. */
+static inline const cbm_gbuf_node_t *
+cbm_pipeline_lsp_target_node(const cbm_gbuf_t *gbuf, const char *project_name,
+                             const char *callee_qn) {
+    if (!gbuf || !callee_qn) {
+        return NULL;
+    }
+    const cbm_gbuf_node_t *direct = cbm_gbuf_find_by_qn(gbuf, callee_qn);
+    if (direct) {
+        return direct;
+    }
+    if (!project_name || !project_name[0]) {
+        return NULL;
+    }
+    /* Skip the prefix retry if callee_qn is already project-qualified —
+     * avoids producing nonsense like `proj.proj.foo.Bar`. */
+    size_t proj_len = strlen(project_name);
+    if (strncmp(callee_qn, project_name, proj_len) == 0 && callee_qn[proj_len] == '.') {
+        return NULL;
+    }
+    char buf[CBM_SZ_1K];
+    int written = snprintf(buf, sizeof(buf), "%s.%s", project_name, callee_qn);
+    if (written < 0 || (size_t)written >= sizeof(buf)) {
+        return NULL;
+    }
+    return cbm_gbuf_find_by_qn(gbuf, buf);
 }
 
 #endif /* CBM_PIPELINE_LSP_RESOLVE_H */

@@ -1477,11 +1477,21 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
         const CBMResolvedCall *lsp =
             cbm_pipeline_find_lsp_resolution(&result->resolved_calls, call);
         if (lsp) {
-            res.qualified_name = lsp->callee_qn;
-            res.strategy = lsp->strategy ? lsp->strategy : "lsp_override";
-            res.confidence = (double)lsp->confidence;
-            res.candidate_count = 1;
-            ws->lsp_overrides++;
+            /* Canonicalise to the gbuf node's QN so res.qualified_name matches
+             * the gbuf even when the cross-file fallback had to prefix the
+             * project name. If neither lookup hits, leave res.qualified_name
+             * empty — the LSP was confident but its target isn't in the gbuf
+             * (external/unindexed), so drop the edge rather than fall back to
+             * the registry resolver, matching prior single-lookup semantics. */
+            const cbm_gbuf_node_t *lsp_target =
+                cbm_pipeline_lsp_target_node(rc->main_gbuf, rc->project_name, lsp->callee_qn);
+            if (lsp_target) {
+                res.qualified_name = lsp_target->qualified_name;
+                res.strategy = lsp->strategy ? lsp->strategy : "lsp_override";
+                res.confidence = (double)lsp->confidence;
+                res.candidate_count = 1;
+                ws->lsp_overrides++;
+            }
         } else {
             res = cbm_registry_resolve(rc->registry, call->callee_name, module_qn,
                                        imp_keys, imp_vals, imp_count);

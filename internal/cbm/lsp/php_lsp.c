@@ -465,14 +465,73 @@ static char *phpdoc_clean(CBMArena *a, const char *raw) {
 /* Resolve a PHPDoc-style type spec (e.g. "App\\Foo|null", "?App\\Foo",
  * "Collection<User>", "string") to a CBMType. We strip nullables, take the
  * leftmost class in unions, drop generic <...> tails, then resolve. */
+/* Parse a `<...>` argument list into an arena-allocated NULL-terminated
+ * array of CBMType*. Caller has already skipped past the leading '<'.
+ * Returns the number of args parsed; *out_args is the array; *out_close
+ * is set to the position just after the matching '>'. */
+static int parse_phpdoc_template_args(PHPLSPContext *ctx, const char *p,
+                                       const CBMType ***out_args, const char **out_close) {
+    /* Allocate a small buffer; grow if needed. */
+    int cap = 4;
+    int count = 0;
+    const CBMType **buf = (const CBMType **)cbm_arena_alloc(ctx->arena,
+                                                             (size_t)(cap + 1) * sizeof(*buf));
+    if (!buf) {
+        *out_args = NULL;
+        *out_close = p;
+        return 0;
+    }
+    int depth = 1;
+    while (*p && depth > 0) {
+        while (*p == ' ' || *p == '\t' || *p == ',') p++;
+        if (*p == '>') break;
+        const char *arg_start = p;
+        while (*p && depth > 0) {
+            if (*p == '<') depth++;
+            else if (*p == '>') {
+                depth--;
+                if (depth == 0) break;
+            } else if (*p == ',' && depth == 1) {
+                break;
+            }
+            p++;
+        }
+        size_t arg_len = (size_t)(p - arg_start);
+        while (arg_len > 0 && (arg_start[arg_len - 1] == ' ' || arg_start[arg_len - 1] == '\t')) {
+            arg_len--;
+        }
+        if (arg_len > 0) {
+            char *arg_text = cbm_arena_strndup(ctx->arena, arg_start, arg_len);
+            const CBMType *arg_type = resolve_phpdoc_type(ctx, arg_text);
+            if (count >= cap) {
+                int new_cap = cap * 2;
+                const CBMType **new_buf = (const CBMType **)cbm_arena_alloc(
+                    ctx->arena, (size_t)(new_cap + 1) * sizeof(*new_buf));
+                if (new_buf) {
+                    for (int i = 0; i < count; i++) new_buf[i] = buf[i];
+                    buf = new_buf;
+                    cap = new_cap;
+                }
+            }
+            buf[count++] = arg_type;
+        }
+    }
+    if (*p == '>') p++;
+    buf[count] = NULL;
+    *out_args = buf;
+    *out_close = p;
+    return count;
+}
+
 static const CBMType *resolve_phpdoc_type(PHPLSPContext *ctx, const char *type_text) {
     if (!type_text || !*type_text) return cbm_type_unknown();
-    /* Skip whitespace */
+    /* Skip whitespace + nullable */
     while (*type_text == ' ' || *type_text == '\t' || *type_text == '?') type_text++;
-    /* Take portion up to first '|', ' ', '\t' */
+    /* Take portion up to first '|', ' ', '\t', '<' */
     size_t end = 0;
     while (type_text[end] && type_text[end] != '|' && type_text[end] != ' ' &&
-           type_text[end] != '\t' && type_text[end] != '<' && type_text[end] != '\n') {
+           type_text[end] != '\t' && type_text[end] != '<' && type_text[end] != '\n' &&
+           type_text[end] != ',' && type_text[end] != '>' && type_text[end] != '{') {
         end++;
     }
     if (end == 0) return cbm_type_unknown();
@@ -483,13 +542,41 @@ static const CBMType *resolve_phpdoc_type(PHPLSPContext *ctx, const char *type_t
         if (type_text[end] == '|') return resolve_phpdoc_type(ctx, type_text + end + 1);
         return cbm_type_unknown();
     }
-    if (php_is_builtin_type_name(first)) return cbm_type_builtin(ctx->arena, first);
+
+    /* Generic? `Foo<Bar>` or `array<int, User>` */
+    bool has_generic = (type_text[end] == '<');
+    bool has_array_shape = (type_text[end] == '{');
+
+    /* `array{...}` shape — treat as plain array for now. */
+    if (has_array_shape) return cbm_type_builtin(ctx->arena, "array");
+
+    if (php_is_builtin_type_name(first)) {
+        if (has_generic) {
+            /* `array<T>`, `iterable<T>`, `list<T>`, `callable<...>`. We
+             * preserve the template form so foreach can extract elements
+             * later. */
+            const CBMType **args = NULL;
+            const char *after = NULL;
+            int n = parse_phpdoc_template_args(ctx, type_text + end + 1, &args, &after);
+            return cbm_type_template(ctx->arena, first, args, n);
+        }
+        return cbm_type_builtin(ctx->arena, first);
+    }
+
     const char *resolved = php_resolve_class_name(ctx, first);
     if (!resolved) return cbm_type_unknown();
+
+    if (has_generic) {
+        const CBMType **args = NULL;
+        const char *after = NULL;
+        int n = parse_phpdoc_template_args(ctx, type_text + end + 1, &args, &after);
+        return cbm_type_template(ctx->arena, resolved, args, n);
+    }
     return cbm_type_named(ctx->arena, resolved);
 }
 
-/* @param Type $name — rebind matching parameter. */
+/* @param Type $name — rebind matching parameter. Tolerates generic
+ * `<...>` in the type token. */
 static void parse_phpdoc_for_params(PHPLSPContext *ctx, const char *docstring, TSNode params) {
     (void)params;
     if (!docstring || !ctx->current_scope) return;
@@ -497,9 +584,14 @@ static void parse_phpdoc_for_params(PHPLSPContext *ctx, const char *docstring, T
     while ((p = strstr(p, "@param")) != NULL) {
         p += 6;
         while (*p == ' ' || *p == '\t') p++;
-        /* type until whitespace */
         const char *type_start = p;
-        while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
+        int depth = 0;
+        while (*p && *p != '\n') {
+            if (*p == '<') depth++;
+            else if (*p == '>') depth--;
+            else if (depth == 0 && (*p == ' ' || *p == '\t' || *p == '$')) break;
+            p++;
+        }
         if (p == type_start) continue;
         char *type_text = cbm_arena_strndup(ctx->arena, type_start, (size_t)(p - type_start));
         while (*p == ' ' || *p == '\t') p++;
@@ -516,7 +608,9 @@ static void parse_phpdoc_for_params(PHPLSPContext *ctx, const char *docstring, T
     }
 }
 
-/* @var Type $name — bind a variable in current scope. */
+/* @var Type $name — bind a variable in current scope.
+ * Generic types like `array<User>` may contain whitespace-free `<>` — we
+ * tolerate those by including '<' and '>' in the type token. */
 static void bind_phpdoc_var(PHPLSPContext *ctx, const char *docstring) {
     if (!docstring || !ctx->current_scope) return;
     const char *p = docstring;
@@ -524,7 +618,15 @@ static void bind_phpdoc_var(PHPLSPContext *ctx, const char *docstring) {
         p += 4;
         while (*p == ' ' || *p == '\t') p++;
         const char *type_start = p;
-        while (*p && *p != ' ' && *p != '\t' && *p != '\n') p++;
+        /* Take a type token: stop at whitespace or '$' (start of var name).
+         * Allow '<', '>', ',', '|', '?' inside the type. */
+        int depth = 0;
+        while (*p && *p != '\n') {
+            if (*p == '<') depth++;
+            else if (*p == '>') depth--;
+            else if (depth == 0 && (*p == ' ' || *p == '\t' || *p == '$')) break;
+            p++;
+        }
         if (p == type_start) continue;
         char *type_text = cbm_arena_strndup(ctx->arena, type_start, (size_t)(p - type_start));
         while (*p == ' ' || *p == '\t') p++;
@@ -853,6 +955,8 @@ static const CBMType *eval_member_call_type(PHPLSPContext *ctx, TSNode call_node
                                        : php_eval_expr_type(ctx, recv_node);
         if (recv_type && recv_type->kind == CBM_TYPE_NAMED) {
             class_qn = recv_type->data.named.qualified_name;
+        } else if (recv_type && recv_type->kind == CBM_TYPE_TEMPLATE) {
+            class_qn = recv_type->data.template_type.template_name;
         }
     }
     if (!class_qn) return cbm_type_unknown();
@@ -911,17 +1015,84 @@ static void process_assignment(PHPLSPContext *ctx, TSNode node) {
 }
 
 static void process_foreach(PHPLSPContext *ctx, TSNode node) {
-    /* Bind iteration variable to "mixed" — we don't track collection<T> yet. */
+    /* Try to extract the iterable expression's element type. tree-sitter-php
+     * emits the iterable as the first sibling expression after `foreach (`,
+     * and the loop var is the variable_name child after `as`.
+     *
+     * Element-type resolution rules:
+     *   - iterable is array<T> / list<T> / iterable<T> (TEMPLATE)         → T
+     *   - iterable is array<K, V> (TEMPLATE arg_count=2)                  → V (value)
+     *   - iterable is a NAMED collection-like type whose `current()` method
+     *     has a known return type (e.g. Iterator)                          → that
+     *   - otherwise                                                         → UNKNOWN
+     */
+    TSNode iterable;
+    memset(&iterable, 0, sizeof(iterable));
+    TSNode loop_vars[4];
+    int loop_var_count = 0;
+    memset(loop_vars, 0, sizeof(loop_vars));
+
+    /* tree-sitter-php emits foreach_statement children in source order:
+     *   <iterable expression> ... `as` ... <loop var(s)> ... <body>
+     * The iterable can be ANY expression: variable_name, member_call,
+     * function_call_expression, member_access_expression, etc. The loop
+     * vars are always variable_name. The body is compound_statement /
+     * colon_block / a statement.
+     *
+     * We find the iterable as the first named child whose kind is an
+     * expression-shape; subsequent variable_name children before the body
+     * are the loop vars. */
     uint32_t nc = ts_node_child_count(node);
     for (uint32_t i = 0; i < nc; i++) {
         TSNode c = ts_node_child(node, i);
         if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
-        if (node_is(c, "variable_name")) {
-            char *t = php_node_text(ctx, c);
-            if (!t) continue;
-            const char *name = (t[0] == '$') ? t + 1 : t;
-            cbm_scope_bind(ctx->current_scope, name, cbm_type_unknown());
+        const char *k = ts_node_type(c);
+        if (strcmp(k, "compound_statement") == 0 || strcmp(k, "colon_block") == 0 ||
+            strcmp(k, "expression_statement") == 0 || strcmp(k, "echo_statement") == 0 ||
+            strcmp(k, "return_statement") == 0 || strcmp(k, "if_statement") == 0 ||
+            strcmp(k, "for_statement") == 0 || strcmp(k, "while_statement") == 0 ||
+            strcmp(k, "switch_statement") == 0 || strcmp(k, "try_statement") == 0) {
+            break; /* reached body */
         }
+        if (ts_node_is_null(iterable)) {
+            iterable = c;
+        } else if (strcmp(k, "variable_name") == 0 && loop_var_count < 4) {
+            loop_vars[loop_var_count++] = c;
+        }
+    }
+
+    const CBMType *elem_type = cbm_type_unknown();
+    if (!ts_node_is_null(iterable)) {
+        const CBMType *it_type = php_eval_expr_type(ctx, iterable);
+        if (it_type && it_type->kind == CBM_TYPE_TEMPLATE) {
+            const CBMType *const *args = it_type->data.template_type.template_args;
+            if (args) {
+                int n = 0;
+                while (args[n]) n++;
+                if (n >= 2 && args[1]) elem_type = args[1];
+                else if (n >= 1 && args[0]) elem_type = args[0];
+            }
+        } else if (it_type && it_type->kind == CBM_TYPE_NAMED) {
+            const CBMRegisteredFunc *cur = php_lookup_method(
+                ctx, it_type->data.named.qualified_name, "current");
+            if (cur && cur->signature && cur->signature->kind == CBM_TYPE_FUNC &&
+                cur->signature->data.func.return_types &&
+                cur->signature->data.func.return_types[0] &&
+                cur->signature->data.func.return_types[0]->kind != CBM_TYPE_UNKNOWN) {
+                elem_type = cur->signature->data.func.return_types[0];
+            }
+        }
+    }
+
+    /* Bind the loop variable(s). PHP allows `foreach ($xs as $k => $v)` with
+     * two: $k is the key, $v is the element. We bind elem_type to the LAST
+     * variable_name (the value); earlier ones get UNKNOWN as approximation. */
+    for (int i = 0; i < loop_var_count; i++) {
+        char *t = php_node_text(ctx, loop_vars[i]);
+        if (!t) continue;
+        const char *name = (t[0] == '$') ? t + 1 : t;
+        const CBMType *bind_type = (i == loop_var_count - 1) ? elem_type : cbm_type_unknown();
+        cbm_scope_bind(ctx->current_scope, name, bind_type);
     }
 }
 
@@ -1027,9 +1198,15 @@ static void resolve_member_call(PHPLSPContext *ctx, TSNode call) {
     if (ts_node_is_null(obj)) return;
 
     const CBMType *recv = php_eval_expr_type(ctx, obj);
-    if (!recv || recv->kind != CBM_TYPE_NAMED) return; /* unknown receiver; defer */
-
-    const char *class_qn = recv->data.named.qualified_name;
+    if (!recv) return;
+    const char *class_qn = NULL;
+    if (recv->kind == CBM_TYPE_NAMED) {
+        class_qn = recv->data.named.qualified_name;
+    } else if (recv->kind == CBM_TYPE_TEMPLATE) {
+        /* `Collection<User>` resolves methods on `Collection`. */
+        class_qn = recv->data.template_type.template_name;
+    }
+    if (!class_qn) return; /* unknown receiver; defer */
     const CBMRegisteredFunc *f = php_lookup_method(ctx, class_qn, method_name);
     if (f) {
         const char *strategy = (f->receiver_type && strcmp(f->receiver_type, class_qn) == 0)
@@ -1279,6 +1456,50 @@ static void walk_with_narrowing(PHPLSPContext *ctx, TSNode body, const php_narro
     ctx->current_scope = saved;
 }
 
+/* Detect whether a statement node is a "leaves the function" terminator:
+ *   return;  return $x;  throw ...;  exit;  die;  continue (in a loop);
+ *   break (in a loop). For our purposes any of these means the rest of the
+ * enclosing function does NOT execute the inner narrowed-out branch, so we
+ * can apply the negation of the inner branch as sequential narrowing. */
+static bool stmt_is_terminator(TSNode stmt) {
+    if (ts_node_is_null(stmt)) return false;
+    const char *k = ts_node_type(stmt);
+    if (strcmp(k, "return_statement") == 0) return true;
+    if (strcmp(k, "compound_statement") == 0) {
+        /* Single-child compound that's a terminator. */
+        uint32_t nc = ts_node_child_count(stmt);
+        TSNode last;
+        memset(&last, 0, sizeof(last));
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode c = ts_node_child(stmt, i);
+            if (!ts_node_is_null(c) && ts_node_is_named(c)) last = c;
+        }
+        if (!ts_node_is_null(last)) return stmt_is_terminator(last);
+    }
+    if (strcmp(k, "expression_statement") == 0) {
+        uint32_t nc = ts_node_child_count(stmt);
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode c = ts_node_child(stmt, i);
+            if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
+            const char *ck = ts_node_type(c);
+            if (strcmp(ck, "throw_expression") == 0) return true;
+            if (strcmp(ck, "exit_statement") == 0) return true;
+            /* exit() / die() */
+            if (strcmp(ck, "function_call_expression") == 0) {
+                TSNode fn = ts_node_child_by_field_name(c, "function", 8);
+                if (!ts_node_is_null(fn)) {
+                    /* Just take the raw text and check for exit/die — even
+                     * with namespace prefixes these are global calls. */
+                    /* Conservative: don't claim terminator on function calls. */
+                }
+            }
+        }
+    }
+    if (strcmp(k, "throw_statement") == 0) return true;
+    if (strcmp(k, "exit_statement") == 0) return true;
+    return false;
+}
+
 /* Walk an `if_statement` (or `else_if_clause`) honoring narrowing.
  *
  * Tree-sitter-php's `if_statement` emits children as: an optional `if`
@@ -1287,7 +1508,15 @@ static void walk_with_narrowing(PHPLSPContext *ctx, TSNode body, const php_narro
  * else_if_clause / else_clause). We narrow on the condition then walk
  * EVERY non-condition named child as the body — only the first
  * statement after the condition is the if-body and gets the narrowed
- * scope; else-branches walk without narrowing. */
+ * scope; else-branches walk without narrowing.
+ *
+ * Negative-narrowing pattern (Phase 4l):
+ *   if (!$x instanceof Foo) { return; }
+ *   $x->method();   // here $x is narrowed to Foo
+ * If the if-body is a terminator AND the condition is a logical NOT of a
+ * narrowable predicate, apply the (positive) narrowing into the CURRENT
+ * scope sequentially for the remainder of the enclosing function.
+ */
 static void process_if_statement(PHPLSPContext *ctx, TSNode node) {
     /* Find condition: first parenthesized_expression child. */
     TSNode cond;
@@ -1304,11 +1533,63 @@ static void process_if_statement(PHPLSPContext *ctx, TSNode node) {
     php_narrowing_t nw = {0};
     bool has_nw = !ts_node_is_null(cond) && parse_narrowing(ctx, cond, &nw);
 
+    /* Detect negative narrowing: condition is `!P` and P is a narrowing
+     * predicate. We unwrap one level of unary `!`. */
+    php_narrowing_t neg_nw = {0};
+    bool has_neg_nw = false;
+    if (!ts_node_is_null(cond)) {
+        TSNode inner;
+        memset(&inner, 0, sizeof(inner));
+        /* Unwrap parenthesized_expression. */
+        TSNode probe = cond;
+        for (int loop = 0; loop < 4; loop++) {
+            if (strcmp(ts_node_type(probe), "parenthesized_expression") == 0) {
+                uint32_t pnc = ts_node_child_count(probe);
+                TSNode next;
+                memset(&next, 0, sizeof(next));
+                for (uint32_t i = 0; i < pnc; i++) {
+                    TSNode c = ts_node_child(probe, i);
+                    if (!ts_node_is_null(c) && ts_node_is_named(c)) {
+                        next = c;
+                        break;
+                    }
+                }
+                if (ts_node_is_null(next)) break;
+                probe = next;
+            } else {
+                break;
+            }
+        }
+        if (strcmp(ts_node_type(probe), "unary_op_expression") == 0) {
+            /* Find the operator child; if it's `!`, parse the inner expr. */
+            TSNode op = ts_node_child_by_field_name(probe, "operator", 8);
+            char *opt = !ts_node_is_null(op) ? php_node_text(ctx, op) : NULL;
+            if (opt && strcmp(opt, "!") == 0) {
+                TSNode operand = ts_node_child_by_field_name(probe, "operand", 7);
+                if (ts_node_is_null(operand)) {
+                    uint32_t unc = ts_node_child_count(probe);
+                    for (uint32_t i = 0; i < unc; i++) {
+                        TSNode c = ts_node_child(probe, i);
+                        if (!ts_node_is_null(c) && ts_node_is_named(c) &&
+                            strcmp(ts_node_type(c), "unary_op_expression") != 0) {
+                            operand = c;
+                            break;
+                        }
+                    }
+                }
+                if (!ts_node_is_null(operand)) {
+                    has_neg_nw = parse_narrowing(ctx, operand, &neg_nw);
+                }
+            }
+        }
+    }
+
     /* Walk children. The first NON-condition, NON-else-clause named child
      * is the if-body; narrowed scope applies there. Subsequent
      * else_if_clause / else_clause walk without narrowing. */
     bool walked_body = false;
     bool past_cond = false;
+    bool body_is_terminator = false;
     for (uint32_t i = 0; i < nc; i++) {
         TSNode c = ts_node_child(node, i);
         if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
@@ -1323,12 +1604,20 @@ static void process_if_statement(PHPLSPContext *ctx, TSNode node) {
             continue;
         }
         if (!walked_body) {
+            body_is_terminator = stmt_is_terminator(c);
             walk_with_narrowing(ctx, c, has_nw ? &nw : NULL);
             walked_body = true;
         } else {
             /* else / elseif / colon_block */
             php_resolve_calls_in_node(ctx, c);
         }
+    }
+
+    /* Negative-narrowing apply: if the if-body unconditionally exits AND
+     * the condition was `!P` for narrowable P, then for the rest of the
+     * enclosing scope, P holds. */
+    if (body_is_terminator && has_neg_nw && neg_nw.var_name && neg_nw.type) {
+        cbm_scope_bind(ctx->current_scope, neg_nw.var_name, neg_nw.type);
     }
 }
 

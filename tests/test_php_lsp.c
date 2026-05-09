@@ -1582,6 +1582,402 @@ TEST(phplsp_bool_literals) {
     PASS();
 }
 
+/* ── 81. Generic @var Collection<User> ─────────────────────── */
+
+TEST(phplsp_generic_var_collection) {
+    const char *src =
+        "<?php\n"
+        "class User { public function name(): string { return 'u'; } }\n"
+        "class C {\n"
+        "    public function run($coll): void {\n"
+        "        /** @var \\Illuminate\\Support\\Collection<User> $coll */\n"
+        "        $coll->first();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    /* Collection.first is registered in stdlib; should resolve. */
+    ASSERT(find_resolved(r, "C.run", "Collection.first") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 82. Foreach over array<User> binds element ──────────── */
+
+TEST(phplsp_foreach_array_typed) {
+    const char *src =
+        "<?php\n"
+        "class User { public function name(): string { return 'u'; } }\n"
+        "class C {\n"
+        "    public function run($users): void {\n"
+        "        /** @var array<User> $users */\n"
+        "        foreach ($users as $u) { $u->name(); }\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(require_resolved(r, "C.run", "User.name") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 83. Negative narrowing — early return ────────────────── */
+
+TEST(phplsp_negative_narrow_early_return) {
+    const char *src =
+        "<?php\n"
+        "class Foo { public function go(): int { return 1; } }\n"
+        "class C {\n"
+        "    public function run($x): void {\n"
+        "        if (!($x instanceof Foo)) { return; }\n"
+        "        $x->go();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(require_resolved(r, "C.run", "Foo.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 84. Negative narrowing — throw ────────────────────────── */
+
+TEST(phplsp_negative_narrow_throw) {
+    const char *src =
+        "<?php\n"
+        "class Foo { public function go(): int { return 1; } }\n"
+        "class C {\n"
+        "    public function run($x): void {\n"
+        "        if (!($x instanceof Foo)) { throw new \\RuntimeException('bad'); }\n"
+        "        $x->go();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(require_resolved(r, "C.run", "Foo.go") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 85. Eloquent Builder chain ────────────────────────────── */
+
+TEST(phplsp_eloquent_builder_chain) {
+    const char *src =
+        "<?php\n"
+        "class C {\n"
+        "    public function run(\\Illuminate\\Database\\Eloquent\\Builder $q): void {\n"
+        "        $q->where('a', 1)->orderBy('id')->first();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "Builder.where") >= 0);
+    ASSERT(find_resolved(r, "C.run", "Builder.orderBy") >= 0);
+    ASSERT(find_resolved(r, "C.run", "Builder.first") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 86. Collection map -> filter -> first chain ──────────── */
+
+TEST(phplsp_collection_chain) {
+    const char *src =
+        "<?php\n"
+        "class C {\n"
+        "    public function run(\\Illuminate\\Support\\Collection $c): void {\n"
+        "        $c->map(fn($x) => $x)->filter(fn($x) => true)->first();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "Collection.map") >= 0);
+    ASSERT(find_resolved(r, "C.run", "Collection.filter") >= 0);
+    ASSERT(find_resolved(r, "C.run", "Collection.first") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 87. Symfony Request/Response ───────────────────────── */
+
+TEST(phplsp_symfony_request) {
+    const char *src =
+        "<?php\n"
+        "class C {\n"
+        "    public function run(\\Symfony\\Component\\HttpFoundation\\Request $req): void {\n"
+        "        $req->getMethod();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(require_resolved(r, "C.run", "Request.getMethod") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 88. Carbon date chain ────────────────────────────── */
+
+TEST(phplsp_carbon_chain) {
+    const char *src =
+        "<?php\n"
+        "class C {\n"
+        "    public function run(\\Carbon\\Carbon $now): void {\n"
+        "        $now->addDay()->format('Y-m-d');\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "Carbon.addDay") >= 0);
+    ASSERT(find_resolved(r, "C.run", "Carbon.format") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 89. Nested narrowing inside a method body ──────────── */
+
+TEST(phplsp_nested_if_narrowing) {
+    const char *src =
+        "<?php\n"
+        "class A { public function aa(): int { return 1; } public function bb(): int { return 2; } }\n"
+        "class C {\n"
+        "    public function run($x): void {\n"
+        "        if ($x instanceof A) {\n"
+        "            $x->aa();\n"
+        "            if (true) { $x->bb(); }\n"
+        "        }\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(require_resolved(r, "C.run", "A.aa") >= 0);
+    ASSERT(require_resolved(r, "C.run", "A.bb") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 90. assert + bb chain works ─────────────────────────── */
+
+TEST(phplsp_assert_then_chain) {
+    const char *src =
+        "<?php\n"
+        "class B { public function tap(): int { return 1; } }\n"
+        "class A { public function next(): B { return new B(); } }\n"
+        "class C {\n"
+        "    public function run($x): void {\n"
+        "        assert($x instanceof A);\n"
+        "        $x->next()->tap();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(require_resolved(r, "C.run", "A.next") >= 0);
+    ASSERT(require_resolved(r, "C.run", "B.tap") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 91. PSR-7 with-builder chain ────────────────────────── */
+
+TEST(phplsp_psr7_with_chain) {
+    const char *src =
+        "<?php\n"
+        "class C {\n"
+        "    public function run(\\Psr\\Http\\Message\\ResponseInterface $r): void {\n"
+        "        $r->withStatus(200)->withHeader('X', 'y');\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "ResponseInterface.withStatus") >= 0);
+    ASSERT(find_resolved(r, "C.run", "ResponseInterface.withHeader") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 92. @method virtual + chain into real type ──────────── */
+
+TEST(phplsp_at_method_then_real) {
+    const char *src =
+        "<?php\n"
+        "class Z { public function tap(): int { return 1; } }\n"
+        "/**\n"
+        " * @method Z fooBar()\n"
+        " * @method Z baz()\n"
+        " */\n"
+        "class M {\n"
+        "    public function run(): void {\n"
+        "        $this->fooBar()->tap();\n"
+        "        $this->baz()->tap();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "M.run", "M.fooBar") >= 0);
+    ASSERT(find_resolved(r, "M.run", "M.baz") >= 0);
+    /* Both chains end in Z.tap. */
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 93. @property chained with @method ──────────────────── */
+
+TEST(phplsp_property_method_combined) {
+    const char *src =
+        "<?php\n"
+        "class Q { public function tap(): int { return 1; } }\n"
+        "/**\n"
+        " * @property Q $q\n"
+        " * @method Q getQ()\n"
+        " */\n"
+        "class M {\n"
+        "    public function run(): void {\n"
+        "        $this->q->tap();\n"
+        "        $this->getQ()->tap();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "M.run", "Q.tap") >= 0);
+    ASSERT(find_resolved(r, "M.run", "M.getQ") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 94. Eloquent Model::query()->where()->get() ─────────── */
+
+TEST(phplsp_model_query_chain) {
+    const char *src =
+        "<?php\n"
+        "class C {\n"
+        "    public function run(): void {\n"
+        "        \\Illuminate\\Database\\Eloquent\\Model::query()->where('a',1)->get();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "Model.query") >= 0);
+    ASSERT(find_resolved(r, "C.run", "Builder.where") >= 0);
+    ASSERT(find_resolved(r, "C.run", "Builder.get") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 95. Long Eloquent chain ─────────────────────────────── */
+
+TEST(phplsp_long_eloquent_chain) {
+    const char *src =
+        "<?php\n"
+        "class C {\n"
+        "    public function run(\\Illuminate\\Database\\Eloquent\\Builder $q): void {\n"
+        "        $q->where('a',1)->whereIn('b',[1])->orderBy('c')->limit(10)->get();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "Builder.whereIn") >= 0);
+    ASSERT(find_resolved(r, "C.run", "Builder.orderBy") >= 0);
+    ASSERT(find_resolved(r, "C.run", "Builder.limit") >= 0);
+    ASSERT(find_resolved(r, "C.run", "Builder.get") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 96. Generic with two type args ──────────────────────── */
+
+TEST(phplsp_generic_two_args) {
+    const char *src =
+        "<?php\n"
+        "class User { public function name(): string { return 'u'; } }\n"
+        "class C {\n"
+        "    public function run($map): void {\n"
+        "        /** @var array<int, User> $map */\n"
+        "        foreach ($map as $u) { $u->name(); }\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", "User.name") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 97. Throwable.getMessage via specific subclass ──────── */
+
+TEST(phplsp_throwable_subclass_message) {
+    const char *src =
+        "<?php\n"
+        "class Custom extends \\RuntimeException {}\n"
+        "class C {\n"
+        "    public function run(): void {\n"
+        "        try { /* nop */ } catch (Custom $e) { $e->getMessage(); }\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(find_resolved(r, "C.run", ".getMessage") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 98. instance method call followed by static call ────── */
+
+TEST(phplsp_instance_then_static_chain) {
+    const char *src =
+        "<?php\n"
+        "class B {\n"
+        "    public static function tap(): int { return 1; }\n"
+        "    public function next(): string { return 'b'; }\n"
+        "}\n"
+        "class C {\n"
+        "    public function run(B $b): void {\n"
+        "        $b->next();\n"
+        "        B::tap();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    ASSERT(require_resolved(r, "C.run", "B.next") >= 0);
+    ASSERT(require_resolved(r, "C.run", "B.tap") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 99. self::method on an aliased class ─────────────────── */
+
+TEST(phplsp_self_method_chain) {
+    const char *src =
+        "<?php\n"
+        "class C {\n"
+        "    public function helper(): C { return $this; }\n"
+        "    public function run(): void {\n"
+        "        self::helper()->helper();\n"
+        "    }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    /* Both helpers should resolve. */
+    ASSERT(find_resolved(r, "C.run", "C.helper") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ── 100. Interface dispatch via typed param ──────────── */
+
+TEST(phplsp_interface_typed_param) {
+    const char *src =
+        "<?php\n"
+        "interface Greeter { public function hi(): string; }\n"
+        "class English implements Greeter { public function hi(): string { return 'hi'; } }\n"
+        "class C {\n"
+        "    public function run(Greeter $g): void { $g->hi(); }\n"
+        "}\n";
+    CBMFileResult *r = extract_php(src);
+    ASSERT(r);
+    /* Either resolves to Greeter.hi (interface) or English.hi (impl). */
+    ASSERT(find_resolved(r, "C.run", ".hi") >= 0);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(php_lsp) {
@@ -1667,4 +2063,25 @@ SUITE(php_lsp) {
     RUN_TEST(phplsp_trait_with_alias);
     RUN_TEST(phplsp_yield_expression);
     RUN_TEST(phplsp_bool_literals);
+    /* Phase 4g/4l + stdlib expansion */
+    RUN_TEST(phplsp_generic_var_collection);
+    RUN_TEST(phplsp_foreach_array_typed);
+    RUN_TEST(phplsp_negative_narrow_early_return);
+    RUN_TEST(phplsp_negative_narrow_throw);
+    RUN_TEST(phplsp_eloquent_builder_chain);
+    RUN_TEST(phplsp_collection_chain);
+    RUN_TEST(phplsp_symfony_request);
+    RUN_TEST(phplsp_carbon_chain);
+    RUN_TEST(phplsp_nested_if_narrowing);
+    RUN_TEST(phplsp_assert_then_chain);
+    RUN_TEST(phplsp_psr7_with_chain);
+    RUN_TEST(phplsp_at_method_then_real);
+    RUN_TEST(phplsp_property_method_combined);
+    RUN_TEST(phplsp_model_query_chain);
+    RUN_TEST(phplsp_long_eloquent_chain);
+    RUN_TEST(phplsp_generic_two_args);
+    RUN_TEST(phplsp_throwable_subclass_message);
+    RUN_TEST(phplsp_instance_then_static_chain);
+    RUN_TEST(phplsp_self_method_chain);
+    RUN_TEST(phplsp_interface_typed_param);
 }

@@ -30,6 +30,7 @@ enum {
 enum { PP_CSHARP_M_PREFIX_LEN = 2 };
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_internal.h"
+#include "pipeline/lsp_resolve.h"
 #include "pipeline/worker_pool.h"
 #include "foundation/compat.h"
 #include "foundation/compat_thread.h"
@@ -816,7 +817,12 @@ typedef struct __attribute__((aligned(CBM_CACHE_LINE))) {
     int usages_resolved;
     int semantic_resolved;
     int errors;
-    char _pad[CBM_CACHE_LINE - sizeof(cbm_gbuf_t *) - (PP_RING * sizeof(int))];
+    /* Subset of calls_resolved that were attributed via the LSP-override
+     * path (cbm_pipeline_find_lsp_resolution hit) rather than the
+     * registry's textual matcher. Surfaced in the parallel.resolve.done
+     * log line so divergence between pipelines becomes observable. */
+    int lsp_overrides;
+    char _pad[CBM_CACHE_LINE - sizeof(cbm_gbuf_t *) - ((PP_RING + 1) * sizeof(int))];
 } resolve_worker_state_t;
 
 typedef struct {
@@ -1447,43 +1453,6 @@ static void try_field_type_hint(resolve_ctx_t *rc, cbm_resolution_t *res, const 
     }
 }
 
-/* Look up an LSP-resolved override for this call site.
- * Returns a cbm_resolution_t with non-empty qualified_name on hit, empty on
- * miss. See src/pipeline/pass_calls.c for the rationale. */
-static cbm_resolution_t lsp_override_resolution_pp(const CBMFileResult *result,
-                                                    const CBMCall *call) {
-    cbm_resolution_t empty = {0};
-    if (!result || !call || !call->callee_name || !call->enclosing_func_qn) return empty;
-    if (result->resolved_calls.count == 0) return empty;
-    const char *short_name = call->callee_name;
-    const char *p = call->callee_name;
-    for (; *p; p++) {
-        if (*p == '.') short_name = p + 1;
-    }
-    if (!short_name || !*short_name) return empty;
-    size_t snlen = strlen(short_name);
-
-    const CBMResolvedCall *best = NULL;
-    for (int i = 0; i < result->resolved_calls.count; i++) {
-        const CBMResolvedCall *rc2 = &result->resolved_calls.items[i];
-        if (!rc2->caller_qn || !rc2->callee_qn) continue;
-        if (strcmp(rc2->caller_qn, call->enclosing_func_qn) != 0) continue;
-        size_t qlen = strlen(rc2->callee_qn);
-        if (qlen <= snlen) continue;
-        if (rc2->callee_qn[qlen - snlen - 1] != '.') continue;
-        if (strcmp(rc2->callee_qn + qlen - snlen, short_name) != 0) continue;
-        if (rc2->confidence < 0.5f) continue;
-        if (!best || rc2->confidence > best->confidence) best = rc2;
-    }
-    if (!best) return empty;
-    cbm_resolution_t r = {0};
-    r.qualified_name = best->callee_qn;
-    r.strategy = best->strategy ? best->strategy : "lsp_override";
-    r.confidence = (double)best->confidence;
-    r.candidate_count = 1;
-    return r;
-}
-
 /* Resolve calls for one file and emit CALLS/HTTP_CALLS/ASYNC_CALLS edges. */
 static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CBMFileResult *result,
                                const char *rel, const char *module_qn, const char **imp_keys,
@@ -1499,8 +1468,21 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
             continue;
         }
 
-        cbm_resolution_t res = lsp_override_resolution_pp(result, call);
-        if (!res.qualified_name || res.qualified_name[0] == '\0') {
+        /* LSP-resolved calls take precedence over registry textual matching.
+         * Same helper + same CBM_LSP_CONFIDENCE_FLOOR as the sequential
+         * pipeline (pass_calls.c) — both paths must admit the same set of
+         * LSP overrides so a project doesn't get different attributions
+         * depending on whether parallel mode kicked in. */
+        cbm_resolution_t res = {0};
+        const CBMResolvedCall *lsp =
+            cbm_pipeline_find_lsp_resolution(&result->resolved_calls, call);
+        if (lsp) {
+            res.qualified_name = lsp->callee_qn;
+            res.strategy = lsp->strategy ? lsp->strategy : "lsp_override";
+            res.confidence = (double)lsp->confidence;
+            res.candidate_count = 1;
+            ws->lsp_overrides++;
+        } else {
             res = cbm_registry_resolve(rc->registry, call->callee_name, module_qn,
                                        imp_keys, imp_vals, imp_count);
         }
@@ -1804,12 +1786,14 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
     int total_calls = 0;
     int total_usages = 0;
     int total_semantic = 0;
+    int total_lsp_overrides = 0;
     for (int i = 0; i < worker_count; i++) {
         if (workers[i].local_edge_buf) {
             cbm_gbuf_merge(ctx->gbuf, workers[i].local_edge_buf);
             total_calls += workers[i].calls_resolved;
             total_usages += workers[i].usages_resolved;
             total_semantic += workers[i].semantic_resolved;
+            total_lsp_overrides += workers[i].lsp_overrides;
             cbm_gbuf_free(workers[i].local_edge_buf);
         }
     }
@@ -1826,6 +1810,7 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
     }
 
     cbm_log_info("parallel.resolve.done", "calls", itoa_log(total_calls), "usages",
-                 itoa_log(total_usages), "semantic", itoa_log(total_semantic + go_impl));
+                 itoa_log(total_usages), "semantic", itoa_log(total_semantic + go_impl),
+                 "lsp_overrides", itoa_log(total_lsp_overrides));
     return 0;
 }

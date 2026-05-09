@@ -428,6 +428,98 @@ TEST(gbuf_next_id_accessors) {
     PASS();
 }
 
+/* ── Parallel-pipeline LSP-override regression ────────────────────── */
+/* Pin the wiring fix that unified pass_calls.c (sequential) and
+ * pass_parallel.c (parallel) on cbm_pipeline_find_lsp_resolution +
+ * CBM_LSP_CONFIDENCE_FLOOR (lsp_resolve.h). Before the unification, the
+ * parallel path carried its own lsp_override_resolution_pp at floor 0.5
+ * while the sequential path used find_lsp_resolution at floor 0.6, so a
+ * project produced different CALLS edge attributions depending on which
+ * pipeline mode kicked in. This test indexes a small Python repo via
+ * the parallel pipeline and asserts at least one resulting CALLS edge
+ * carries an "lsp_*" strategy — proof the parallel path consults
+ * result->resolved_calls and emits LSP-attributed edges. */
+
+typedef struct {
+    int lsp_strategy_count;
+    int total_calls;
+} lsp_edge_count_ctx_t;
+
+static void count_lsp_call_edges(const cbm_gbuf_edge_t *edge, void *ud) {
+    lsp_edge_count_ctx_t *c = ud;
+    if (!edge || !edge->type || strcmp(edge->type, "CALLS") != 0) {
+        return;
+    }
+    c->total_calls++;
+    if (edge->properties_json && strstr(edge->properties_json, "\"strategy\":\"lsp")) {
+        c->lsp_strategy_count++;
+    }
+}
+
+TEST(parallel_python_lsp_override_emits_lsp_strategy_edges) {
+    char tmpdir[256];
+    snprintf(tmpdir, sizeof(tmpdir), "/tmp/cbm_par_pylsp_XXXXXX");
+    if (!cbm_mkdtemp(tmpdir)) {
+        SKIP("mkdtemp failed");
+    }
+
+    /* Single-file scenario on purpose. cbm_run_py_lsp runs per-file in
+     * the parallel pipeline, so cross-file type inference doesn't fire
+     * during cbm_parallel_extract; the type registry only sees the
+     * current file's own defs. With Greeter and main() in the same file,
+     * py_lsp can register Greeter from the file's own defs, type the
+     * `g = Greeter()` constructor as NAMED("…Greeter"), and resolve
+     * `g.hello()` to Greeter.hello via attribute lookup — yielding a
+     * resolved_calls entry whose callee_qn matches the gbuf node QN
+     * exactly. The cross-file scenario lights up the same wiring code
+     * (lsp_overrides counter increments, confirmed in earlier runs) but
+     * the resulting edge gets dropped at cbm_gbuf_find_by_qn because the
+     * per-file py_lsp emits an unprefixed module path that doesn't match
+     * the project-qualified gbuf QN — that's a separate cross-file bug
+     * tracked elsewhere, not what this test is pinning. */
+    char fpath0[512];
+    snprintf(fpath0, sizeof(fpath0), "%s/app.py", tmpdir);
+    FILE *f = fopen(fpath0, "w");
+    if (!f) {
+        SKIP("fopen app.py failed");
+    }
+    fprintf(f, "class Greeter:\n"
+               "    def hello(self):\n"
+               "        return 'hi'\n"
+               "\n"
+               "def main():\n"
+               "    g = Greeter()\n"
+               "    g.hello()\n");
+    fclose(f);
+
+    cbm_file_info_t files[1] = {0};
+    files[0].path     = fpath0;
+    files[0].rel_path = (char *)"app.py";
+    files[0].language = CBM_LANG_PYTHON;
+
+    cbm_gbuf_t *gbuf = run_parallel("cbm_par_pylsp", tmpdir, files, 1, 1);
+    ASSERT_NOT_NULL(gbuf);
+
+    lsp_edge_count_ctx_t c = {0};
+    cbm_gbuf_foreach_edge(gbuf, count_lsp_call_edges, &c);
+
+    /* Sanity: extraction produced at least one call edge. */
+    ASSERT_GT(c.total_calls, 0);
+    /* The parallel pipeline must surface at least one LSP-attributed
+     * CALLS edge. This proves the unified cbm_pipeline_find_lsp_resolution
+     * (shared with pass_calls.c at floor 0.6) is actually consulted in
+     * the parallel pipeline, and that the resulting edge is emitted with
+     * the LSP strategy intact rather than overwritten by the registry
+     * fallback. */
+    ASSERT_GT(c.lsp_strategy_count, 0);
+
+    cbm_gbuf_free(gbuf);
+
+    unlink(fpath0);
+    rmdir(tmpdir);
+    PASS();
+}
+
 /* ── Suite Registration ──────────────────────────────────────────── */
 
 SUITE(parallel) {
@@ -441,6 +533,7 @@ SUITE(parallel) {
 
     /* Parallel pipeline parity tests */
     RUN_TEST(parallel_node_count);
+    RUN_TEST(parallel_python_lsp_override_emits_lsp_strategy_edges);
     RUN_TEST(parallel_calls_parity);
     RUN_TEST(parallel_defines_parity);
     RUN_TEST(parallel_defines_method_parity);

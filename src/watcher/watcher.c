@@ -238,6 +238,10 @@ cbm_watcher_t *cbm_watcher_new(cbm_store_t *store, cbm_index_fn index_fn, void *
     w->index_fn = index_fn;
     w->user_data = user_data;
     w->projects = cbm_ht_create(CBM_SZ_32);
+    if (!w->projects) {
+        free(w);
+        return NULL;
+    }
     cbm_mutex_init(&w->projects_lock);
     atomic_init(&w->stopped, 0);
     return w;
@@ -319,13 +323,13 @@ void cbm_watcher_touch(cbm_watcher_t *w, const char *project_name) {
     cbm_mutex_unlock(&w->projects_lock);
 }
 
-int cbm_watcher_watch_count(const cbm_watcher_t *w) {
+int cbm_watcher_watch_count(cbm_watcher_t *w) {
     if (!w) {
         return 0;
     }
-    cbm_mutex_lock(&((cbm_watcher_t *)w)->projects_lock);
+    cbm_mutex_lock(&w->projects_lock);
     int count = (int)cbm_ht_count(w->projects);
-    cbm_mutex_unlock(&((cbm_watcher_t *)w)->projects_lock);
+    cbm_mutex_unlock(&w->projects_lock);
     return count;
 }
 

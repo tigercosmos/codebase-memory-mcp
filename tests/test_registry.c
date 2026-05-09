@@ -283,6 +283,28 @@ TEST(resolve_import_map) {
     PASS();
 }
 
+/* Bare function call (no dot) routed through import_map. The candidate QN
+ * must be module_qn.callee, not module_qn — otherwise lookups fall through
+ * to name-based resolution and pick a same-named function from a different
+ * file. Regression for the @/lib/auth-style import case. */
+TEST(resolve_import_map_bare_function) {
+    cbm_registry_t *r = cbm_registry_new();
+    cbm_registry_add(r, "requireAdmin", "proj.lib.authorization.requireAdmin", "Function");
+    /* Same name in another module — without the fix this is what gets picked. */
+    cbm_registry_add(r, "requireAdmin", "proj.lib.users.requireAdmin", "Function");
+
+    const char *keys[] = {"requireAdmin"};
+    const char *vals[] = {"proj.lib.authorization"};
+
+    cbm_resolution_t res =
+        cbm_registry_resolve(r, "requireAdmin", "proj.actions.settings", keys, vals, 1);
+    ASSERT_STR_EQ(res.qualified_name, "proj.lib.authorization.requireAdmin");
+    ASSERT_STR_EQ(res.strategy, "import_map");
+
+    cbm_registry_free(r);
+    PASS();
+}
+
 TEST(resolve_unique_name) {
     cbm_registry_t *r = cbm_registry_new();
     cbm_registry_add(r, "UniqueFunc", "proj.deep.path.UniqueFunc", "Function");
@@ -610,6 +632,7 @@ SUITE(registry) {
     /* Resolution */
     RUN_TEST(resolve_same_module);
     RUN_TEST(resolve_import_map);
+    RUN_TEST(resolve_import_map_bare_function);
     RUN_TEST(resolve_unique_name);
     RUN_TEST(resolve_unresolved);
     RUN_TEST(resolve_many_nodes);

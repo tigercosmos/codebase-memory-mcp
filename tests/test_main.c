@@ -34,6 +34,7 @@ extern void suite_graph_buffer(void);
 extern void suite_registry(void);
 extern void suite_pipeline(void);
 extern void suite_fqn(void);
+extern void suite_path_alias(void);
 extern void suite_watcher(void);
 extern void suite_lz4(void);
 extern void suite_zstd(void);
@@ -63,6 +64,7 @@ extern void suite_yaml(void);
 extern void suite_integration(void);
 extern void suite_incremental(void);
 extern void suite_simhash(void);
+extern void suite_stack_overflow(void);
 
 int main(void) {
     printf("\n  codebase-memory-mcp  C test suite\n");
@@ -105,6 +107,7 @@ int main(void) {
     RUN_SUITE(registry);
     RUN_SUITE(pipeline);
     RUN_SUITE(fqn);
+    RUN_SUITE(path_alias);
 
     /* Watcher (M10) */
     RUN_SUITE(watcher);
@@ -165,6 +168,9 @@ int main(void) {
 
     /* SimHash / SIMILAR_TO */
     RUN_SUITE(simhash);
+
+    /* Stack overflow regression (GitHub #199) */
+    RUN_SUITE(stack_overflow);
 
     /* Integration (end-to-end) */
     RUN_SUITE(integration);

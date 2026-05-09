@@ -103,6 +103,52 @@ TEST(java_interface) {
     PASS();
 }
 
+/* Regression for #279: a Java class declaring both `extends` and
+ * `implements` must produce one INHERITS edge per base — the extends parent
+ * AND every implements interface — with bare type names (not the keyword
+ * text "extends Bar" / "implements Baz, Qux"). Before the fix:
+ *   1) the field loop returned on the first match → only the superclass
+ *      was emitted, the interfaces were dropped.
+ *   2) the emitted name was the full field text including the keyword. */
+TEST(java_class_extends_and_implements) {
+    CBMFileResult *r = extract(
+        "public class DefaultLinkTool extends DefaultDiagramTool implements ILinkTool, Closeable { }",
+        CBM_LANG_JAVA, "t", "DefaultLinkTool.java");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+
+    /* Find the class def and inspect its base_classes list. */
+    CBMDefinition *cls = NULL;
+    for (int i = 0; i < r->defs.count; i++) {
+        if (strcmp(r->defs.items[i].label, "Class") == 0 &&
+            strcmp(r->defs.items[i].name, "DefaultLinkTool") == 0) {
+            cls = &r->defs.items[i];
+            break;
+        }
+    }
+    ASSERT_NOT_NULL(cls);
+    ASSERT_NOT_NULL(cls->base_classes);
+
+    bool saw_super = false;
+    bool saw_iface_a = false;
+    bool saw_iface_b = false;
+    for (const char **b = cls->base_classes; *b; b++) {
+        /* The keyword-text bug would surface as "extends ..." or
+         * "implements ..." literally inside one of the entries. */
+        ASSERT_NULL(strstr(*b, "extends"));
+        ASSERT_NULL(strstr(*b, "implements"));
+        if (strcmp(*b, "DefaultDiagramTool") == 0) saw_super = true;
+        if (strcmp(*b, "ILinkTool") == 0) saw_iface_a = true;
+        if (strcmp(*b, "Closeable") == 0) saw_iface_b = true;
+    }
+    ASSERT_TRUE(saw_super);
+    ASSERT_TRUE(saw_iface_a);
+    ASSERT_TRUE(saw_iface_b);
+
+    cbm_free_result(r);
+    PASS();
+}
+
 /* --- PHP --- */
 TEST(php_class) {
     CBMFileResult *r = extract("<?php\nclass User { public string $name; public function "
@@ -1770,6 +1816,87 @@ TEST(import_stress_go) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════
+ * Embedded-language import extraction
+ * Host grammars (Svelte, Vue, HTML, Astro) keep <script> bodies as
+ * raw_text — the embedded-imports walker re-parses each block with the
+ * JS grammar so the standard ES import extractor sees real
+ * import_statement nodes.
+ * ═══════════════════════════════════════════════════════════════════ */
+
+TEST(svelte_imports_basic) {
+    /* Default import + named imports + namespace import */
+    CBMFileResult *r = extract(
+        "<script>\n"
+        "import Foo from './Foo.svelte';\n"
+        "import { bar, baz } from '../lib/utils';\n"
+        "import * as helpers from './helpers';\n"
+        "export let value = 42;\n"
+        "</script>\n"
+        "<h1>Hello {value}</h1>\n",
+        CBM_LANG_SVELTE, "t", "Comp.svelte");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT_GTE(r->imports.count, 3);
+    ASSERT(has_import(r, "Foo.svelte"));
+    ASSERT(has_import(r, "lib/utils"));
+    ASSERT(has_import(r, "helpers"));
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(svelte_imports_no_script) {
+    /* .svelte with no <script> block must not crash, 0 imports */
+    CBMFileResult *r = extract(
+        "<h1>Static page</h1>\n"
+        "<p>No script here.</p>\n",
+        CBM_LANG_SVELTE, "t", "Static.svelte");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT_EQ(r->imports.count, 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(vue_imports_basic) {
+    /* Vue SFC: same document→script_element→raw_text AST structure */
+    CBMFileResult *r = extract(
+        "<template><div>{{ msg }}</div></template>\n"
+        "<script>\n"
+        "import MyComp from './MyComp.vue';\n"
+        "import { ref } from 'vue';\n"
+        "export default { name: 'App' };\n"
+        "</script>\n",
+        CBM_LANG_VUE, "t", "App.vue");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT_GTE(r->imports.count, 2);
+    ASSERT(has_import(r, "MyComp.vue"));
+    ASSERT(has_import(r, "vue"));
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(html_imports_basic) {
+    /* Plain HTML with inline ES module imports — same generic walker. */
+    CBMFileResult *r = extract(
+        "<!DOCTYPE html><html><head>\n"
+        "<script type=\"module\">\n"
+        "import { renderApp } from './app.js';\n"
+        "import * as utils from './utils.js';\n"
+        "renderApp();\n"
+        "</script>\n"
+        "</head><body></body></html>\n",
+        CBM_LANG_HTML, "t", "index.html");
+    ASSERT_NOT_NULL(r);
+    ASSERT_FALSE(r->has_error);
+    ASSERT_GTE(r->imports.count, 2);
+    ASSERT(has_import(r, "app.js"));
+    ASSERT(has_import(r, "utils.js"));
+    cbm_free_result(r);
+    PASS();
+}
+
+/* ═══════════════════════════════════════════════════════════════════
  * config_extraction_test.go ports (25 tests)
  * ═══════════════════════════════════════════════════════════════════ */
 
@@ -2145,6 +2272,7 @@ SUITE(extraction) {
     RUN_TEST(java_class);
     RUN_TEST(java_method);
     RUN_TEST(java_interface);
+    RUN_TEST(java_class_extends_and_implements);
     RUN_TEST(php_class);
     RUN_TEST(php_function);
     RUN_TEST(ruby_class);
@@ -2297,6 +2425,10 @@ SUITE(extraction) {
     RUN_TEST(ruby_imports);
     RUN_TEST(lua_imports);
     RUN_TEST(import_stress_go);
+    RUN_TEST(svelte_imports_basic);
+    RUN_TEST(svelte_imports_no_script);
+    RUN_TEST(vue_imports_basic);
+    RUN_TEST(html_imports_basic);
 
     /* config_extraction_test.go ports */
     RUN_TEST(toml_basic_table_and_pair);

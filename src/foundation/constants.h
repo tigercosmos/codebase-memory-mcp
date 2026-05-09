@@ -68,6 +68,14 @@ enum {
     CBM_INIT_DONE = 1,  /* initialization flag */
 };
 
+/* ── Default pagination limits ───────────────────────────────── */
+/* Default page size for search_graph and the underlying store-layer search.
+ * Chosen so a typical broad query (e.g. file_pattern="**" on a 12k-node
+ * project) stays well within MCP tool-result size budgets. Callers that
+ * want more results paginate via offset+limit; the response always carries
+ * 'total' and 'has_more' so agents can detect truncation. */
+enum { CBM_DEFAULT_SEARCH_LIMIT = 200 };
+
 /* ── Time conversion factors ─────────────────────────────────── */
 #define CBM_NSEC_PER_SEC 1000000000ULL
 #define CBM_USEC_PER_SEC 1000000ULL

@@ -1,8 +1,10 @@
 #include "cbm.h"
 #include "arena.h" // CBMArena, cbm_arena_strdup/strndup/sprintf
 #include "helpers.h"
+#include "lang_specs.h" // CBMLangSpec, CBMEmbeddedLangSpec, cbm_lang_spec, cbm_ts_language
 #include "tree_sitter/api.h" // TSNode, ts_node_*
 #include "foundation/constants.h"
+#include "extract_node_stack.h"
 #include <stdint.h> // uint32_t
 #include <string.h>
 #include <ctype.h>
@@ -411,14 +413,13 @@ static bool process_commonjs_require(CBMExtractCtx *ctx, TSNode call) {
     return true;
 }
 
-#define ES_IMPORT_STACK_CAP CBM_SZ_512
 static void walk_es_imports(CBMExtractCtx *ctx, TSNode root) {
-    TSNode stack[ES_IMPORT_STACK_CAP];
-    int top = 0;
-    stack[top++] = root;
+    TSNodeStack stack;
+    ts_nstack_init(&stack, ctx->arena, CBM_SZ_512);
+    ts_nstack_push(&stack, ctx->arena, root);
 
-    while (top > 0) {
-        TSNode node = stack[--top];
+    while (stack.count > 0) {
+        TSNode node = ts_nstack_pop(&stack);
         const char *kind = ts_node_type(node);
         bool push_children = true;
 
@@ -436,8 +437,8 @@ static void walk_es_imports(CBMExtractCtx *ctx, TSNode root) {
 
         if (push_children) {
             uint32_t count = ts_node_child_count(node);
-            for (int i = (int)count - SKIP_ONE; i >= 0 && top < ES_IMPORT_STACK_CAP; i--) {
-                stack[top++] = ts_node_child(node, (uint32_t)i);
+            for (int i = (int)count - SKIP_ONE; i >= 0; i--) {
+                ts_nstack_push(&stack, ctx->arena, ts_node_child(node, (uint32_t)i));
             }
         }
     }
@@ -820,14 +821,13 @@ static void process_wolfram_needs(CBMExtractCtx *ctx, TSNode node) {
     }
 }
 
-#define WOLFRAM_IMPORT_STACK_CAP CBM_SZ_512
 static void walk_wolfram_imports(CBMExtractCtx *ctx, TSNode root) {
-    TSNode stack[WOLFRAM_IMPORT_STACK_CAP];
-    int top = 0;
-    stack[top++] = root;
+    TSNodeStack stack;
+    ts_nstack_init(&stack, ctx->arena, CBM_SZ_512);
+    ts_nstack_push(&stack, ctx->arena, root);
 
-    while (top > 0) {
-        TSNode node = stack[--top];
+    while (stack.count > 0) {
+        TSNode node = ts_nstack_pop(&stack);
         const char *kind = ts_node_type(node);
 
         if (strcmp(kind, "get_top") == 0) {
@@ -837,14 +837,107 @@ static void walk_wolfram_imports(CBMExtractCtx *ctx, TSNode root) {
         }
 
         uint32_t count = ts_node_child_count(node);
-        for (int i = (int)count - SKIP_ONE; i >= 0 && top < WOLFRAM_IMPORT_STACK_CAP; i--) {
-            stack[top++] = ts_node_child(node, (uint32_t)i);
+        for (int i = (int)count - SKIP_ONE; i >= 0; i--) {
+            ts_nstack_push(&stack, ctx->arena, ts_node_child(node, (uint32_t)i));
         }
     }
 }
 
 static void parse_wolfram_imports(CBMExtractCtx *ctx) {
     walk_wolfram_imports(ctx, ctx->root);
+}
+
+// --- Embedded-language imports ---
+// Generic walker for host grammars (Svelte, Vue, HTML, Astro, ...) whose AST
+// keeps embedded sub-language source as raw_text (or similar) without parsing
+// it.  The host's CBMLangSpec.embedded_imports declares which content nodes
+// hold which sub-language; we re-parse each match with the embedded grammar
+// and run the standard ES import walker over the inner AST.
+//
+// No grammar symbols are referenced here — the embedded TSLanguage is
+// resolved through cbm_ts_language(spec->embedded_language), the same hook
+// that the main parser uses.  Adding another host language is a one-line
+// declaration in lang_specs.c.
+
+static void embedded_collect_content_nodes(TSNode root, const CBMEmbeddedLangSpec *spec,
+                                           TSNode *out, int *out_count, int max_out) {
+    /* Iterative DFS so deeply-nested script blocks are still found.  Cap the
+     * stack to a sane bound (host grammars do not have million-deep markup
+     * trees) — no need to introduce TSNodeStack here. */
+    enum { EMBED_STACK_CAP = 1024 };
+    TSNode stack[EMBED_STACK_CAP];
+    int top = 0;
+    stack[top++] = root;
+    while (top > 0 && *out_count < max_out) {
+        TSNode node = stack[--top];
+        const char *kind = ts_node_type(node);
+        if (strcmp(kind, spec->script_node_type) == 0) {
+            uint32_t cc = ts_node_child_count(node);
+            for (uint32_t k = 0; k < cc; k++) {
+                TSNode c = ts_node_child(node, k);
+                if (strcmp(ts_node_type(c), spec->content_node_type) == 0) {
+                    out[(*out_count)++] = c;
+                    if (*out_count >= max_out) {
+                        return;
+                    }
+                    break; /* one content node per script element */
+                }
+            }
+            /* Do not descend into <script>'s children — content already taken. */
+            continue;
+        }
+        uint32_t count = ts_node_child_count(node);
+        for (int i = (int)count - 1; i >= 0 && top < EMBED_STACK_CAP; i--) {
+            stack[top++] = ts_node_child(node, (uint32_t)i);
+        }
+    }
+}
+
+static void parse_embedded_imports(CBMExtractCtx *ctx) {
+    const CBMLangSpec *spec = cbm_lang_spec(ctx->language);
+    if (!spec || !spec->embedded_imports) {
+        return;
+    }
+    for (const CBMEmbeddedLangSpec *e = spec->embedded_imports; e->script_node_type != NULL; e++) {
+        const TSLanguage *embedded_lang = cbm_ts_language(e->embedded_language);
+        if (!embedded_lang) {
+            continue; /* embedded grammar not linked in — silently skip */
+        }
+        enum { MAX_EMBEDDED_BLOCKS = 16 };
+        TSNode hits[MAX_EMBEDDED_BLOCKS];
+        int hit_count = 0;
+        embedded_collect_content_nodes(ctx->root, e, hits, &hit_count, MAX_EMBEDDED_BLOCKS);
+        if (hit_count == 0) {
+            continue;
+        }
+        TSParser *parser = ts_parser_new();
+        if (!parser) {
+            continue;
+        }
+        if (!ts_parser_set_language(parser, embedded_lang)) {
+            ts_parser_delete(parser);
+            continue;
+        }
+        for (int i = 0; i < hit_count; i++) {
+            uint32_t s = ts_node_start_byte(hits[i]);
+            uint32_t end = ts_node_end_byte(hits[i]);
+            if (end <= s) {
+                continue;
+            }
+            const char *sub_src = ctx->source + s;
+            uint32_t sub_len = end - s;
+            TSTree *sub_tree = ts_parser_parse_string(parser, NULL, sub_src, sub_len);
+            if (!sub_tree) {
+                continue;
+            }
+            CBMExtractCtx sub_ctx = *ctx;
+            sub_ctx.source = sub_src;
+            sub_ctx.root = ts_tree_root_node(sub_tree);
+            walk_es_imports(&sub_ctx, sub_ctx.root);
+            ts_tree_delete(sub_tree);
+        }
+        ts_parser_delete(parser);
+    }
 }
 
 // --- Main dispatch ---
@@ -937,6 +1030,14 @@ void cbm_extract_imports(CBMExtractCtx *ctx) {
         break;
     case CBM_LANG_WOLFRAM:
         parse_wolfram_imports(ctx);
+        break;
+    /* Host languages whose tree-sitter grammar leaves <script> bodies as raw
+     * text — re-parse the embedded slice via the embedded-language spec. */
+    case CBM_LANG_SVELTE:
+    case CBM_LANG_VUE:
+    case CBM_LANG_HTML:
+    case CBM_LANG_ASTRO:
+        parse_embedded_imports(ctx);
         break;
     default:
         break;

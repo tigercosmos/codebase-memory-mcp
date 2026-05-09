@@ -1145,6 +1145,66 @@ TEST(pylsp_round5_super_init) {
     PASS();
 }
 
+/* ── Round 6 — generators, dataclasses, decorator flags ───────── */
+
+TEST(pylsp_round6_generator_yields_iterable) {
+    /* def gen() -> Generator[Foo, None, None]: yield Foo()
+     * for x in gen(): x.method()  — x : Foo via element-of(generator) */
+    CBMFileResult *r = extract_py(
+        "from typing import Generator\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "def gen() -> Generator[Foo, None, None]:\n"
+        "    yield Foo()\n"
+        "def use():\n"
+        "    for x in gen():\n"
+        "        x.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round6_dataclass_field_access) {
+    /* @dataclass class Point: x: Foo; def use(p: Point): p.x.method() */
+    CBMFileResult *r = extract_py(
+        "from dataclasses import dataclass\n"
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "@dataclass\n"
+        "class Point:\n"
+        "    x: Foo\n"
+        "    y: int\n"
+        "def use(p: Point):\n"
+        "    return p.x.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+TEST(pylsp_round6_property_access_chains) {
+    /* class C: @property def thing(self) -> Foo: ...
+     * def use(c: C): c.thing.method()  -- thing is a property; access
+     * returns its getter's return type. */
+    CBMFileResult *r = extract_py(
+        "class Foo:\n"
+        "    def method(self):\n"
+        "        return 1\n"
+        "class C:\n"
+        "    @property\n"
+        "    def thing(self) -> Foo:\n"
+        "        return Foo()\n"
+        "def use(c: C):\n"
+        "    return c.thing.method()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "use", "method"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(py_lsp) {
@@ -1215,4 +1275,8 @@ SUITE(py_lsp) {
     RUN_TEST(pylsp_round5_dict_subscript_value_type);
     RUN_TEST(pylsp_round5_list_subscript_value_type);
     RUN_TEST(pylsp_round5_super_init);
+    /* Round 6 — generators, dataclasses, properties */
+    RUN_TEST(pylsp_round6_generator_yields_iterable);
+    RUN_TEST(pylsp_round6_dataclass_field_access);
+    RUN_TEST(pylsp_round6_property_access_chains);
 }

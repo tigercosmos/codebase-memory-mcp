@@ -1919,6 +1919,39 @@ static bool py_register_def(CBMArena* arena, CBMTypeRegistry* reg, CBMDefinition
         rf.qualified_name = d->qualified_name;
         rf.short_name = d->name;
 
+        // Translate Python decorators into flags + carry the QN list.
+        if (d->decorators) {
+            int dec_count = 0;
+            while (d->decorators[dec_count]) dec_count++;
+            if (dec_count > 0) {
+                const char** dec_qns = (const char**)cbm_arena_alloc(arena,
+                    (size_t)(dec_count + 1) * sizeof(const char*));
+                for (int j = 0; j < dec_count; j++) {
+                    const char* dec = d->decorators[j];
+                    dec_qns[j] = cbm_arena_strdup(arena, dec);
+                    // Match by short name (last "." segment) so both
+                    // "property" and "functools.cache" / "abc.abstractmethod"
+                    // forms light up.
+                    const char* short_dec = strrchr(dec, '.');
+                    short_dec = short_dec ? short_dec + 1 : dec;
+                    if (strcmp(short_dec, "property") == 0)
+                        rf.flags |= CBM_FUNC_FLAG_PROPERTY;
+                    else if (strcmp(short_dec, "classmethod") == 0)
+                        rf.flags |= CBM_FUNC_FLAG_CLASSMETHOD;
+                    else if (strcmp(short_dec, "staticmethod") == 0)
+                        rf.flags |= CBM_FUNC_FLAG_STATICMETHOD;
+                    else if (strcmp(short_dec, "abstractmethod") == 0)
+                        rf.flags |= CBM_FUNC_FLAG_ABSTRACTMETHOD;
+                    else if (strcmp(short_dec, "overload") == 0)
+                        rf.flags |= CBM_FUNC_FLAG_OVERLOAD;
+                    else if (strcmp(short_dec, "final") == 0)
+                        rf.flags |= CBM_FUNC_FLAG_FINAL;
+                }
+                dec_qns[dec_count] = NULL;
+                rf.decorator_qns = dec_qns;
+            }
+        }
+
         const CBMType** ret_types = NULL;
         // Prefer d->return_type (full text) when it has subscript brackets
         // — extract_defs.c::extract_return_types strips them in its array

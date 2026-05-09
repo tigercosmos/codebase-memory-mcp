@@ -404,6 +404,141 @@ void cbm_php_stdlib_register(CBMTypeRegistry *reg, CBMArena *arena) {
                cbm_type_named(arena, "Psr.Http.Message.ResponseInterface"));
     REG_METHOD("Psr.Http.Message.ResponseInterface", "withHeader",
                cbm_type_named(arena, "Psr.Http.Message.ResponseInterface"));
+
+    /* ── Symfony Console ─────────────────────────────────────── */
+    static const char *symfony_console_io_parents[] = {NULL};
+    REG_TYPE("Symfony.Component.Console.Input.InputInterface", "InputInterface", true,
+             symfony_console_io_parents);
+    REG_TYPE("Symfony.Component.Console.Output.OutputInterface", "OutputInterface", true,
+             symfony_console_io_parents);
+    REG_TYPE("Symfony.Component.Console.Style.StyleInterface", "StyleInterface", true,
+             symfony_console_io_parents);
+    REG_TYPE("Symfony.Component.Console.Style.SymfonyStyle", "SymfonyStyle", false,
+             symfony_console_io_parents);
+    REG_METHOD("Symfony.Component.Console.Input.InputInterface", "getArgument", MIXED);
+    REG_METHOD("Symfony.Component.Console.Input.InputInterface", "getOption", MIXED);
+    REG_METHOD("Symfony.Component.Console.Input.InputInterface", "hasOption",
+               cbm_type_builtin(arena, "bool"));
+    REG_METHOD("Symfony.Component.Console.Output.OutputInterface", "writeln",
+               cbm_type_builtin(arena, "void"));
+    REG_METHOD("Symfony.Component.Console.Output.OutputInterface", "write",
+               cbm_type_builtin(arena, "void"));
+    REG_METHOD("Symfony.Component.Console.Style.SymfonyStyle", "success",
+               cbm_type_builtin(arena, "void"));
+    REG_METHOD("Symfony.Component.Console.Style.SymfonyStyle", "error",
+               cbm_type_builtin(arena, "void"));
+    REG_METHOD("Symfony.Component.Console.Style.SymfonyStyle", "info",
+               cbm_type_builtin(arena, "void"));
+    REG_METHOD("Symfony.Component.Console.Style.SymfonyStyle", "warning",
+               cbm_type_builtin(arena, "void"));
+    REG_METHOD("Symfony.Component.Console.Style.SymfonyStyle", "ask",
+               cbm_type_builtin(arena, "string"));
+    REG_METHOD("Symfony.Component.Console.Style.SymfonyStyle", "confirm",
+               cbm_type_builtin(arena, "bool"));
+
+    /* ── Doctrine ORM ───────────────────────────────────────── */
+    static const char *doctrine_parents[] = {NULL};
+    REG_TYPE("Doctrine.ORM.EntityManagerInterface", "EntityManagerInterface", true,
+             doctrine_parents);
+    REG_TYPE("Doctrine.ORM.EntityManager", "EntityManager", false, doctrine_parents);
+    REG_TYPE("Doctrine.ORM.QueryBuilder", "QueryBuilder", false, doctrine_parents);
+    REG_TYPE("Doctrine.ORM.Query", "Query", false, doctrine_parents);
+    REG_TYPE("Doctrine.ORM.EntityRepository", "EntityRepository", false, doctrine_parents);
+    REG_METHOD("Doctrine.ORM.EntityManagerInterface", "find", MIXED);
+    REG_METHOD("Doctrine.ORM.EntityManagerInterface", "persist", cbm_type_builtin(arena, "void"));
+    REG_METHOD("Doctrine.ORM.EntityManagerInterface", "remove", cbm_type_builtin(arena, "void"));
+    REG_METHOD("Doctrine.ORM.EntityManagerInterface", "flush", cbm_type_builtin(arena, "void"));
+    REG_METHOD("Doctrine.ORM.EntityManagerInterface", "createQuery",
+               cbm_type_named(arena, "Doctrine.ORM.Query"));
+    REG_METHOD("Doctrine.ORM.EntityManagerInterface", "createQueryBuilder",
+               cbm_type_named(arena, "Doctrine.ORM.QueryBuilder"));
+    REG_METHOD("Doctrine.ORM.EntityManagerInterface", "getRepository",
+               cbm_type_named(arena, "Doctrine.ORM.EntityRepository"));
+    {
+        const char *qb = "Doctrine.ORM.QueryBuilder";
+        const CBMType *self = cbm_type_named(arena, "Doctrine.ORM.QueryBuilder");
+        REG_METHOD(qb, "select", self);
+        REG_METHOD(qb, "from", self);
+        REG_METHOD(qb, "where", self);
+        REG_METHOD(qb, "andWhere", self);
+        REG_METHOD(qb, "orWhere", self);
+        REG_METHOD(qb, "join", self);
+        REG_METHOD(qb, "leftJoin", self);
+        REG_METHOD(qb, "innerJoin", self);
+        REG_METHOD(qb, "orderBy", self);
+        REG_METHOD(qb, "groupBy", self);
+        REG_METHOD(qb, "setParameter", self);
+        REG_METHOD(qb, "setMaxResults", self);
+        REG_METHOD(qb, "setFirstResult", self);
+        REG_METHOD(qb, "getQuery", cbm_type_named(arena, "Doctrine.ORM.Query"));
+    }
+    REG_METHOD("Doctrine.ORM.Query", "getResult", cbm_type_builtin(arena, "array"));
+    REG_METHOD("Doctrine.ORM.Query", "getOneOrNullResult", MIXED);
+    REG_METHOD("Doctrine.ORM.Query", "execute", cbm_type_builtin(arena, "array"));
+    REG_METHOD("Doctrine.ORM.EntityRepository", "find", MIXED);
+    REG_METHOD("Doctrine.ORM.EntityRepository", "findAll", cbm_type_builtin(arena, "array"));
+    REG_METHOD("Doctrine.ORM.EntityRepository", "findBy", cbm_type_builtin(arena, "array"));
+    REG_METHOD("Doctrine.ORM.EntityRepository", "findOneBy", MIXED);
+
+    /* ── Guzzle HTTP ─────────────────────────────────────────── */
+    static const char *guzzle_parents[] = {NULL};
+    REG_TYPE("GuzzleHttp.Client", "Client", false, guzzle_parents);
+    REG_TYPE("GuzzleHttp.ClientInterface", "ClientInterface", true, guzzle_parents);
+    REG_METHOD("GuzzleHttp.ClientInterface", "request",
+               cbm_type_named(arena, "Psr.Http.Message.ResponseInterface"));
+    REG_METHOD("GuzzleHttp.ClientInterface", "send",
+               cbm_type_named(arena, "Psr.Http.Message.ResponseInterface"));
+    REG_METHOD("GuzzleHttp.ClientInterface", "sendAsync", MIXED);
+    REG_METHOD("GuzzleHttp.Client", "request",
+               cbm_type_named(arena, "Psr.Http.Message.ResponseInterface"));
+    REG_METHOD("GuzzleHttp.Client", "get",
+               cbm_type_named(arena, "Psr.Http.Message.ResponseInterface"));
+    REG_METHOD("GuzzleHttp.Client", "post",
+               cbm_type_named(arena, "Psr.Http.Message.ResponseInterface"));
+    REG_METHOD("GuzzleHttp.Client", "put",
+               cbm_type_named(arena, "Psr.Http.Message.ResponseInterface"));
+    REG_METHOD("GuzzleHttp.Client", "delete",
+               cbm_type_named(arena, "Psr.Http.Message.ResponseInterface"));
+
+    /* ── Twig ─────────────────────────────────────────────── */
+    static const char *twig_parents[] = {NULL};
+    REG_TYPE("Twig.Environment", "Environment", false, twig_parents);
+    REG_TYPE("Twig.TemplateWrapper", "TemplateWrapper", false, twig_parents);
+    REG_METHOD("Twig.Environment", "render", cbm_type_builtin(arena, "string"));
+    REG_METHOD("Twig.Environment", "load",
+               cbm_type_named(arena, "Twig.TemplateWrapper"));
+    REG_METHOD("Twig.Environment", "createTemplate",
+               cbm_type_named(arena, "Twig.TemplateWrapper"));
+    REG_METHOD("Twig.TemplateWrapper", "render", cbm_type_builtin(arena, "string"));
+    REG_METHOD("Twig.TemplateWrapper", "renderBlock", cbm_type_builtin(arena, "string"));
+
+    /* ── Eloquent Model magic-static methods (forwarded to Builder) ─ *
+     *
+     * Eloquent: every Model subclass has access to all Builder methods
+     * via ::__callStatic. We register the full Builder method set as
+     * static methods on Model so chains like User::where()->first()
+     * resolve immediately. */
+    {
+        const char *em = "Illuminate.Database.Eloquent.Model";
+        const CBMType *eb = cbm_type_named(arena, "Illuminate.Database.Eloquent.Builder");
+        const CBMType *coll = cbm_type_named(arena, "Illuminate.Database.Eloquent.Collection");
+        const CBMType *self = cbm_type_named(arena, "Illuminate.Database.Eloquent.Model");
+        REG_METHOD(em, "whereIn", eb);
+        REG_METHOD(em, "whereNotNull", eb);
+        REG_METHOD(em, "whereHas", eb);
+        REG_METHOD(em, "orderBy", eb);
+        REG_METHOD(em, "limit", eb);
+        REG_METHOD(em, "take", eb);
+        REG_METHOD(em, "select", eb);
+        REG_METHOD(em, "get", coll);
+        REG_METHOD(em, "first", self);
+        REG_METHOD(em, "firstOrFail", self);
+        REG_METHOD(em, "firstOrCreate", self);
+    }
+
+    /* ── \Generator (return type from yield) ──────────────────── */
+    REG_TYPE("Generator", "Generator", false, generator_parents);
+    /* Generator extends Iterator → Iterator methods already registered. */
 }
 
 #undef REG_TYPE

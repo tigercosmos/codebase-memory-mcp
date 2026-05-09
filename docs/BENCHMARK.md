@@ -285,13 +285,31 @@ Config/markup languages (HTML, CSS, SCSS, YAML, TOML, HCL, SQL, Dockerfile) run 
 ### PHP (laravel/framework)
 
 **Project**: `laravel-framework-php` | **Repo**: `/tmp/lang-bench/laravel-framework-php`
-**Nodes**: 39,767 | **Edges**: 169,268 (post-PHP-LSP; was 196,979 with name-fallback misroutes)
+**Nodes**: 39,767 | **Edges**: 152,614 (post-Phase-4 PHP-LSP; was 196,979 baseline)
+**CALLS edges**: 50,150 (was ~83k baseline — 40% reduction in name-fallback misroutes)
 
-PHP now runs through a Light Semantic Pass (`internal/cbm/lsp/php_lsp.c`) that
-performs receiver-type tracking, namespace+`use`-clause resolution, PHPDoc
-`@var`/`@param` binding, magic-method (`__call`/`__callStatic`) dispatch, and
-emits override resolutions consumed by `pass_parallel.c::resolve_file_calls`
-and `pass_calls.c::resolve_single_call`.
+PHP runs through a Light Semantic Pass (`internal/cbm/lsp/php_lsp.c`,
+~3,500 lines) that approaches phpactor-grade type resolution while
+staying in-process and PHP-runtime-free. Phase 4 capabilities:
+
+- Receiver-type tracking with full ancestor chain walk (cycle-detected,
+  bounded to 32 hops)
+- Namespace + `use`-clause resolution (class, function, const), incl.
+  `as` aliasing in both wrapped and bare forms
+- PHPDoc `@var`, `@param`, `@property`, `@method` parsing — generics
+  (`Collection<User>`, `array<int, User>`) supported
+- Type narrowing: `instanceof`, `is_string/int/array/...`, `assert(...)`
+  sequential narrowing, negative narrowing on early return / throw
+- Property type tracking: typed declarations, constructor property
+  promotion, constructor-body inference (`$this->bar = $bar`)
+- Trait flattening with `as` aliasing
+- Late static binding chain depth, self/parent/static distinction
+- Match / ternary / clone / cast result-type evaluation
+- Foreach element-type propagation through `array<T>` and Iterator
+- Magic methods (`__call`/`__callStatic` → facade dispatch)
+- Stdlib coverage: SPL, PSR, DateTime, Throwable, Closure, plus
+  Eloquent Builder/Model/Collection chains, Symfony HttpFoundation,
+  Carbon date methods, PSR-7 with-builders
 
 **Attribution correctness fix** (the primary metric, see
 `docs/PHP_LSP_PRE_FLIGHT.md` §6):
@@ -329,6 +347,9 @@ but the receiver class is not indexed (e.g., Composer vendor types like
 **suppress** the unified extractor's name-based fallback. This trades
 recall (no edge instead of a guess) for precision (no wrong edge). The
 pre-flight argued this is the right trade for graph correctness.
+
+**Test coverage**: 100 unit tests in `tests/test_php_lsp.c`, all
+passing. Total project tests: 2913 / 0 failed.
 
 ### Lua (neovim/neovim)
 

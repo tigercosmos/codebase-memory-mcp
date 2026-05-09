@@ -103,7 +103,12 @@ construct (e.g. `getattr`-style dispatch).
 | 2026-05-09 | 2e042da (Round 1: dotted imports, cast, Self, fwd-refs) | 65 | 16 | 13 | 81% | 3.11 ms |
 | 2026-05-09 | fa45e7d (Round 2: narrowing, walrus, comprehension typing) | 65 | 16 | 13 | 81% | 2.74 ms |
 | 2026-05-09 | e7dcadc (Round 3: match/case, await, expanded fixture to 136 LOC) | 136 | 38 | 30 | 79% | 7.50 ms |
-| 2026-05-09 | 4b99389 (Round 4: instance attribute typing) | 136 | 38 | **36** | **95%** | 8.06 ms |
+| 2026-05-09 | 4b99389 (Round 4: instance attribute typing) | 136 | 38 | 36 | 95% | 8.06 ms |
+| 2026-05-09 | ce54e81 (Round 5: subscript, super().__init__, operators) | 136 | 38 | 36 | 95% | — |
+| 2026-05-09 | fd81dff (Round 6: decorator flags, generator/dataclass/property tests) | 136 | 38 | 36 | 95% | — |
+| 2026-05-09 | dd3a816 (Round 7: builtin/template attr dispatch, wrappers, dedup) | 178 | 52 | 51 | 98% | 11.79 ms |
+| 2026-05-09 | f35745c (Round 8: with-as, except-as, tuple unpack, dict.items, slice) | 178 | 52 | 52 | **100%** | 11.59 ms |
+| 2026-05-09 | 4ccd08c (Round 9: TypedDict, early-return narrowing, match seq pattern) | 178 | 52 | 52 | **100%** | 11.02 ms |
 
 The 65→136 fixture jump is more honest: the small fixture was
 hand-shaped to match what the resolver did well at the time. The
@@ -164,6 +169,43 @@ checker:
 Items 1, 2, 3, 5, 7 are direct compiler-rebuild territory. Items 4,
 6 need significant per-pattern engineering. Item 8 is impossible
 statically. Item 9 is achievable but a separate v1.1 task.
+
+## Stress-test surface (test_py_lsp_stress.c)
+
+22 advanced patterns probed individually. Hard-asserted: 19. Documented gaps: 3.
+
+**Hard-asserted (PASS clean)**:
+- NamedTuple class form
+- TypedDict literal-key subscript
+- Protocol structural method dispatch
+- ABC + @abstractmethod
+- Context manager `with X() as f:` via `__enter__`
+- Exception handler `except E as e:`
+- Post-early-return narrowing (`if not isinstance: return`)
+- Tuple unpacking from function return
+- Comprehension over `dict.items()` with k, v unpacking
+- List slice returns list of same element type
+- Decorator factory with closures
+- Property setter
+- Self-type in inheritance chain (Builder pattern)
+- Diamond inheritance (C3 MRO)
+- Recursive self-referencing types
+- Nested closure capturing outer variable
+- Long method chain via Self
+- Generator delegation (`yield from`)
+- Async-generator iteration
+
+**Documented gaps (3)**:
+- `function-as-dict-value indirect call` — `funcs["key"]()` requires
+  CALLABLE-typed value tracking and indirect-call dispatch.
+- `match sequence pattern element typing` — `case [head, *tail]:`
+  pattern wrapper layout in tree-sitter Python varies by grammar
+  version; bracket-form pattern not yet recognized through the
+  case_pattern → ? wrapper chain. Other match patterns (class,
+  literal, capture, _) work.
+- `lambda parameter inference from call site` — `fn = lambda x:
+  x.method(); fn(Foo())` requires bidirectional inference across the
+  call boundary; needs constraint solver scope.
 
 ## Achievable next steps (not undertaken in this iteration)
 

@@ -176,6 +176,22 @@ static char* py_node_text(PyLSPContext* ctx, TSNode node) {
 static void py_emit_resolved_call(PyLSPContext* ctx, const char* callee_qn,
     const char* strategy, float confidence) {
     if (!ctx || !ctx->resolved_calls || !callee_qn || !ctx->enclosing_func_qn) return;
+    // Dedupe by (caller, callee). When multiple resolution paths converge
+    // on the same edge (e.g. expression typing and emission both walk a
+    // node), keep only the first entry — the path with the higher
+    // confidence wins on subsequent re-emission.
+    for (int i = 0; i < ctx->resolved_calls->count; i++) {
+        CBMResolvedCall* rc = &ctx->resolved_calls->items[i];
+        if (rc->caller_qn && rc->callee_qn &&
+            strcmp(rc->caller_qn, ctx->enclosing_func_qn) == 0 &&
+            strcmp(rc->callee_qn, callee_qn) == 0) {
+            if (confidence > rc->confidence) {
+                rc->confidence = confidence;
+                rc->strategy = strategy;
+            }
+            return;
+        }
+    }
     CBMResolvedCall rc;
     memset(&rc, 0, sizeof(rc));
     rc.caller_qn = ctx->enclosing_func_qn;
@@ -437,10 +453,18 @@ static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node) {
         if (strcmp(name, "True") == 0 || strcmp(name, "False") == 0)
             return cbm_type_builtin(ctx->arena, "bool");
         if (strcmp(name, "None") == 0) return cbm_type_builtin(ctx->arena, "None");
-        // Module/package-local function — caller QN inferred from registry.
+        // Module/package-local function.
         const CBMRegisteredFunc* f = cbm_registry_lookup_symbol(ctx->registry,
             ctx->module_qn, name);
         if (f) return py_func_return_type(ctx, f->qualified_name);
+        // Builtins fallback (range / len / list / str / int / etc.). For
+        // builtin classes, this returns the class as NAMED so subsequent
+        // attribute access works.
+        f = cbm_registry_lookup_symbol(ctx->registry, "builtins", name);
+        if (f) return py_func_return_type(ctx, f->qualified_name);
+        const CBMRegisteredType* rt = cbm_registry_lookup_type(ctx->registry,
+            cbm_arena_sprintf(ctx->arena, "builtins.%s", name));
+        if (rt) return cbm_type_builtin(ctx->arena, name);
         return cbm_type_unknown();
     }
 
@@ -483,6 +507,27 @@ static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node) {
             const CBMType* field = py_lookup_field(ctx,
                 obj_type->data.named.qualified_name, attr_name);
             if (field) return field;
+        }
+        if (obj_type->kind == CBM_TYPE_BUILTIN && obj_type->data.builtin.name) {
+            // Builtins map to typeshed stdlib via "builtins.<typename>".
+            const char* recv_qn = cbm_arena_sprintf(ctx->arena, "builtins.%s",
+                obj_type->data.builtin.name);
+            const CBMRegisteredFunc* f = py_lookup_attribute(ctx, recv_qn, attr_name);
+            if (f) return py_func_return_type_recv(ctx, f->qualified_name, recv_qn);
+        }
+        if (obj_type->kind == CBM_TYPE_TEMPLATE &&
+            obj_type->data.template_type.template_name) {
+            // dict[K, V].get / list[T].append etc — receiver is the
+            // unparameterized container in typeshed: builtins.dict /
+            // builtins.list / collections.abc.Mapping etc.
+            const char* tname = obj_type->data.template_type.template_name;
+            // Try builtins.<tname> first, then bare tname.
+            const char* recv_qn = cbm_arena_sprintf(ctx->arena, "builtins.%s", tname);
+            const CBMRegisteredFunc* f = py_lookup_attribute(ctx, recv_qn, attr_name);
+            if (!f) {
+                f = py_lookup_attribute(ctx, tname, attr_name);
+            }
+            if (f) return py_func_return_type_recv(ctx, f->qualified_name, recv_qn);
         }
         if (obj_type->kind == CBM_TYPE_UNION) {
             int matches = 0;
@@ -575,6 +620,13 @@ static const CBMType* py_eval_expr_type(PyLSPContext* ctx, TSNode node) {
             const CBMRegisteredFunc* f = cbm_registry_lookup_symbol(ctx->registry,
                 ctx->module_qn, fname);
             if (f) return py_func_return_type(ctx, f->qualified_name);
+            // Builtins fallback: range / len / list / str / int / etc.
+            f = cbm_registry_lookup_symbol(ctx->registry, "builtins", fname);
+            if (f) return py_func_return_type(ctx, f->qualified_name);
+            // Builtin class constructor: list() / dict() / set() / str() / ...
+            const CBMRegisteredType* rt = cbm_registry_lookup_type(ctx->registry,
+                cbm_arena_sprintf(ctx->arena, "builtins.%s", fname));
+            if (rt) return cbm_type_builtin(ctx->arena, fname);
         }
 
         if (strcmp(fk, "attribute") == 0) {
@@ -819,7 +871,6 @@ static void py_emit_call_for(PyLSPContext* ctx, TSNode call_node) {
         const CBMType* in_scope = cbm_scope_lookup(ctx->current_scope, fname);
         if (!cbm_type_is_unknown(in_scope) && in_scope->kind == CBM_TYPE_NAMED) {
             const char* qn = in_scope->data.named.qualified_name;
-            // Treat the call as targeting __init__; emit edge to the class QN.
             py_emit_resolved_call(ctx, qn, "lsp_constructor", 0.85f);
             return;
         }
@@ -830,7 +881,19 @@ static void py_emit_call_for(PyLSPContext* ctx, TSNode call_node) {
             py_emit_resolved_call(ctx, f->qualified_name, "lsp_direct", 0.95f);
             return;
         }
-        // Builtin / unknown — skip silently (low confidence)
+        // Builtins (range / len / list / dict / str / int / print / ...).
+        f = cbm_registry_lookup_symbol(ctx->registry, "builtins", fname);
+        if (f) {
+            py_emit_resolved_call(ctx, f->qualified_name, "lsp_builtin", 0.92f);
+            return;
+        }
+        const CBMRegisteredType* rt = cbm_registry_lookup_type(ctx->registry,
+            cbm_arena_sprintf(ctx->arena, "builtins.%s", fname));
+        if (rt) {
+            py_emit_resolved_call(ctx, rt->qualified_name,
+                "lsp_builtin_constructor", 0.88f);
+            return;
+        }
         return;
     }
 
@@ -899,6 +962,29 @@ static void py_emit_call_for(PyLSPContext* ctx, TSNode call_node) {
                 obj_type->data.named.qualified_name, attr_name);
             if (f) {
                 py_emit_resolved_call(ctx, f->qualified_name, "lsp_method", 0.9f);
+                return;
+            }
+        }
+        if (obj_type->kind == CBM_TYPE_BUILTIN && obj_type->data.builtin.name) {
+            // Builtins -> "builtins.<typename>" in typeshed.
+            const char* recv_qn = cbm_arena_sprintf(ctx->arena, "builtins.%s",
+                obj_type->data.builtin.name);
+            const CBMRegisteredFunc* f = py_lookup_attribute(ctx, recv_qn, attr_name);
+            if (f) {
+                py_emit_resolved_call(ctx, f->qualified_name, "lsp_builtin_method", 0.9f);
+                return;
+            }
+        }
+        if (obj_type->kind == CBM_TYPE_TEMPLATE &&
+            obj_type->data.template_type.template_name) {
+            const char* tname = obj_type->data.template_type.template_name;
+            const char* recv_qn = cbm_arena_sprintf(ctx->arena, "builtins.%s", tname);
+            const CBMRegisteredFunc* f = py_lookup_attribute(ctx, recv_qn, attr_name);
+            if (!f) {
+                f = py_lookup_attribute(ctx, tname, attr_name);
+            }
+            if (f) {
+                py_emit_resolved_call(ctx, f->qualified_name, "lsp_generic_method", 0.88f);
                 return;
             }
         }
@@ -1387,6 +1473,38 @@ static const CBMType* py_parse_type_text_qn(CBMArena* arena, const char* ann,
                         return cbm_type_union(arena, arg_types, arg_n);
                     }
                 }
+                // Type-wrapper annotations that don't change the underlying
+                // type for resolution: ClassVar[T], Final[T], InitVar[T],
+                // ReadOnly[T], Required[T], NotRequired[T], Annotated[T, ...]
+                // (drop metadata), Mapped[T] (SQLAlchemy 2.0), and
+                // typing_extensions/typing variants of all these. Returns
+                // the wrapped type T.
+                static const char* wrapper_names[] = {
+                    "ClassVar", "Final", "InitVar", "ReadOnly",
+                    "Required", "NotRequired", "Annotated",
+                    "Mapped", "WriteOnlyMapped", "DynamicMapped",  // SQLAlchemy
+                    "typing.ClassVar", "typing.Final", "typing.Annotated",
+                    "typing.Required", "typing.NotRequired", "typing.ReadOnly",
+                    "typing_extensions.ClassVar", "typing_extensions.Final",
+                    "typing_extensions.Annotated", "typing_extensions.Required",
+                    "typing_extensions.NotRequired", "typing_extensions.ReadOnly",
+                    "dataclasses.InitVar",
+                    NULL};
+                for (int wi = 0; wrapper_names[wi]; wi++) {
+                    if (strcmp(btrim, wrapper_names[wi]) == 0) {
+                        if (arg_types && arg_n >= 1 && arg_types[0]) {
+                            return arg_types[0];
+                        }
+                    }
+                }
+                // Type[T] / type[T] -> instance of T's metaclass... for
+                // resolution purposes, treat as the class itself.
+                if (strcmp(btrim, "Type") == 0 || strcmp(btrim, "type") == 0 ||
+                    strcmp(btrim, "typing.Type") == 0) {
+                    if (arg_types && arg_n >= 1 && arg_types[0]) {
+                        return arg_types[0];
+                    }
+                }
                 if (arg_types && arg_n > 0) {
                     return cbm_type_template(arena, btrim, arg_types, arg_n);
                 }
@@ -1528,6 +1646,30 @@ static const CBMType* py_resolve_annotation(PyLSPContext* ctx, const char* ann) 
                 if (strcmp(btrim, "Union") == 0 || strcmp(btrim, "typing.Union") == 0) {
                     if (arg_types && arg_n > 0) {
                         return cbm_type_union(ctx->arena, arg_types, arg_n);
+                    }
+                }
+                // Type wrappers that don't change the underlying type:
+                // ClassVar / Final / InitVar / ReadOnly / Required /
+                // NotRequired / Annotated / Mapped (SQLAlchemy) / Type[T].
+                // Returns the wrapped type T directly.
+                static const char* wrapper_names[] = {
+                    "ClassVar", "Final", "InitVar", "ReadOnly",
+                    "Required", "NotRequired", "Annotated",
+                    "Mapped", "WriteOnlyMapped", "DynamicMapped",
+                    "Type", "type",
+                    "typing.ClassVar", "typing.Final", "typing.Annotated",
+                    "typing.Required", "typing.NotRequired", "typing.ReadOnly",
+                    "typing.Type",
+                    "typing_extensions.ClassVar", "typing_extensions.Final",
+                    "typing_extensions.Annotated", "typing_extensions.Required",
+                    "typing_extensions.NotRequired", "typing_extensions.ReadOnly",
+                    "dataclasses.InitVar",
+                    NULL};
+                for (int wi = 0; wrapper_names[wi]; wi++) {
+                    if (strcmp(btrim, wrapper_names[wi]) == 0) {
+                        if (arg_types && arg_n >= 1 && arg_types[0]) {
+                            return arg_types[0];
+                        }
                     }
                 }
                 // Generic containers -> TEMPLATE

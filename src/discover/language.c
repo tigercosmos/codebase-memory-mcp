@@ -461,6 +461,9 @@ static const ext_entry_t EXT_TABLE[] = {
     /* Diff */
     {".patch", CBM_LANG_DIFF},
 
+    /* Pine Script */
+    {".pine", CBM_LANG_PINE},
+
     /* Pkl */
     {".pkl", CBM_LANG_PKL},
 
@@ -714,6 +717,7 @@ static const char *LANG_NAMES[CBM_LANG_COUNT] = {
     [CBM_LANG_WOLFRAM] = "Wolfram",
     [CBM_LANG_KUSTOMIZE] = "Kustomize",
     [CBM_LANG_K8S] = "Kubernetes",
+    [CBM_LANG_PINE] = "PineScript",
     [CBM_LANG_SOLIDITY] = "Solidity",
     [CBM_LANG_TYPST] = "Typst",
     [CBM_LANG_GDSCRIPT] = "GDScript",

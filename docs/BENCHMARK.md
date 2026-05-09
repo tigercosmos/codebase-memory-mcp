@@ -287,8 +287,8 @@ Config/markup languages (HTML, CSS, SCSS, YAML, TOML, HCL, SQL, Dockerfile) run 
 **Project**: `laravel-framework-php` | **Repo**: `/tmp/lang-bench/laravel-framework-php`
 **Nodes**: 39,767 | **Edges**: 148,440 (post-Phase-4–5 PHP-LSP; was 196,979 baseline, –25%)
 **CALLS edges**: 47,341 (was ~83k baseline — 43% reduction in name-fallback misroutes)
-**Tests**: 248 PHP-LSP unit tests, all passing (total project: 3,061 / 0 failed)
-**LSP module size**: ~3,500 lines C resolver + ~700 lines stdlib + ~4,800 lines tests = ~9,000 LoC
+**Tests**: 278 PHP-LSP unit tests, all passing (total project: 3,091 / 0 failed)
+**LSP module size**: ~3,700 lines C resolver + ~700 lines stdlib + ~5,500 lines tests = ~9,900 LoC
 
 PHP runs through a Light Semantic Pass (`internal/cbm/lsp/php_lsp.c`,
 ~3,500 lines) that approaches phpactor-grade type resolution while

@@ -790,6 +790,9 @@ static cbm_store_t *resolve_store(cbm_mcp_server_t *srv, const char *project) {
     return srv->store;
 }
 
+/* Forward decl — definition lives below alongside list_projects. */
+static bool is_project_db_file(const char *name, size_t len);
+
 /* Scan cache dir for .db files, writing comma-separated quoted names into out.
  * Returns the number of projects found. */
 static int collect_db_project_names(const char *dir_path, char *out, size_t out_sz) {
@@ -803,10 +806,7 @@ static int collect_db_project_names(const char *dir_path, char *out, size_t out_
     while ((entry = cbm_readdir(d)) != NULL) {
         const char *n = entry->name;
         size_t len = strlen(n);
-        if (len < MCP_MIN_DB_NAME || strcmp(n + len - MCP_DB_EXT, ".db") != 0) {
-            continue;
-        }
-        if (strncmp(n, "tmp-", SLEN("tmp-")) == 0 || strncmp(n, "_", SLEN("_")) == 0) {
+        if (!is_project_db_file(n, len)) {
             continue;
         }
         if (count > 0 && offset < (int)out_sz - MCP_SEPARATOR) {
@@ -860,12 +860,18 @@ static char *build_project_list_error(const char *reason) {
 
 /* ── Tool handler implementations ─────────────────────────────── */
 
-/* Return true if filename is a valid project .db file (not temp/internal). */
+/* Return true if filename is a valid project .db file (not temp/internal).
+ *
+ * Project names derived from /tmp/... source roots legitimately begin with
+ * "tmp-" (cbm_project_name_from_path: "/tmp/bench/..." → "tmp-bench-...";
+ * see tests/test_pipeline.c fixtures), so the prefix must NOT be excluded.
+ * The "_" prefix is reserved for internal/hidden DBs, and ":memory:" is the
+ * SQLite in-memory marker (defensive — never appears as a real file). */
 static bool is_project_db_file(const char *name, size_t len) {
     if (len < MCP_MIN_DB_NAME || strcmp(name + len - MCP_DB_EXT, ".db") != 0) {
         return false;
     }
-    if (strncmp(name, "tmp-", SLEN("tmp-")) == 0 || strncmp(name, "_", SLEN("_")) == 0 ||
+    if (strncmp(name, "_", SLEN("_")) == 0 ||
         strncmp(name, ":memory:", SLEN(":memory:")) == 0) {
         return false;
     }

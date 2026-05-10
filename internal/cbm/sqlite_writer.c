@@ -1222,6 +1222,9 @@ static uint32_t write_index_btree(FILE *fp, uint32_t *next_page, uint8_t **cells
             // After flush, check if the cell still doesn't fit on an empty page.
             // Index cells larger than a full page can never be stored; skip them.
             if (!pb_cell_fits(&pb, cell_lens[i])) {
+                (void)fprintf(stderr,
+                              "cbm_write_db: index cell oversized, skipped len=%d idx=%d\n",
+                              cell_lens[i], i);
                 continue;
             }
         }

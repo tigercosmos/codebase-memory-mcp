@@ -179,6 +179,7 @@ PIPELINE_SRCS = \
     src/pipeline/pass_parallel.c \
     src/pipeline/pass_definitions.c \
     src/pipeline/pass_calls.c \
+    src/pipeline/pass_lsp_cross.c \
     src/pipeline/pass_usages.c \
     src/pipeline/pass_semantic.c \
     src/pipeline/pass_tests.c \

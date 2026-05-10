@@ -381,6 +381,14 @@ int cbm_pipeline_pass_k8s(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
 
 int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count);
 
+/* Cross-file LSP type-aware call resolution pass. Augments per-file
+ * resolved_calls with cross-file resolutions before call edges are emitted.
+ * Implementation: src/pipeline/pass_lsp_cross.c. */
+int cbm_pipeline_pass_lsp_cross(cbm_pipeline_ctx_t *ctx,
+                                const cbm_file_info_t *files,
+                                int file_count,
+                                CBMFileResult **cache);
+
 /* Sub-passes called from pass_calls: pattern-based edge extraction */
 void cbm_pipeline_pass_fastapi_depends(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
                                        int file_count);

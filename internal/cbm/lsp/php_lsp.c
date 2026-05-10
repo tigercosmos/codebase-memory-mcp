@@ -3716,3 +3716,241 @@ void cbm_run_php_lsp(CBMArena *arena, CBMFileResult *result, const char *source,
         }
     }
 }
+
+/* ── Cross-file + batch ───────────────────────────────────────── */
+
+/* Split a "|"-separated list into a NULL-terminated array of arena copies. */
+static const char **php_split_pipe(CBMArena *arena, const char *text) {
+    if (!text || !text[0]) return NULL;
+    int count = 1;
+    for (const char *p = text; *p; p++) if (*p == '|') count++;
+    const char **out = (const char **)cbm_arena_alloc(arena,
+        (size_t)(count + 1) * sizeof(const char *));
+    if (!out) return NULL;
+    int idx = 0;
+    const char *start = text;
+    for (const char *p = text;; p++) {
+        if (*p == '|' || *p == '\0') {
+            size_t n = (size_t)(p - start);
+            char *s = (char *)cbm_arena_alloc(arena, n + 1);
+            if (!s) return NULL;
+            memcpy(s, start, n);
+            s[n] = '\0';
+            out[idx++] = s;
+            if (*p == '\0') break;
+            start = p + 1;
+        }
+    }
+    out[idx] = NULL;
+    return out;
+}
+
+/* Build a registry from caller-supplied CBMLSPDef[] — covers both the source
+ * file's own defs and cross-file referenced defs. PHP labels recognised:
+ * Class / Interface / Trait / Enum / Type for types; Function / Method for
+ * functions. Return type strings are parsed via parse_return_type_text using
+ * each def's def_module_qn so bare type names qualify against the module
+ * where the def lives, not the importer's module. */
+static void php_register_lsp_defs(CBMArena *arena, CBMTypeRegistry *reg,
+                                  CBMLSPDef *defs, int def_count) {
+    for (int i = 0; i < def_count; i++) {
+        CBMLSPDef *d = &defs[i];
+        if (!d->qualified_name || !d->short_name || !d->label) continue;
+
+        if (strcmp(d->label, "Class") == 0 || strcmp(d->label, "Interface") == 0 ||
+            strcmp(d->label, "Trait") == 0 || strcmp(d->label, "Enum") == 0 ||
+            strcmp(d->label, "Type") == 0) {
+            CBMRegisteredType rt;
+            memset(&rt, 0, sizeof(rt));
+            rt.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
+            rt.short_name = cbm_arena_strdup(arena, d->short_name);
+            rt.is_interface = d->is_interface ||
+                              strcmp(d->label, "Interface") == 0;
+            rt.embedded_types = php_split_pipe(arena, d->embedded_types);
+            if (d->method_names_str && d->method_names_str[0]) {
+                rt.method_names = php_split_pipe(arena, d->method_names_str);
+            }
+            cbm_registry_add_type(reg, rt);
+        }
+
+        if (strcmp(d->label, "Function") == 0 || strcmp(d->label, "Method") == 0) {
+            CBMRegisteredFunc rf;
+            memset(&rf, 0, sizeof(rf));
+            rf.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
+            rf.short_name = cbm_arena_strdup(arena, d->short_name);
+
+            /* Build FUNC type from "|"-separated return-type texts. Each piece
+             * is the unqualified return-type expression as it appears in the
+             * def-defining module's source. parse_return_type_text qualifies
+             * bare type names against the def's own module_qn. */
+            const char **ret_strs = php_split_pipe(arena, d->return_types);
+            const CBMType **ret_types = NULL;
+            if (ret_strs) {
+                int n = 0;
+                while (ret_strs[n]) n++;
+                if (n > 0) {
+                    ret_types = (const CBMType **)cbm_arena_alloc(arena,
+                        (size_t)(n + 1) * sizeof(const CBMType *));
+                    if (ret_types) {
+                        const char *def_mod = d->def_module_qn ? d->def_module_qn : "";
+                        for (int j = 0; j < n; j++) {
+                            ret_types[j] = parse_return_type_text(
+                                arena, ret_strs[j], def_mod, NULL, NULL, NULL, 0);
+                        }
+                        ret_types[n] = NULL;
+                    }
+                }
+            }
+            rf.signature = cbm_type_func(arena, NULL, NULL, ret_types);
+
+            if (strcmp(d->label, "Method") == 0 && d->receiver_type && d->receiver_type[0]) {
+                rf.receiver_type = cbm_arena_strdup(arena, d->receiver_type);
+                /* Auto-register receiver type if cross-file def chain didn't
+                 * include it explicitly, so php_lookup_method's chain walk
+                 * has somewhere to land. */
+                if (!cbm_registry_lookup_type(reg, rf.receiver_type)) {
+                    CBMRegisteredType auto_t;
+                    memset(&auto_t, 0, sizeof(auto_t));
+                    auto_t.qualified_name = rf.receiver_type;
+                    const char *dot = strrchr(d->receiver_type, '.');
+                    auto_t.short_name = dot
+                        ? cbm_arena_strdup(arena, dot + 1)
+                        : rf.receiver_type;
+                    cbm_registry_add_type(reg, auto_t);
+                }
+            }
+            cbm_registry_add_func(reg, rf);
+        }
+    }
+}
+
+void cbm_run_php_lsp_cross(
+    CBMArena *arena,
+    const char *source, int source_len,
+    const char *module_qn,
+    CBMLSPDef *defs, int def_count,
+    const char **import_names, const char **import_qns, int import_count,
+    TSTree *cached_tree,
+    CBMResolvedCallArray *out) {
+    if (!arena || !source || source_len <= 0 || !out) return;
+
+    TSParser *parser = NULL;
+    TSTree *tree = cached_tree;
+    bool owns_tree = false;
+    if (!tree) {
+        parser = ts_parser_new();
+        if (!parser) return;
+        ts_parser_set_language(parser, tree_sitter_php_only());
+        tree = ts_parser_parse_string(parser, NULL, source, (uint32_t)source_len);
+        owns_tree = true;
+        if (!tree) {
+            ts_parser_delete(parser);
+            return;
+        }
+    }
+    TSNode root = ts_tree_root_node(tree);
+
+    CBMTypeRegistry reg;
+    cbm_registry_init(&reg, arena);
+    cbm_php_stdlib_register(&reg, arena);
+    php_register_lsp_defs(arena, &reg, defs, def_count);
+
+    PHPLSPContext ctx;
+    php_lsp_init(&ctx, arena, source, source_len, &reg, module_qn, out);
+
+    /* Caller-supplied imports register first. process_file's own AST walk
+     * adds file-internal `use` declarations on top of these. */
+    for (int i = 0; i < import_count; i++) {
+        if (import_names && import_qns && import_names[i] && import_qns[i]) {
+            php_lsp_add_use(&ctx, import_names[i], import_qns[i], CBM_PHP_USE_CLASS);
+        }
+    }
+
+    /* Class field collection — same flow as cbm_run_php_lsp. Walks the AST
+     * to populate typed-property field maps so $this->prop and $obj->prop
+     * resolve to the right type during the call walk. */
+    {
+        php_class_field_table_t tab = {0};
+        uint32_t nc = ts_node_child_count(root);
+        for (uint32_t i = 0; i < nc; i++) {
+            TSNode c = ts_node_child(root, i);
+            if (ts_node_is_null(c)) continue;
+            const char *k = ts_node_type(c);
+            if (strcmp(k, "namespace_definition") == 0) {
+                set_namespace_from_decl(&ctx, c);
+            } else if (strcmp(k, "namespace_use_declaration") == 0) {
+                collect_use_declaration(&ctx, c);
+            }
+        }
+        php_lsp_collect_class_fields(&ctx, &reg, root, &tab);
+        ctx.current_namespace_qn = "";
+        /* Reset to caller-supplied uses only — process_file re-adds AST uses. */
+        ctx.use_count = import_count;
+        for (int i = 0; i < tab.count; i++) {
+            php_class_fields_t *f = &tab.items[i];
+            if (f->count == 0) continue;
+            for (int t = 0; t < reg.type_count; t++) {
+                if (strcmp(reg.types[t].qualified_name, f->class_qn) == 0) {
+                    reg.types[t].field_names = f->field_names;
+                    reg.types[t].field_types = f->field_types;
+                    break;
+                }
+            }
+        }
+    }
+
+    php_lsp_process_file(&ctx, root);
+
+    if (owns_tree && tree) ts_tree_delete(tree);
+    if (parser) ts_parser_delete(parser);
+}
+
+void cbm_batch_php_lsp_cross(
+    CBMArena *arena,
+    CBMBatchPHPLSPFile *files, int file_count,
+    CBMResolvedCallArray *out) {
+    if (!arena || !files || file_count <= 0 || !out) return;
+
+    for (int f = 0; f < file_count; f++) {
+        CBMBatchPHPLSPFile *file = &files[f];
+        memset(&out[f], 0, sizeof(CBMResolvedCallArray));
+        if (!file->source || file->source_len <= 0) continue;
+
+        CBMArena file_arena;
+        cbm_arena_init(&file_arena);
+
+        CBMResolvedCallArray file_out;
+        memset(&file_out, 0, sizeof(file_out));
+
+        cbm_run_php_lsp_cross(&file_arena,
+            file->source, file->source_len, file->module_qn,
+            file->defs, file->def_count,
+            file->import_names, file->import_qns, file->import_count,
+            file->cached_tree, &file_out);
+
+        if (file_out.count > 0) {
+            out[f].count = file_out.count;
+            out[f].items = (CBMResolvedCall *)cbm_arena_alloc(arena,
+                (size_t)file_out.count * sizeof(CBMResolvedCall));
+            if (out[f].items) {
+                for (int j = 0; j < file_out.count; j++) {
+                    CBMResolvedCall *src = &file_out.items[j];
+                    CBMResolvedCall *dst = &out[f].items[j];
+                    dst->caller_qn = src->caller_qn
+                        ? cbm_arena_strdup(arena, src->caller_qn) : NULL;
+                    dst->callee_qn = src->callee_qn
+                        ? cbm_arena_strdup(arena, src->callee_qn) : NULL;
+                    dst->strategy = src->strategy
+                        ? cbm_arena_strdup(arena, src->strategy) : NULL;
+                    dst->confidence = src->confidence;
+                    dst->reason = src->reason
+                        ? cbm_arena_strdup(arena, src->reason) : NULL;
+                }
+            } else {
+                out[f].count = 0;
+            }
+        }
+
+        cbm_arena_destroy(&file_arena);
+    }
+}

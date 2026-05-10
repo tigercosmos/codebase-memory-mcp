@@ -5,6 +5,7 @@
 #include "scope.h"
 #include "type_registry.h"
 #include "../cbm.h"
+#include "go_lsp.h"  /* CBMLSPDef reused across languages */
 
 /* PHPLSPContext — per-file state for PHP type-aware call resolution.
  * Mirrors GoLSPContext / CLSPContext structure. */
@@ -85,5 +86,44 @@ void cbm_run_php_lsp(CBMArena *arena, CBMFileResult *result, const char *source,
 
 /* Register PHP stdlib + curated framework types into a registry. */
 void cbm_php_stdlib_register(CBMTypeRegistry *reg, CBMArena *arena);
+
+/* --- Cross-file LSP resolution ---
+ *
+ * Mirrors cbm_run_py_lsp_cross / cbm_run_ts_lsp_cross. Caller supplies the
+ * combined CBMLSPDef[] (file-local + cross-file) and a resolved import map
+ * (use → target QN). Imports are added as CLASS-kind uses; file-internal
+ * `use` declarations from the AST are layered on top by process_file.
+ *
+ * Reuses go_lsp.h's CBMLSPDef so cross-language registration is uniform. */
+void cbm_run_php_lsp_cross(
+    CBMArena *arena,
+    const char *source, int source_len,
+    const char *module_qn,
+    CBMLSPDef *defs, int def_count,
+    const char **import_names, const char **import_qns, int import_count,
+    TSTree *cached_tree,           /* NULL = parse internally */
+    CBMResolvedCallArray *out);
+
+/* --- Batch cross-file LSP --- */
+
+/* Per-file input for batch PHP LSP processing. */
+typedef struct {
+    const char *source;
+    int source_len;
+    const char *module_qn;
+    TSTree *cached_tree;            /* NULL = parse internally */
+    CBMLSPDef *defs;                /* combined file-local + cross-file defs */
+    int def_count;
+    const char **import_names;      /* parallel arrays, import_count long */
+    const char **import_qns;
+    int import_count;
+} CBMBatchPHPLSPFile;
+
+/* Process multiple PHP files' cross-file LSP in one call. out must point to
+ * file_count pre-zeroed CBMResolvedCallArray structs. */
+void cbm_batch_php_lsp_cross(
+    CBMArena *arena,
+    CBMBatchPHPLSPFile *files, int file_count,
+    CBMResolvedCallArray *out);
 
 #endif /* CBM_LSP_PHP_LSP_H */

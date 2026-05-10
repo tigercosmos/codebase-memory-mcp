@@ -11,6 +11,7 @@
 #include "test_helpers.h"
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_internal.h"
+#include "pipeline/pass_lsp_cross.h"
 #include "pipeline/worker_pool.h"
 #include "graph_buffer/graph_buffer.h"
 #include "discover/discover.h"
@@ -136,6 +137,12 @@ static cbm_gbuf_t *run_parallel(const char *project, const char *repo_path, cbm_
     cbm_gbuf_set_next_id(gbuf, atomic_load(&shared_ids));
 
     cbm_build_registry_from_cache(&ctx, files, file_count, result_cache);
+
+    /* Cross-file LSP — mirrors run_parallel_pipeline ordering in pipeline.c.
+     * Augments per-file resolved_calls with cross-file type-aware resolutions
+     * (e.g. method calls on imported classes) before parallel_resolve emits
+     * the call edges. */
+    cbm_pipeline_pass_lsp_cross(&ctx, files, file_count, result_cache);
 
     cbm_parallel_resolve(&ctx, files, file_count, result_cache, &shared_ids, worker_count);
     cbm_gbuf_set_next_id(gbuf, atomic_load(&shared_ids));

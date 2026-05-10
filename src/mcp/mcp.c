@@ -793,6 +793,9 @@ static cbm_store_t *resolve_store(cbm_mcp_server_t *srv, const char *project) {
 /* Forward decl — definition lives below alongside list_projects. */
 static bool is_project_db_file(const char *name, size_t len);
 
+/* Forward decl — definition lives below in handle_trace_call_path's helpers. */
+static void free_node_contents(cbm_node_t *n);
+
 /* Scan cache dir for .db files, writing comma-separated quoted names into out.
  * Returns the number of projects found. */
 static int collect_db_project_names(const char *dir_path, char *out, size_t out_sz) {
@@ -2180,10 +2183,28 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
         direction = heap_strdup("both");
     }
 
-    /* Find the node by name */
+    /* Find the node by name. If the bare-name lookup misses, fall back to
+     * qualified_name so callers passing a fully-qualified identifier (which
+     * the not-found hint actually recommends) hit the same path. The QN
+     * lookup uses the same scan_node helper as the bare lookup, so the
+     * shallow struct copy below transfers ownership of the strdup'd string
+     * fields cleanly and cbm_store_free_nodes will free them. */
     cbm_node_t *nodes = NULL;
     int node_count = 0;
     cbm_store_find_nodes_by_name(store, project, func_name, &nodes, &node_count);
+
+    if (node_count == 0) {
+        cbm_node_t qn_node = {0};
+        if (cbm_store_find_node_by_qn(store, project, func_name, &qn_node) == CBM_STORE_OK) {
+            nodes = malloc(sizeof(cbm_node_t));
+            if (nodes) {
+                nodes[0] = qn_node;
+                node_count = 1;
+            } else {
+                free_node_contents(&qn_node);
+            }
+        }
+    }
 
     if (node_count == 0) {
         enum { HINT_BUF_SZ = 512 };

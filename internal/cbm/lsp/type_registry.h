@@ -43,7 +43,24 @@ typedef struct {
     const char* alias_of;       // QN of aliased type (type Foo = Bar), NULL if not alias
     const char** type_param_names; // NULL-terminated, e.g., ["T", "K", NULL] for template classes
     bool is_interface;
+
+    // --- TS-specific fields (NULL/empty for non-TS types — backward compatible) ---
+    // TS interfaces / object types may be callable: `interface F { (x:number): string }`.
+    const CBMType* call_signature;       // FUNC type or NULL
+    // TS objects can have an index signature: `{ [key:string]: V }` or `{ [i:number]: V }`.
+    const CBMType* index_key_type;       // BUILTIN("string"|"number") or NULL
+    const CBMType* index_value_type;     // V or NULL
+    // Generic constraints, parallel to type_param_names. NULL or shorter array means "any".
+    const CBMType** type_param_constraints;  // NULL-terminated, parallel to type_param_names
 } CBMRegisteredType;
+
+// Hash-table bucket entry. Chains collisions via next-index list for overload sets.
+typedef struct {
+    uint64_t hash;          // FNV-1a of key
+    int payload_index;      // index into reg->funcs[] or reg->types[]
+    int next_index;         // -1 = end of chain; else index of next bucket entry in same chain
+    int slot;               // bucket slot this entry sits in (for resize)
+} CBMRegistryHashEntry;
 
 // Cross-file type/function registry.
 typedef struct {
@@ -56,10 +73,35 @@ typedef struct {
     int type_cap;
 
     CBMArena* arena;  // owns all string data
+
+    // Hash indexes (built lazily by cbm_registry_finalize, NULL until then).
+    // Lookups fall back to linear scan when these are NULL.
+    int* func_qn_buckets;       // bucket → first entry index in func_qn_entries; -1 = empty
+    CBMRegistryHashEntry* func_qn_entries;  // entries indexed by linear order
+    int func_qn_bucket_count;
+    int func_qn_entry_count;
+
+    int* type_qn_buckets;
+    CBMRegistryHashEntry* type_qn_entries;
+    int type_qn_bucket_count;
+    int type_qn_entry_count;
+
+    // Methods indexed by (receiver_type, short_name) — chain holds overloads.
+    int* method_buckets;
+    CBMRegistryHashEntry* method_entries;
+    int method_bucket_count;
+    int method_entry_count;
 } CBMTypeRegistry;
 
 // Initialize a registry.
 void cbm_registry_init(CBMTypeRegistry* reg, CBMArena* arena);
+
+// Build the hash indexes after all funcs/types have been added. Subsequent lookups
+// use O(1) hashed dispatch instead of linear scans. Calling this is OPTIONAL — the
+// linear-scan path remains correct. Single-file resolvers (small registries) skip
+// finalize and stay linear; project-wide registries (many thousands of entries) call
+// it once after pass-1.5 def-collection.
+void cbm_registry_finalize(CBMTypeRegistry* reg);
 
 // Register a function/method.
 void cbm_registry_add_func(CBMTypeRegistry* reg, CBMRegisteredFunc func);
@@ -110,5 +152,19 @@ const CBMRegisteredFunc* cbm_registry_lookup_method_by_types(const CBMTypeRegist
 const CBMRegisteredFunc* cbm_registry_lookup_symbol_by_types(const CBMTypeRegistry* reg,
     const char* package_qn, const char* name,
     const CBMType** arg_types, int arg_count);
+
+// --- TS-specific helpers (return NULL for types without these signatures) ---
+
+// If the type has a call signature (e.g., `interface F { (x:number): string }`), return
+// a synthesised CBMRegisteredFunc whose qualified_name is "<type_qn>.__call" and
+// short_name is "__call". Returns NULL if no call signature is present, the type is
+// missing, or the receiver type was not registered. Caller must NOT free.
+const CBMRegisteredFunc* cbm_registry_lookup_callable(const CBMTypeRegistry* reg,
+    CBMArena* arena, const char* type_qn);
+
+// If the type has an index signature, return the value type produced by indexing with
+// the given key type (string vs number). Returns NULL if no matching index signature.
+const CBMType* cbm_registry_lookup_index_signature(const CBMTypeRegistry* reg,
+    const char* type_qn, const CBMType* key_type);
 
 #endif // CBM_LSP_TYPE_REGISTRY_H

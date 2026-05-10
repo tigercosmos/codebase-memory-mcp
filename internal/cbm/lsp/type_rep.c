@@ -197,6 +197,8 @@ static int union_member_dedupe(const CBMType** scratch, int count) {
     return out;
 }
 
+// Shared by Python (cbm_type_union) and TS (`A | B`). Flattens nested UNIONs and
+// dedupes members.
 const CBMType* cbm_type_union(CBMArena* a, const CBMType** members, int count) {
     if (!members || count <= 0) return &unknown_singleton;
 
@@ -306,6 +308,128 @@ const CBMType* cbm_type_callable(CBMArena* a, const CBMType** param_types, int p
             t->data.callable.param_types = arr;
         }
     }
+    return t;
+}
+
+// --- TS-specific constructors -----------------------------------------------
+
+const CBMType* cbm_type_intersection(CBMArena* a, const CBMType** members, int count) {
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_INTERSECTION;
+    if (members && count > 0) {
+        const CBMType** arr = (const CBMType**)cbm_arena_alloc(a, (count + 1) * sizeof(const CBMType*));
+        if (arr) {
+            for (int i = 0; i < count; i++) arr[i] = members[i];
+            arr[count] = NULL;
+            t->data.union_type.members = arr;
+        }
+    }
+    t->data.union_type.count = count;
+    return t;
+}
+
+const CBMType* cbm_type_ts_literal(CBMArena* a, const char* tag, const char* value) {
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_TS_LITERAL;
+    t->data.literal_ts.tag = tag ? cbm_arena_strdup(a, tag) : NULL;
+    t->data.literal_ts.value = value ? cbm_arena_strdup(a, value) : NULL;
+    return t;
+}
+
+const CBMType* cbm_type_indexed(CBMArena* a, const CBMType* object, const CBMType* index) {
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_INDEXED;
+    t->data.indexed.object = object;
+    t->data.indexed.index = index;
+    return t;
+}
+
+const CBMType* cbm_type_keyof(CBMArena* a, const CBMType* operand) {
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_KEYOF;
+    t->data.keyof.operand = operand;
+    return t;
+}
+
+const CBMType* cbm_type_typeof_query(CBMArena* a, const char* expr) {
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_TYPEOF_QUERY;
+    t->data.typeof_query.expr = expr ? cbm_arena_strdup(a, expr) : NULL;
+    return t;
+}
+
+const CBMType* cbm_type_conditional(CBMArena* a,
+                                    const CBMType* check, const CBMType* extends,
+                                    const CBMType* true_branch, const CBMType* false_branch) {
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_CONDITIONAL;
+    t->data.conditional.check = check;
+    t->data.conditional.extends = extends;
+    t->data.conditional.true_branch = true_branch;
+    t->data.conditional.false_branch = false_branch;
+    return t;
+}
+
+const CBMType* cbm_type_object_lit(CBMArena* a,
+                                   const char** prop_names, const CBMType** prop_types,
+                                   const CBMType* call_signature, const CBMType* index_value) {
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_OBJECT_LIT;
+    if (prop_names && prop_types) {
+        int count = 0;
+        while (prop_names[count] && prop_types[count]) count++;
+        if (count > 0) {
+            const char** name_arr = (const char**)cbm_arena_alloc(a, (count + 1) * sizeof(const char*));
+            const CBMType** type_arr = (const CBMType**)cbm_arena_alloc(a, (count + 1) * sizeof(const CBMType*));
+            if (name_arr && type_arr) {
+                for (int i = 0; i < count; i++) {
+                    name_arr[i] = prop_names[i];
+                    type_arr[i] = prop_types[i];
+                }
+                name_arr[count] = NULL;
+                type_arr[count] = NULL;
+                t->data.object_lit.prop_names = name_arr;
+                t->data.object_lit.prop_types = type_arr;
+            }
+        }
+    }
+    t->data.object_lit.call_signature = call_signature;
+    t->data.object_lit.index_value = index_value;
+    return t;
+}
+
+const CBMType* cbm_type_infer(CBMArena* a, const char* name) {
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_INFER;
+    t->data.infer.name = name ? cbm_arena_strdup(a, name) : NULL;
+    return t;
+}
+
+const CBMType* cbm_type_mapped(CBMArena* a,
+                               const char* key_name, const CBMType* key_constraint, const CBMType* value) {
+    CBMType* t = (CBMType*)cbm_arena_alloc(a, sizeof(CBMType));
+    if (!t) return &unknown_singleton;
+    memset(t, 0, sizeof(CBMType));
+    t->kind = CBM_TYPE_MAPPED;
+    t->data.mapped.key_name = key_name ? cbm_arena_strdup(a, key_name) : NULL;
+    t->data.mapped.key_constraint = key_constraint;
+    t->data.mapped.value = value;
     return t;
 }
 
@@ -451,6 +575,41 @@ bool cbm_type_equal(const CBMType* a, const CBMType* b) {
         }
         return true;
     }
+    case CBM_TYPE_INTERSECTION: {
+        // Same shape as UNION; compare order-independently.
+        if (a->data.union_type.count != b->data.union_type.count) return false;
+        for (int i = 0; i < a->data.union_type.count; i++) {
+            bool found = false;
+            for (int j = 0; j < b->data.union_type.count; j++) {
+                if (cbm_type_equal(a->data.union_type.members[i],
+                                    b->data.union_type.members[j])) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return false;
+        }
+        return true;
+    }
+    case CBM_TYPE_TS_LITERAL:
+        return str_eq_or_both_null(a->data.literal_ts.tag, b->data.literal_ts.tag)
+            && str_eq_or_both_null(a->data.literal_ts.value, b->data.literal_ts.value);
+    case CBM_TYPE_INDEXED:
+        return cbm_type_equal(a->data.indexed.object, b->data.indexed.object)
+            && cbm_type_equal(a->data.indexed.index, b->data.indexed.index);
+    case CBM_TYPE_KEYOF:
+        return cbm_type_equal(a->data.keyof.operand, b->data.keyof.operand);
+    case CBM_TYPE_TYPEOF_QUERY:
+        return str_eq_or_both_null(a->data.typeof_query.expr, b->data.typeof_query.expr);
+    case CBM_TYPE_CONDITIONAL:
+        return cbm_type_equal(a->data.conditional.check, b->data.conditional.check)
+            && cbm_type_equal(a->data.conditional.extends, b->data.conditional.extends)
+            && cbm_type_equal(a->data.conditional.true_branch, b->data.conditional.true_branch)
+            && cbm_type_equal(a->data.conditional.false_branch, b->data.conditional.false_branch);
+    case CBM_TYPE_INFER:
+        return str_eq_or_both_null(a->data.infer.name, b->data.infer.name);
+    case CBM_TYPE_OBJECT_LIT:
+    case CBM_TYPE_MAPPED:
     case CBM_TYPE_FUNC:
     case CBM_TYPE_INTERFACE:
     case CBM_TYPE_STRUCT:
@@ -553,7 +712,74 @@ const CBMType* cbm_type_substitute(CBMArena* a, const CBMType* t,
         elems[count] = NULL;
         return cbm_type_tuple(a, elems, count);
     }
+    case CBM_TYPE_UNION:
+    case CBM_TYPE_INTERSECTION: {
+        int count = t->data.union_type.count;
+        if (count <= 0 || !t->data.union_type.members) return t;
+        const CBMType** elems = (const CBMType**)cbm_arena_alloc(a, (count + 1) * sizeof(const CBMType*));
+        if (!elems) return t;
+        for (int i = 0; i < count; i++) {
+            elems[i] = cbm_type_substitute(a, t->data.union_type.members[i], type_params, type_args);
+        }
+        elems[count] = NULL;
+        return t->kind == CBM_TYPE_UNION
+                   ? cbm_type_union(a, elems, count)
+                   : cbm_type_intersection(a, elems, count);
+    }
+    case CBM_TYPE_INDEXED:
+        return cbm_type_indexed(a,
+            cbm_type_substitute(a, t->data.indexed.object, type_params, type_args),
+            cbm_type_substitute(a, t->data.indexed.index, type_params, type_args));
+    case CBM_TYPE_KEYOF:
+        return cbm_type_keyof(a, cbm_type_substitute(a, t->data.keyof.operand, type_params, type_args));
+    case CBM_TYPE_CONDITIONAL:
+        return cbm_type_conditional(a,
+            cbm_type_substitute(a, t->data.conditional.check, type_params, type_args),
+            cbm_type_substitute(a, t->data.conditional.extends, type_params, type_args),
+            cbm_type_substitute(a, t->data.conditional.true_branch, type_params, type_args),
+            cbm_type_substitute(a, t->data.conditional.false_branch, type_params, type_args));
+    case CBM_TYPE_FUNC: {
+        // Recurse into param_types and return_types. Param/return arrays may be NULL.
+        const CBMType** new_params = NULL;
+        const CBMType** new_returns = NULL;
+        if (t->data.func.param_types) {
+            int pc = 0;
+            while (t->data.func.param_types[pc]) pc++;
+            new_params = (const CBMType**)cbm_arena_alloc(a, (size_t)(pc + 1) * sizeof(const CBMType*));
+            if (!new_params) return t;
+            for (int i = 0; i < pc; i++) {
+                new_params[i] = cbm_type_substitute(a, t->data.func.param_types[i], type_params, type_args);
+            }
+            new_params[pc] = NULL;
+        }
+        if (t->data.func.return_types) {
+            int rc = 0;
+            while (t->data.func.return_types[rc]) rc++;
+            new_returns = (const CBMType**)cbm_arena_alloc(a, (size_t)(rc + 1) * sizeof(const CBMType*));
+            if (!new_returns) return t;
+            for (int i = 0; i < rc; i++) {
+                new_returns[i] = cbm_type_substitute(a, t->data.func.return_types[i], type_params, type_args);
+            }
+            new_returns[rc] = NULL;
+        }
+        return cbm_type_func(a, t->data.func.param_names, new_params, new_returns);
+    }
+    case CBM_TYPE_TEMPLATE: {
+        if (!t->data.template_type.template_args || t->data.template_type.arg_count == 0) return t;
+        int ac = t->data.template_type.arg_count;
+        const CBMType** new_args = (const CBMType**)cbm_arena_alloc(a,
+                                                                    (size_t)(ac + 1) * sizeof(const CBMType*));
+        if (!new_args) return t;
+        for (int i = 0; i < ac; i++) {
+            new_args[i] = cbm_type_substitute(a, t->data.template_type.template_args[i],
+                                              type_params, type_args);
+        }
+        new_args[ac] = NULL;
+        return cbm_type_template(a, t->data.template_type.template_name, new_args, ac);
+    }
     default:
-        return t; // NAMED, BUILTIN, FUNC, etc. — no type params to substitute
+        // BUILTIN, INTERFACE, STRUCT, LITERAL, TYPEOF_QUERY, OBJECT_LIT, INFER, MAPPED,
+        // ALIAS — no in-place substitution needed at v1 (or stub-only).
+        return t;
     }
 }

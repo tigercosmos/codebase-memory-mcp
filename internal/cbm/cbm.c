@@ -7,6 +7,7 @@
 #include "lsp/c_lsp.h"
 #include "lsp/php_lsp.h"
 #include "lsp/py_lsp.h"
+#include "lsp/ts_lsp.h"
 #include "preprocessor.h"
 #include "foundation/compat.h"
 #include "tree_sitter/api.h" // TSParser, TSNode, TSTree, TSInput, TSLanguage, TSPoint, TSParseOptions, TSParseState
@@ -364,6 +365,23 @@ CBMFileResult *cbm_extract_file(const char *source, int source_len, CBMLanguage 
     }
     if (language == CBM_LANG_PYTHON) {
         cbm_run_py_lsp(a, result, source, source_len, root);
+    }
+    if (language == CBM_LANG_JAVASCRIPT || language == CBM_LANG_TYPESCRIPT ||
+        language == CBM_LANG_TSX) {
+        bool js_mode = (language == CBM_LANG_JAVASCRIPT);
+        // jsx_mode: TSX always; .jsx in the JS bucket also enables it.
+        bool jsx_mode = (language == CBM_LANG_TSX);
+        if (language == CBM_LANG_JAVASCRIPT && rel_path) {
+            size_t rl = strlen(rel_path);
+            if (rl >= 4 && strcmp(rel_path + rl - 4, ".jsx") == 0) jsx_mode = true;
+        }
+        // dts_mode: ".d.ts" suffix (TypeScript only).
+        bool dts_mode = false;
+        if (language == CBM_LANG_TYPESCRIPT && rel_path) {
+            size_t rl = strlen(rel_path);
+            if (rl >= 5 && strcmp(rel_path + rl - 5, ".d.ts") == 0) dts_mode = true;
+        }
+        cbm_run_ts_lsp(a, result, source, source_len, root, js_mode, jsx_mode, dts_mode);
     }
     atomic_fetch_add(&total_lsp_ns, now_ns() - lsp_start);
 

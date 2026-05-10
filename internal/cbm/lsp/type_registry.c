@@ -2,6 +2,115 @@
 #include <string.h>
 #include <stdlib.h>
 
+// FNV-1a 64-bit hash. Public domain. Inline so no extra dep.
+static uint64_t fnv1a(const char* s) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    if (!s) return h;
+    while (*s) {
+        h ^= (unsigned char)*s++;
+        h *= 0x100000001b3ULL;
+    }
+    return h;
+}
+
+static uint64_t fnv1a_pair(const char* a, const char* b) {
+    uint64_t h = 0xcbf29ce484222325ULL;
+    if (a) {
+        while (*a) {
+            h ^= (unsigned char)*a++;
+            h *= 0x100000001b3ULL;
+        }
+    }
+    h ^= 0xff;  // separator
+    h *= 0x100000001b3ULL;
+    if (b) {
+        while (*b) {
+            h ^= (unsigned char)*b++;
+            h *= 0x100000001b3ULL;
+        }
+    }
+    return h;
+}
+
+static int next_pow2(int n) {
+    int p = 1;
+    while (p < n) p <<= 1;
+    return p;
+}
+
+static void build_qn_index(CBMTypeRegistry* reg, bool for_funcs) {
+    int count = for_funcs ? reg->func_count : reg->type_count;
+    if (count == 0) return;
+    int bucket_count = next_pow2(count * 2);
+    if (bucket_count < 16) bucket_count = 16;
+
+    int* buckets = (int*)cbm_arena_alloc(reg->arena, (size_t)bucket_count * sizeof(int));
+    CBMRegistryHashEntry* entries = (CBMRegistryHashEntry*)cbm_arena_alloc(
+        reg->arena, (size_t)count * sizeof(CBMRegistryHashEntry));
+    if (!buckets || !entries) return;
+    for (int i = 0; i < bucket_count; i++) buckets[i] = -1;
+
+    for (int i = 0; i < count; i++) {
+        const char* qn = for_funcs ? reg->funcs[i].qualified_name
+                                   : reg->types[i].qualified_name;
+        if (!qn) continue;
+        uint64_t h = fnv1a(qn);
+        int slot = (int)(h & (uint64_t)(bucket_count - 1));
+        entries[i].hash = h;
+        entries[i].payload_index = i;
+        entries[i].next_index = buckets[slot];
+        entries[i].slot = slot;
+        buckets[slot] = i;
+    }
+    if (for_funcs) {
+        reg->func_qn_buckets = buckets;
+        reg->func_qn_entries = entries;
+        reg->func_qn_bucket_count = bucket_count;
+        reg->func_qn_entry_count = count;
+    } else {
+        reg->type_qn_buckets = buckets;
+        reg->type_qn_entries = entries;
+        reg->type_qn_bucket_count = bucket_count;
+        reg->type_qn_entry_count = count;
+    }
+}
+
+static void build_method_index(CBMTypeRegistry* reg) {
+    if (reg->func_count == 0) return;
+    int bucket_count = next_pow2(reg->func_count * 2);
+    if (bucket_count < 16) bucket_count = 16;
+    int* buckets = (int*)cbm_arena_alloc(reg->arena, (size_t)bucket_count * sizeof(int));
+    CBMRegistryHashEntry* entries = (CBMRegistryHashEntry*)cbm_arena_alloc(
+        reg->arena, (size_t)reg->func_count * sizeof(CBMRegistryHashEntry));
+    if (!buckets || !entries) return;
+    for (int i = 0; i < bucket_count; i++) buckets[i] = -1;
+
+    int idx = 0;
+    for (int i = 0; i < reg->func_count; i++) {
+        const CBMRegisteredFunc* f = &reg->funcs[i];
+        if (!f->receiver_type || !f->short_name) continue;
+        uint64_t h = fnv1a_pair(f->receiver_type, f->short_name);
+        int slot = (int)(h & (uint64_t)(bucket_count - 1));
+        entries[idx].hash = h;
+        entries[idx].payload_index = i;
+        entries[idx].next_index = buckets[slot];
+        entries[idx].slot = slot;
+        buckets[slot] = idx;
+        idx++;
+    }
+    reg->method_buckets = buckets;
+    reg->method_entries = entries;
+    reg->method_bucket_count = bucket_count;
+    reg->method_entry_count = idx;
+}
+
+void cbm_registry_finalize(CBMTypeRegistry* reg) {
+    if (!reg) return;
+    build_qn_index(reg, /*for_funcs=*/true);
+    build_qn_index(reg, /*for_funcs=*/false);
+    build_method_index(reg);
+}
+
 void cbm_registry_init(CBMTypeRegistry* reg, CBMArena* arena) {
     memset(reg, 0, sizeof(CBMTypeRegistry));
     reg->arena = arena;
@@ -41,6 +150,23 @@ const CBMRegisteredFunc* cbm_registry_lookup_method(const CBMTypeRegistry* reg,
     const char* receiver_qn, const char* method_name) {
     if (!reg || !receiver_qn || !method_name) return NULL;
 
+    // Hashed path when registry is finalized.
+    if (reg->method_buckets && reg->method_bucket_count > 0) {
+        uint64_t h = fnv1a_pair(receiver_qn, method_name);
+        int slot = (int)(h & (uint64_t)(reg->method_bucket_count - 1));
+        for (int idx = reg->method_buckets[slot]; idx >= 0;
+             idx = reg->method_entries[idx].next_index) {
+            if (reg->method_entries[idx].hash != h) continue;
+            const CBMRegisteredFunc* f = &reg->funcs[reg->method_entries[idx].payload_index];
+            if (f->receiver_type && f->short_name &&
+                strcmp(f->receiver_type, receiver_qn) == 0 &&
+                strcmp(f->short_name, method_name) == 0) {
+                return f;
+            }
+        }
+        return NULL;
+    }
+
     for (int i = 0; i < reg->func_count; i++) {
         const CBMRegisteredFunc* f = &reg->funcs[i];
         if (f->receiver_type && f->short_name &&
@@ -56,6 +182,21 @@ const CBMRegisteredType* cbm_registry_lookup_type(const CBMTypeRegistry* reg,
     const char* qualified_name) {
     if (!reg || !qualified_name) return NULL;
 
+    if (reg->type_qn_buckets && reg->type_qn_bucket_count > 0) {
+        uint64_t h = fnv1a(qualified_name);
+        int slot = (int)(h & (uint64_t)(reg->type_qn_bucket_count - 1));
+        for (int idx = reg->type_qn_buckets[slot]; idx >= 0;
+             idx = reg->type_qn_entries[idx].next_index) {
+            if (reg->type_qn_entries[idx].hash != h) continue;
+            int p = reg->type_qn_entries[idx].payload_index;
+            if (reg->types[p].qualified_name &&
+                strcmp(reg->types[p].qualified_name, qualified_name) == 0) {
+                return &reg->types[p];
+            }
+        }
+        return NULL;
+    }
+
     for (int i = 0; i < reg->type_count; i++) {
         if (strcmp(reg->types[i].qualified_name, qualified_name) == 0) {
             return &reg->types[i];
@@ -67,6 +208,21 @@ const CBMRegisteredType* cbm_registry_lookup_type(const CBMTypeRegistry* reg,
 const CBMRegisteredFunc* cbm_registry_lookup_func(const CBMTypeRegistry* reg,
     const char* qualified_name) {
     if (!reg || !qualified_name) return NULL;
+
+    if (reg->func_qn_buckets && reg->func_qn_bucket_count > 0) {
+        uint64_t h = fnv1a(qualified_name);
+        int slot = (int)(h & (uint64_t)(reg->func_qn_bucket_count - 1));
+        for (int idx = reg->func_qn_buckets[slot]; idx >= 0;
+             idx = reg->func_qn_entries[idx].next_index) {
+            if (reg->func_qn_entries[idx].hash != h) continue;
+            int p = reg->func_qn_entries[idx].payload_index;
+            if (reg->funcs[p].qualified_name &&
+                strcmp(reg->funcs[p].qualified_name, qualified_name) == 0) {
+                return &reg->funcs[p];
+            }
+        }
+        return NULL;
+    }
 
     for (int i = 0; i < reg->func_count; i++) {
         if (strcmp(reg->funcs[i].qualified_name, qualified_name) == 0) {
@@ -312,4 +468,55 @@ const CBMRegisteredFunc* cbm_registry_lookup_symbol_by_args(const CBMTypeRegistr
         }
     }
     return range_match ? range_match : first_match;
+}
+
+// --- TS-specific helpers ---
+
+const CBMRegisteredFunc* cbm_registry_lookup_callable(const CBMTypeRegistry* reg,
+    CBMArena* arena, const char* type_qn) {
+    if (!reg || !type_qn || !arena) return NULL;
+
+    const CBMRegisteredType* rt = cbm_registry_lookup_type(reg, type_qn);
+    if (!rt || !rt->call_signature) return NULL;
+
+    // Synthesise a CBMRegisteredFunc whose QN is "<type_qn>.__call".
+    // Allocated in the caller's arena so it lives at least as long as the registry context.
+    size_t qn_len = strlen(type_qn);
+    const char suffix[] = ".__call";
+    size_t total = qn_len + sizeof(suffix);  // sizeof includes the NUL
+    char* qn = (char*)cbm_arena_alloc(arena, total);
+    if (!qn) return NULL;
+    memcpy(qn, type_qn, qn_len);
+    memcpy(qn + qn_len, suffix, sizeof(suffix));
+
+    CBMRegisteredFunc* f = (CBMRegisteredFunc*)cbm_arena_alloc(arena, sizeof(CBMRegisteredFunc));
+    if (!f) return NULL;
+    memset(f, 0, sizeof(*f));
+    f->qualified_name = qn;
+    f->short_name = "__call";
+    f->receiver_type = rt->qualified_name;
+    f->signature = rt->call_signature;
+    f->min_params = -1;
+    return f;
+}
+
+const CBMType* cbm_registry_lookup_index_signature(const CBMTypeRegistry* reg,
+    const char* type_qn, const CBMType* key_type) {
+    if (!reg || !type_qn) return NULL;
+
+    const CBMRegisteredType* rt = cbm_registry_lookup_type(reg, type_qn);
+    if (!rt || !rt->index_value_type) return NULL;
+
+    // If no expected key type is recorded, accept any index. Otherwise require a match
+    // on BUILTIN tag — TS allows string and number index signatures and one of each.
+    if (!rt->index_key_type || !key_type) return rt->index_value_type;
+
+    if (rt->index_key_type->kind == CBM_TYPE_BUILTIN && key_type->kind == CBM_TYPE_BUILTIN) {
+        const char* a = rt->index_key_type->data.builtin.name;
+        const char* b = key_type->data.builtin.name;
+        if (a && b && strcmp(a, b) == 0) return rt->index_value_type;
+        // String index also accepts numeric keys (number → toString).
+        if (a && strcmp(a, "string") == 0) return rt->index_value_type;
+    }
+    return NULL;
 }

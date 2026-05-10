@@ -75,6 +75,24 @@ TEST(shell_rejects_null) {
     PASS();
 }
 
+TEST(shell_rejects_double_quote) {
+    /* On Windows, the search code path wraps args in cmd.exe-level
+     * "powershell -Command \"...'%s'...\"". A " in the input would close
+     * the cmd.exe outer quote. Block unconditionally. */
+    ASSERT_FALSE(cbm_validate_shell_arg("foo\"bar"));
+    PASS();
+}
+
+TEST(shell_rejects_redirect_out) {
+    ASSERT_FALSE(cbm_validate_shell_arg("foo>out.txt"));
+    PASS();
+}
+
+TEST(shell_rejects_redirect_in) {
+    ASSERT_FALSE(cbm_validate_shell_arg("foo<in.txt"));
+    PASS();
+}
+
 TEST(shell_accepts_clean_path) {
     ASSERT_TRUE(cbm_validate_shell_arg("/home/user/.local/bin/codebase-memory-mcp"));
     PASS();
@@ -364,6 +382,9 @@ SUITE(security) {
     RUN_TEST(shell_rejects_newline);
     RUN_TEST(shell_rejects_carriage_return);
     RUN_TEST(shell_rejects_null);
+    RUN_TEST(shell_rejects_double_quote);
+    RUN_TEST(shell_rejects_redirect_out);
+    RUN_TEST(shell_rejects_redirect_in);
     RUN_TEST(shell_accepts_clean_path);
     RUN_TEST(shell_accepts_spaces);
     RUN_TEST(shell_accepts_dots_dashes);

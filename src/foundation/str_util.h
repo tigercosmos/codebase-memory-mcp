@@ -49,7 +49,11 @@ char *cbm_str_strip_ext(CBMArena *a, const char *path);
 char **cbm_str_split(CBMArena *a, const char *s, char delim, int *out_count);
 
 /* Validate a string is safe for shell interpolation inside single quotes.
- * Rejects: ' ; | & $ ` \n \r \0 (embedded NULs via len check).
+ * Rejects: ' " ; | & $ ` < > \n \r \0 (embedded NULs via len check).
+ * The Windows search path wraps shell args in cmd.exe-level "powershell -Command
+ * \"...'%s'...\"", so " can close the cmd.exe outer quote even if PowerShell's
+ * single quotes hold; < > would then become cmd.exe redirection (file-write
+ * primitive). Blocking these unconditionally hardens both POSIX and Windows.
  * Returns true if safe, false if the string contains shell metacharacters. */
 bool cbm_validate_shell_arg(const char *s);
 

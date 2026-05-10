@@ -249,11 +249,14 @@ bool cbm_validate_shell_arg(const char *s) {
     for (const char *p = s; *p; p++) {
         switch (*p) {
         case '\'':
+        case '"':
         case ';':
         case '|':
         case '&':
         case '$':
         case '`':
+        case '<':
+        case '>':
         case '\n':
         case '\r':
 #ifndef _WIN32

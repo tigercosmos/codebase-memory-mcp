@@ -315,8 +315,14 @@ static const CBMType* parse_ts_type_text(CBMArena* arena, const char* text, cons
             }
         }
         if (mc > 0 && (is_union || is_inter)) {
-            char* part = cbm_arena_strndup(arena, text + start, len - start);
-            members[mc++] = parse_ts_type_text(arena, part, module_qn);
+            // Cap mirrors the in-loop guard: members[16] holds at most 15
+            // real entries + the trailing NULL sentinel. Without this guard,
+            // a union/intersection with >=16 members overflows the array
+            // (UBSan: index 16 out of bounds for 'const CBMType *[16]').
+            if (mc < 15) {
+                char* part = cbm_arena_strndup(arena, text + start, len - start);
+                members[mc++] = parse_ts_type_text(arena, part, module_qn);
+            }
             members[mc] = NULL;
             return is_union ? cbm_type_union(arena, members, mc)
                             : cbm_type_intersection(arena, members, mc);

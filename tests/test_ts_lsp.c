@@ -800,6 +800,22 @@ TEST(tslsp_union_common_method) {
     PASS();
 }
 
+TEST(tslsp_union_many_members_no_overflow) {
+    // Regression: a union with >=16 members used to overflow the
+    // 16-slot members[] array in parse_ts_type_text() — the trailing
+    // post-loop append wrote past the end (UBSan: index 16 out of
+    // bounds). The crash was non-deterministic under pthread parallel
+    // extraction, surfaced by indexing the zod TS codebase. Just
+    // extracting must not crash; resolution behavior is unconstrained.
+    CBMFileResult *r = extract_ts(
+        "function go(x: 'a' | 'b' | 'c' | 'd' | 'e' | 'f' | 'g' | 'h' "
+        "| 'i' | 'j' | 'k' | 'l' | 'm' | 'n' | 'o' | 'p' | 'q' | 'r' "
+        "| 's' | 't') { return x; }\n");
+    ASSERT_NOT_NULL(r);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Category 9: more class patterns ───────────────────────────────────────── */
 
 TEST(tslsp_class_static_method) {
@@ -4017,6 +4033,7 @@ SUITE(ts_lsp) {
 
     /* Category 16: union deeper */
     RUN_TEST(tslsp_union_common_method);
+    RUN_TEST(tslsp_union_many_members_no_overflow);
 
     /* Category 9: more class patterns */
     RUN_TEST(tslsp_class_static_method);

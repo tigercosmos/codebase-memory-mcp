@@ -43,6 +43,8 @@ extern void suite_sqlite_writer(void);
 extern void suite_go_lsp(void);
 extern void suite_c_lsp(void);
 extern void suite_php_lsp(void);
+extern void suite_cs_lsp(void);
+extern void suite_cs_lsp_bench(void);
 extern void suite_scope(void);
 extern void suite_type_rep(void);
 extern void suite_py_lsp(void);
@@ -132,6 +134,8 @@ int main(void) {
     RUN_SUITE(go_lsp);
     RUN_SUITE(c_lsp);
     RUN_SUITE(php_lsp);
+    RUN_SUITE(cs_lsp);
+    RUN_SUITE(cs_lsp_bench);
     RUN_SUITE(py_lsp);
     RUN_SUITE(py_lsp_bench);
     RUN_SUITE(py_lsp_stress);

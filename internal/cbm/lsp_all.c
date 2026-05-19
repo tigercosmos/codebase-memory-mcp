@@ -15,3 +15,5 @@
 #include "lsp/generated/python_stdlib_data.c"
 #include "lsp/py_lsp.c"
 #include "lsp/ts_lsp.c"
+#include "lsp/cs_lsp.c"
+#include "lsp/generated/cs_stdlib_data.c"

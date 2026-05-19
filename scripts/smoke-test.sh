@@ -569,26 +569,38 @@ if ! path_match "$CMD" "$SELF_PATH"; then
 fi
 echo "OK 8c: Claude Code MCP (.claude/.mcp.json)"
 
-# 8d: Claude Code hooks
+# 8d: Claude Code hooks — matcher must be exactly "Grep|Glob" (no Read, no Search).
+# Gating Read breaks Claude Code's read-before-edit invariant (issue #362), so
+# this assertion locks in the matcher to prevent regressions.
 if ! cat "$FAKE_HOME/.claude/settings.json" 2>/dev/null | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 hooks = d.get('hooks', {}).get('PreToolUse', [])
-found = any('Grep' in str(h.get('matcher', '')) for h in hooks)
-sys.exit(0 if found else 1)
+ok = any(h.get('matcher') == 'Grep|Glob' for h in hooks)
+bad = any('Read' in str(h.get('matcher', '')) for h in hooks)
+sys.exit(0 if (ok and not bad) else 1)
 " 2>/dev/null; then
-  echo "FAIL 8d: PreToolUse hook not found in settings.json"
+  echo "FAIL 8d: PreToolUse hook matcher is not exactly 'Grep|Glob' (or still contains Read)"
   exit 1
 fi
-echo "OK 8d: Claude Code PreToolUse hook"
+echo "OK 8d: Claude Code PreToolUse hook (matcher=Grep|Glob, Read excluded)"
 
-# 8e: Claude Code gate script
+# 8e: Claude Code shim script — must be non-blocking augmenter, not a gate.
 if [ "$(uname -s)" != "MINGW64_NT" ] 2>/dev/null; then
-  if [ ! -x "$FAKE_HOME/.claude/hooks/cbm-code-discovery-gate" ]; then
-    echo "FAIL 8e: gate script not executable or missing"
+  GATE_SCRIPT="$FAKE_HOME/.claude/hooks/cbm-code-discovery-gate"
+  if [ ! -x "$GATE_SCRIPT" ]; then
+    echo "FAIL 8e: shim script not executable or missing"
     exit 1
   fi
-  echo "OK 8e: gate script installed and executable"
+  if grep -q 'exit 2' "$GATE_SCRIPT"; then
+    echo "FAIL 8e: shim contains 'exit 2' — must never block"
+    exit 1
+  fi
+  if ! grep -q 'hook-augment' "$GATE_SCRIPT"; then
+    echo "FAIL 8e: shim missing 'hook-augment' delegation"
+    exit 1
+  fi
+  echo "OK 8e: shim installed, non-blocking, delegates to hook-augment"
 fi
 
 # 8f-8h: Codex TOML
@@ -626,12 +638,17 @@ if ! cat "$FAKE_HOME/.gemini/settings.json" 2>/dev/null | python3 -c "
 import json, sys
 d = json.load(sys.stdin)
 hooks = d.get('hooks', {}).get('BeforeTool', [])
-sys.exit(0 if len(hooks) > 0 else 1)
+# Matcher must be exactly 'google_search|grep_search' (no read_file). The
+# old matcher gated the agent's read tool — consistent with the Claude fix
+# we remove it here too.
+ok = any(h.get('matcher') == 'google_search|grep_search' for h in hooks)
+bad = any('read_file' in str(h.get('matcher', '')) for h in hooks)
+sys.exit(0 if (ok and not bad) else 1)
 " 2>/dev/null; then
-  echo "FAIL 8l: Gemini BeforeTool hook missing"
+  echo "FAIL 8l: Gemini BeforeTool hook matcher must be 'google_search|grep_search' (no read_file)"
   exit 1
 fi
-echo "OK 8l: Gemini BeforeTool hook"
+echo "OK 8l: Gemini BeforeTool hook (matcher=google_search|grep_search)"
 
 # 8m: Gemini instructions
 if [ ! -f "$FAKE_HOME/.gemini/GEMINI.md" ]; then

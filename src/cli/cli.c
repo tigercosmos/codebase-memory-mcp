@@ -1462,18 +1462,31 @@ int cbm_remove_antigravity_mcp(const char *config_path) {
 
 /* ── Claude Code pre-tool hooks ───────────────────────────────── */
 
-#define CMM_HOOK_MATCHER "Grep|Glob|Read|Search"
+/* Matcher intentionally excludes Read: gating Read breaks Claude Code's
+ * read-before-edit invariant (issue #362). The hook is a non-blocking
+ * augmenter, never a gate. */
+#define CMM_HOOK_MATCHER "Grep|Glob"
 #define CMM_HOOK_COMMAND "~/.claude/hooks/cbm-code-discovery-gate"
+/* Hard backstop in settings.json; the binary also self-bounds with an
+ * in-process deadline well under this. */
+#define CMM_HOOK_TIMEOUT_SEC 5
 
 /* Old matcher values from previous versions — recognized during upgrade so
- * upsert_hooks_json can remove them before inserting the current matcher. */
-static const char *cmm_old_matchers[] = {
+ * upsert/remove can clean them up before inserting the current matcher.
+ * Per-agent lists (no shared global): each caller passes its own. */
+static const char *const cmm_claude_old_matchers[] = {
+    "Grep|Glob|Read|Search",
     "Grep|Glob|Read",
     NULL,
 };
+static const char *const cmm_gemini_old_matchers[] = {
+    "google_search|read_file|grep_search",
+    NULL,
+};
 
-/* Check if a PreToolUse array entry matches our hook (current or old matcher). */
-static bool is_cmm_hook_entry(yyjson_mut_val *entry, const char *matcher_str) {
+/* Check if a hook array entry is ours (current matcher or a known old one). */
+static bool is_cmm_hook_entry(yyjson_mut_val *entry, const char *matcher_str,
+                              const char *const *old_matchers) {
     yyjson_mut_val *matcher = yyjson_mut_obj_get(entry, "matcher");
     if (!matcher || !yyjson_mut_is_str(matcher)) {
         return false;
@@ -1486,8 +1499,8 @@ static bool is_cmm_hook_entry(yyjson_mut_val *entry, const char *matcher_str) {
         return true;
     }
     /* Also match old versions for backwards-compatible upgrade */
-    for (int i = 0; cmm_old_matchers[i]; i++) {
-        if (strcmp(val, cmm_old_matchers[i]) == 0) {
+    for (int i = 0; old_matchers && old_matchers[i]; i++) {
+        if (strcmp(val, old_matchers[i]) == 0) {
             return true;
         }
     }
@@ -1501,12 +1514,15 @@ typedef struct {
     const char *hook_event;
     const char *matcher_str;
     const char *command_str;
+    const char *const *old_matchers; /* NULL-terminated; may be NULL */
+    int timeout_sec;                 /* >0 adds "timeout" to the hook entry */
 } hooks_upsert_args_t;
 static int upsert_hooks_json(hooks_upsert_args_t args) {
     const char *settings_path = args.settings_path;
     const char *hook_event = args.hook_event;
     const char *matcher_str = args.matcher_str;
     const char *command_str = args.command_str;
+    const char *const *old_matchers = args.old_matchers;
     if (!settings_path) {
         return CLI_ERR;
     }
@@ -1549,7 +1565,7 @@ static int upsert_hooks_json(hooks_upsert_args_t args) {
     size_t max;
     yyjson_mut_val *item;
     yyjson_mut_arr_foreach(event_arr, idx, max, item) {
-        if (is_cmm_hook_entry(item, matcher_str)) {
+        if (is_cmm_hook_entry(item, matcher_str, old_matchers)) {
             yyjson_mut_arr_remove(event_arr, idx);
             break;
         }
@@ -1563,6 +1579,9 @@ static int upsert_hooks_json(hooks_upsert_args_t args) {
     yyjson_mut_val *hook_obj = yyjson_mut_obj(mdoc);
     yyjson_mut_obj_add_str(mdoc, hook_obj, "type", "command");
     yyjson_mut_obj_add_str(mdoc, hook_obj, "command", command_str);
+    if (args.timeout_sec > 0) {
+        yyjson_mut_obj_add_int(mdoc, hook_obj, "timeout", args.timeout_sec);
+    }
     yyjson_mut_arr_append(hooks_arr, hook_obj);
     yyjson_mut_obj_add_val(mdoc, entry, "hooks", hooks_arr);
 
@@ -1579,11 +1598,13 @@ typedef struct {
     const char *settings_path;
     const char *hook_event;
     const char *matcher_str;
+    const char *const *old_matchers; /* NULL-terminated; may be NULL */
 } hooks_remove_args_t;
 static int remove_hooks_json(hooks_remove_args_t args) {
     const char *settings_path = args.settings_path;
     const char *hook_event = args.hook_event;
     const char *matcher_str = args.matcher_str;
+    const char *const *old_matchers = args.old_matchers;
     if (!settings_path) {
         return CLI_ERR;
     }
@@ -1618,7 +1639,7 @@ static int remove_hooks_json(hooks_remove_args_t args) {
     size_t max;
     yyjson_mut_val *item;
     yyjson_mut_arr_foreach(event_arr, idx, max, item) {
-        if (is_cmm_hook_entry(item, matcher_str)) {
+        if (is_cmm_hook_entry(item, matcher_str, old_matchers)) {
             yyjson_mut_arr_remove(event_arr, idx);
             break;
         }
@@ -1630,20 +1651,40 @@ static int remove_hooks_json(hooks_remove_args_t args) {
 }
 
 int cbm_upsert_claude_hooks(const char *settings_path) {
-    return upsert_hooks_json(
-        (hooks_upsert_args_t){settings_path, "PreToolUse", CMM_HOOK_MATCHER, CMM_HOOK_COMMAND});
+    return upsert_hooks_json((hooks_upsert_args_t){
+        .settings_path = settings_path,
+        .hook_event = "PreToolUse",
+        .matcher_str = CMM_HOOK_MATCHER,
+        .command_str = CMM_HOOK_COMMAND,
+        .old_matchers = cmm_claude_old_matchers,
+        .timeout_sec = CMM_HOOK_TIMEOUT_SEC,
+    });
 }
 
 int cbm_remove_claude_hooks(const char *settings_path) {
-    return remove_hooks_json((hooks_remove_args_t){settings_path, "PreToolUse", CMM_HOOK_MATCHER});
+    return remove_hooks_json((hooks_remove_args_t){
+        .settings_path = settings_path,
+        .hook_event = "PreToolUse",
+        .matcher_str = CMM_HOOK_MATCHER,
+        .old_matchers = cmm_claude_old_matchers,
+    });
 }
 
-/* Install the code discovery gate script to ~/.claude/hooks/.
- * Blocks the first Grep/Glob/Read/Search call per session (exit 2 + stderr),
- * nudging Claude toward codebase-memory-mcp. All subsequent calls in the same
- * session pass through (gate file keyed on PPID). */
-static void cbm_install_hook_gate_script(const char *home) {
-    if (!home) {
+/* Install the search-augmenter shim to ~/.claude/hooks/.
+ * The shim is a thin wrapper that delegates to `<binary> hook-augment`,
+ * which adds graph context to Grep/Glob calls. It NEVER blocks a tool call:
+ * a missing/old/hung binary results in a silent exit 0 (issue #362/#288).
+ * The legacy filename `cbm-code-discovery-gate` is retained so existing
+ * settings.json entries and uninstall keep working with zero migration. */
+static void cbm_install_hook_gate_script(const char *home, const char *binary_path) {
+    if (!home || !binary_path) {
+        return;
+    }
+    /* Defensive: refuse to embed a binary path containing a double-quote, which
+     * would break the BIN="..." shell quoting in the generated shim. In normal
+     * installs this is unreachable (paths come from cbm_detect_self_path), but
+     * fail-loud here beats silently emitting a malformed script. */
+    if (strchr(binary_path, '"') != NULL) {
         return;
     }
     char hooks_dir[CLI_BUF_1K];
@@ -1657,22 +1698,18 @@ static void cbm_install_hook_gate_script(const char *home) {
     if (!f) {
         return;
     }
-    (void)fprintf(f, "#!/bin/bash\n"
-                     "# Gate hook: nudges Claude toward codebase-memory-mcp for code discovery.\n"
-                     "# First Grep/Glob/Read/Search per session -> block. Subsequent -> allow.\n"
-                     "# PPID = Claude Code process PID, unique per session.\n"
-                     "GATE=/tmp/cbm-code-discovery-gate-$PPID\n"
-                     "find /tmp -name 'cbm-code-discovery-gate-*' -mtime +1 -delete 2>/dev/null\n"
-                     "if [ -f \"$GATE\" ]; then\n"
-                     "    exit 0\n"
-                     "fi\n"
-                     "touch \"$GATE\"\n"
-                     "echo 'BLOCKED: For code discovery, use codebase-memory-mcp tools first: "
-                     "search_graph(name_pattern) to find functions/classes, trace_path() for "
-                     "call chains, get_code_snippet(qualified_name) to read source. If the graph "
-                     "is not indexed yet, call index_repository first. Fall back to Grep/Glob/Read "
-                     "only for text content search. If you need Grep, retry.' >&2\n"
-                     "exit 2\n");
+    (void)fprintf(
+        f,
+        "#!/bin/bash\n"
+        "# codebase-memory-mcp search augmenter (Claude Code PreToolUse).\n"
+        "# NOTE: the legacy filename is kept for zero-migration upgrades.\n"
+        "# Despite the name this NEVER blocks a tool call - it only adds\n"
+        "# graph context. Any failure is silent (exit 0, no output).\n"
+        "BIN=\"%s\"\n"
+        "[ -x \"$BIN\" ] || exit 0\n"
+        "\"$BIN\" hook-augment 2>/dev/null\n"
+        "exit 0\n",
+        binary_path);
     /* fchmod before close to avoid TOCTOU race (CodeQL cpp/toctou-race-condition) */
 #ifndef _WIN32
     fchmod(fileno(f), CLI_OCTAL_PERM);
@@ -1710,11 +1747,12 @@ static void cbm_install_session_reminder_script(const char *home) {
            "1. ALWAYS use codebase-memory-mcp tools FIRST for ANY code exploration:\n"
            "   - search_graph(name_pattern/label/qn_pattern) to find functions/classes/routes\n"
            "   - trace_path(function_name, mode=calls|data_flow|cross_service) for call chains\n"
-           "   - get_code_snippet(qualified_name) to read source (NOT Read/cat)\n"
+           "   - get_code_snippet(qualified_name) for exact symbol source (precise ranges)\n"
            "   - query_graph(query) for complex Cypher patterns\n"
            "   - get_architecture(aspects) for project structure\n"
            "   - search_code(pattern) for text search (graph-augmented grep)\n"
-           "2. Fall back to Grep/Glob/Read ONLY for text content, config values, non-code files.\n"
+           "2. Use Grep/Glob/Read freely for text, configs, non-code files, and\n"
+           "   always Read a file before editing it.\n"
            "3. If a project is not indexed yet, run index_repository FIRST.\n"
            "REMINDER\n");
 #ifndef _WIN32
@@ -1730,8 +1768,10 @@ static int cbm_upsert_session_hooks(const char *settings_path) {
     static const char *matchers[] = {"startup", "resume", "clear", "compact"};
     int rc = 0;
     for (int i = 0; i < NUM_DIRS; i++) {
-        if (upsert_hooks_json((hooks_upsert_args_t){settings_path, "SessionStart", matchers[i],
-                                                    CMM_SESSION_COMMAND}) != 0) {
+        if (upsert_hooks_json((hooks_upsert_args_t){.settings_path = settings_path,
+                                                    .hook_event = "SessionStart",
+                                                    .matcher_str = matchers[i],
+                                                    .command_str = CMM_SESSION_COMMAND}) != 0) {
             rc = CLI_ERR;
         }
     }
@@ -1742,27 +1782,39 @@ static int cbm_remove_session_hooks(const char *settings_path) {
     static const char *matchers[] = {"startup", "resume", "clear", "compact"};
     int rc = 0;
     for (int i = 0; i < NUM_DIRS; i++) {
-        if (remove_hooks_json((hooks_remove_args_t){settings_path, "SessionStart", matchers[i]}) !=
-            0) {
+        if (remove_hooks_json((hooks_remove_args_t){.settings_path = settings_path,
+                                                    .hook_event = "SessionStart",
+                                                    .matcher_str = matchers[i]}) != 0) {
             rc = CLI_ERR;
         }
     }
     return rc;
 }
 
-#define GEMINI_HOOK_MATCHER "google_search|read_file|grep_search"
+/* Matcher excludes read_file for consistency with the Claude fix: the hook
+ * is an advisory reminder, not a gate over the agent's file reads. */
+#define GEMINI_HOOK_MATCHER "google_search|grep_search"
 #define GEMINI_HOOK_COMMAND                                               \
     "echo 'Reminder: prefer codebase-memory-mcp search_graph/trace_path/" \
     "get_code_snippet over grep/file search for code discovery.' >&2"
 
 int cbm_upsert_gemini_hooks(const char *settings_path) {
-    return upsert_hooks_json((hooks_upsert_args_t){settings_path, "BeforeTool", GEMINI_HOOK_MATCHER,
-                                                   GEMINI_HOOK_COMMAND});
+    return upsert_hooks_json((hooks_upsert_args_t){
+        .settings_path = settings_path,
+        .hook_event = "BeforeTool",
+        .matcher_str = GEMINI_HOOK_MATCHER,
+        .command_str = GEMINI_HOOK_COMMAND,
+        .old_matchers = cmm_gemini_old_matchers,
+    });
 }
 
 int cbm_remove_gemini_hooks(const char *settings_path) {
-    return remove_hooks_json(
-        (hooks_remove_args_t){settings_path, "BeforeTool", GEMINI_HOOK_MATCHER});
+    return remove_hooks_json((hooks_remove_args_t){
+        .settings_path = settings_path,
+        .hook_event = "BeforeTool",
+        .matcher_str = GEMINI_HOOK_MATCHER,
+        .old_matchers = cmm_gemini_old_matchers,
+    });
 }
 
 /* ── PATH management ──────────────────────────────────────────── */
@@ -2654,11 +2706,11 @@ static void install_claude_code_config(const char *home, const char *binary_path
     snprintf(settings_path, sizeof(settings_path), "%s/.claude/settings.json", home);
     if (!dry_run) {
         cbm_upsert_claude_hooks(settings_path);
-        cbm_install_hook_gate_script(home);
+        cbm_install_hook_gate_script(home, binary_path);
         cbm_install_session_reminder_script(home);
         cbm_upsert_session_hooks(settings_path);
     }
-    printf("  hooks: PreToolUse (code discovery gate)\n");
+    printf("  hooks: PreToolUse (Grep/Glob search-graph augmenter, non-blocking)\n");
     printf("  hooks: SessionStart (MCP usage reminder on startup/resume/clear/compact)\n");
 }
 

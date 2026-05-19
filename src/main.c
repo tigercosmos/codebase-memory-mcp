@@ -281,6 +281,10 @@ static int handle_subcommand(int argc, char **argv) {
             cbm_mem_init(MAIN_RAM_FRACTION);
             return run_cli(argc - i - SKIP_ONE, argv + i + SKIP_ONE);
         }
+        if (strcmp(argv[i], "hook-augment") == 0) {
+            cbm_mem_init(MAIN_RAM_FRACTION);
+            return cbm_cmd_hook_augment();
+        }
         if (strcmp(argv[i], "install") == 0) {
             return cbm_cmd_install(argc - i - SKIP_ONE, argv + i + SKIP_ONE);
         }

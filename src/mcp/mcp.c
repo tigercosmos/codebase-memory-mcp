@@ -3013,10 +3013,10 @@ static void build_grep_cmd(char *cmd, size_t cmd_sz, bool use_regex, bool scoped
     const char *flag = use_regex ? "-E" : "-F";
     if (scoped) {
         if (file_pattern) {
-            snprintf(cmd, cmd_sz, "xargs grep -n %s --include='%s' -f '%s' < '%s' 2>/dev/null",
+            snprintf(cmd, cmd_sz, "xargs grep -Hn %s --include='%s' -f '%s' < '%s' 2>/dev/null",
                      flag, file_pattern, tmpfile, filelist);
         } else {
-            snprintf(cmd, cmd_sz, "xargs grep -n %s -f '%s' < '%s' 2>/dev/null", flag, tmpfile,
+            snprintf(cmd, cmd_sz, "xargs grep -Hn %s -f '%s' < '%s' 2>/dev/null", flag, tmpfile,
                      filelist);
         }
     } else {

@@ -1907,7 +1907,11 @@ TEST(cli_upsert_claude_hook_fresh) {
     const char *data = read_test_file(settingspath);
     ASSERT_NOT_NULL(data);
     ASSERT(strstr(data, "PreToolUse") != NULL);
-    ASSERT(strstr(data, "Grep|Glob|Read") != NULL);
+    /* Matcher excludes Read per issue #362 (gating Read breaks the
+     * read-before-edit invariant). Assert exact matcher value AND that no
+     * Read-chained matcher slipped back in. */
+    ASSERT(strstr(data, "\"Grep|Glob\"") != NULL);
+    ASSERT(strstr(data, "Glob|Read") == NULL);
     ASSERT(strstr(data, "cbm-code-discovery-gate") != NULL);
 
     test_rmdir_r(tmpdir);
@@ -1932,8 +1936,9 @@ TEST(cli_upsert_claude_hook_existing) {
 
     const char *data = read_test_file(settingspath);
     ASSERT_NOT_NULL(data);
-    /* Our hook added */
-    ASSERT(strstr(data, "Grep|Glob|Read") != NULL);
+    /* Our hook added with the non-blocking matcher (issue #362). */
+    ASSERT(strstr(data, "\"Grep|Glob\"") != NULL);
+    ASSERT(strstr(data, "Glob|Read") == NULL);
     /* Existing hook preserved */
     ASSERT(strstr(data, "Bash") != NULL);
     ASSERT(strstr(data, "firewall") != NULL);

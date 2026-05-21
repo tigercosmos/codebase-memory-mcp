@@ -1830,7 +1830,6 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
             continue;
         }
 
-        const char *rel = rc->files[file_idx].rel_path;
 
         /* Build import map ONCE (read-only access to main_gbuf). The
          * same imp_keys/imp_vals feed both the fused cross-file LSP

@@ -4401,6 +4401,10 @@ void cbm_run_ts_lsp_cross(CBMArena* arena,
 
     // Build a faux CBMFileResult so register_file_defs's downstream paths work; we don't
     // need it here because cross-file defs already came in as CBMLSPDef.
+    // Finalize registry — O(1) lookups. See go_lsp.c "3c. Finalize"
+    // comment for the rationale.
+    cbm_registry_finalize(&reg);
+
     TSLSPContext ctx;
     ts_lsp_init(&ctx, arena, source, source_len, &reg, module_qn,
                 js_mode, jsx_mode, dts_mode, out);

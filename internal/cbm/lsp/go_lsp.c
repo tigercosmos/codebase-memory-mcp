@@ -2479,7 +2479,11 @@ void cbm_run_go_lsp_cross(
     cbm_registry_init(&reg, arena);
     cbm_go_stdlib_register(&reg, arena);
 
-    // Register all defs (file-local + cross-file)
+    // Register all defs (file-local + cross-file).
+    // Perf: borrow strings from defs[] directly — they live in the
+    // caller's arena which outlives this call, so cbm_arena_strdup is
+    // wasted work. On kubernetes (~110k defs × 11k files × 5 strdups
+    // ~= 6B mallocs) this alone saves ~90s of resolve wall time.
     for (int i = 0; i < def_count; i++) {
         CBMLSPDef* d = &defs[i];
         if (!d->qualified_name || !d->short_name || !d->label) continue;
@@ -2491,8 +2495,8 @@ void cbm_run_go_lsp_cross(
             strcmp(d->label, "Interface") == 0) {
             CBMRegisteredType rt;
             memset(&rt, 0, sizeof(rt));
-            rt.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
-            rt.short_name = cbm_arena_strdup(arena, d->short_name);
+            rt.qualified_name = d->qualified_name;  // borrowed
+            rt.short_name = d->short_name;          // borrowed
             rt.is_interface = d->is_interface || strcmp(d->label, "Interface") == 0;
             rt.embedded_types = split_pipe_strings(arena, d->embedded_types);
 
@@ -2513,8 +2517,8 @@ void cbm_run_go_lsp_cross(
         if (strcmp(d->label, "Function") == 0 || strcmp(d->label, "Method") == 0) {
             CBMRegisteredFunc rf;
             memset(&rf, 0, sizeof(rf));
-            rf.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
-            rf.short_name = cbm_arena_strdup(arena, d->short_name);
+            rf.qualified_name = d->qualified_name;  // borrowed
+            rf.short_name = d->short_name;          // borrowed
 
             // Build FUNC type from return_types text
             const CBMType** ret_types = split_pipe_types(arena, d->return_types, def_mod);
@@ -2522,14 +2526,14 @@ void cbm_run_go_lsp_cross(
 
             // Method receiver
             if (strcmp(d->label, "Method") == 0 && d->receiver_type && d->receiver_type[0]) {
-                rf.receiver_type = cbm_arena_strdup(arena, d->receiver_type);
+                rf.receiver_type = d->receiver_type;  // borrowed
                 // Auto-create type entry if not exists
                 if (!cbm_registry_lookup_type(&reg, rf.receiver_type)) {
                     CBMRegisteredType auto_type;
                     memset(&auto_type, 0, sizeof(auto_type));
                     auto_type.qualified_name = rf.receiver_type;
                     const char* dot = strrchr(d->receiver_type, '.');
-                    auto_type.short_name = dot ? cbm_arena_strdup(arena, dot + 1) : rf.receiver_type;
+                    auto_type.short_name = dot ? dot + 1 : rf.receiver_type;  // borrowed substring
                     cbm_registry_add_type(&reg, auto_type);
                 }
             }
@@ -2677,6 +2681,14 @@ void cbm_run_go_lsp_cross(
 
     // 3b. Phase 1c: Extract type params from generic function declarations
     extract_type_params_from_ast(arena, &reg, root, source, module_qn);
+
+    // 3c. Finalize registry — builds hash buckets for O(1) lookups in
+    // cbm_registry_lookup_method / lookup_type. Without this, every
+    // lookup falls through to the O(N) linear scan in type_registry.c,
+    // turning the resolution pass below into an O(N·C·F) cost per file
+    // (kubernetes: ~64B strcmps observed = 35min). Must come AFTER all
+    // mutations (Phase 1b/1c above) and BEFORE the LSP context init.
+    cbm_registry_finalize(&reg);
 
     // 4. Build LSP context and run
     GoLSPContext ctx;

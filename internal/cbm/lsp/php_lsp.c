@@ -3762,8 +3762,8 @@ static void php_register_lsp_defs(CBMArena *arena, CBMTypeRegistry *reg,
             strcmp(d->label, "Type") == 0) {
             CBMRegisteredType rt;
             memset(&rt, 0, sizeof(rt));
-            rt.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
-            rt.short_name = cbm_arena_strdup(arena, d->short_name);
+            rt.qualified_name = d->qualified_name; /* borrowed — d outlives this call */
+            rt.short_name = d->short_name;
             rt.is_interface = d->is_interface ||
                               strcmp(d->label, "Interface") == 0;
             rt.embedded_types = php_split_pipe(arena, d->embedded_types);
@@ -3776,8 +3776,8 @@ static void php_register_lsp_defs(CBMArena *arena, CBMTypeRegistry *reg,
         if (strcmp(d->label, "Function") == 0 || strcmp(d->label, "Method") == 0) {
             CBMRegisteredFunc rf;
             memset(&rf, 0, sizeof(rf));
-            rf.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
-            rf.short_name = cbm_arena_strdup(arena, d->short_name);
+            rf.qualified_name = d->qualified_name; /* borrowed */
+            rf.short_name = d->short_name;
 
             /* Build FUNC type from "|"-separated return-type texts. Each piece
              * is the unqualified return-type expression as it appears in the
@@ -3804,7 +3804,7 @@ static void php_register_lsp_defs(CBMArena *arena, CBMTypeRegistry *reg,
             rf.signature = cbm_type_func(arena, NULL, NULL, ret_types);
 
             if (strcmp(d->label, "Method") == 0 && d->receiver_type && d->receiver_type[0]) {
-                rf.receiver_type = cbm_arena_strdup(arena, d->receiver_type);
+                rf.receiver_type = d->receiver_type; /* borrowed */
                 /* Auto-register receiver type if cross-file def chain didn't
                  * include it explicitly, so php_lookup_method's chain walk
                  * has somewhere to land. */
@@ -3813,9 +3813,7 @@ static void php_register_lsp_defs(CBMArena *arena, CBMTypeRegistry *reg,
                     memset(&auto_t, 0, sizeof(auto_t));
                     auto_t.qualified_name = rf.receiver_type;
                     const char *dot = strrchr(d->receiver_type, '.');
-                    auto_t.short_name = dot
-                        ? cbm_arena_strdup(arena, dot + 1)
-                        : rf.receiver_type;
+                    auto_t.short_name = dot ? dot + 1 : rf.receiver_type; /* borrowed substring */
                     cbm_registry_add_type(reg, auto_t);
                 }
             }
@@ -3854,6 +3852,10 @@ void cbm_run_php_lsp_cross(
     cbm_registry_init(&reg, arena);
     cbm_php_stdlib_register(&reg, arena);
     php_register_lsp_defs(arena, &reg, defs, def_count);
+
+    /* Finalize registry — O(1) lookups. See go_lsp.c "3c. Finalize"
+     * comment for the rationale. */
+    cbm_registry_finalize(&reg);
 
     PHPLSPContext ctx;
     php_lsp_init(&ctx, arena, source, source_len, &reg, module_qn, out);

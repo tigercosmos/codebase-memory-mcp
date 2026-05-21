@@ -2926,6 +2926,10 @@ void cbm_run_cs_lsp_cross(CBMArena *arena, const char *source, int source_len,
     if (!tree) return;
     TSNode root = ts_tree_root_node(tree);
 
+    /* Finalize registry — O(1) lookups. See go_lsp.c "3c. Finalize"
+     * comment for the rationale. */
+    cbm_registry_finalize(&reg);
+
     CSLSPContext ctx;
     cs_lsp_init(&ctx, arena, source, source_len, &reg, module_qn, out);
 

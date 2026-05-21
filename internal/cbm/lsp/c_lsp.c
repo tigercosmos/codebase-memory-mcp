@@ -4582,8 +4582,8 @@ void cbm_run_c_lsp_cross(
                          strcmp(d->label, "Interface") == 0)) {
             CBMRegisteredType rt;
             memset(&rt, 0, sizeof(rt));
-            rt.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
-            rt.short_name = cbm_arena_strdup(arena, d->short_name);
+            rt.qualified_name = d->qualified_name; /* borrowed — d outlives this call */
+            rt.short_name = d->short_name;
             rt.is_interface = d->is_interface;
 
             // Embedded/base types
@@ -4649,8 +4649,8 @@ void cbm_run_c_lsp_cross(
             CBMRegisteredFunc rf;
             memset(&rf, 0, sizeof(rf));
             rf.min_params = -1;
-            rf.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
-            rf.short_name = cbm_arena_strdup(arena, d->short_name);
+            rf.qualified_name = d->qualified_name; /* borrowed */
+            rf.short_name = d->short_name;
 
             const char* def_module = d->def_module_qn ? d->def_module_qn : module_qn;
 
@@ -4678,7 +4678,7 @@ void cbm_run_c_lsp_cross(
             if (!rf.signature) rf.signature = cbm_type_func(arena, NULL, NULL, NULL);
 
             if (d->receiver_type) {
-                rf.receiver_type = cbm_arena_strdup(arena, d->receiver_type);
+                rf.receiver_type = d->receiver_type; /* borrowed */
             }
 
             cbm_registry_add_func(&reg, rf);
@@ -4702,6 +4702,10 @@ void cbm_run_c_lsp_cross(
     }
 
     TSNode root = ts_tree_root_node(tree);
+
+    // Finalize registry — O(1) lookups. See go_lsp.c "3c. Finalize"
+    // comment for the rationale (linear-scan fallback otherwise).
+    cbm_registry_finalize(&reg);
 
     // Initialize context and run
     CLSPContext ctx;

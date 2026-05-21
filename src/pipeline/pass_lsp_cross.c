@@ -125,7 +125,8 @@ static const char *pxc_join_pipe(CBMArena *arena, const char *const *items) {
  * to skip (unsupported label or missing required field). dst gets borrowed
  * pointers into src and into `arena` for synthesised composites. */
 static int pxc_build_lsp_def(CBMArena *arena, const CBMDefinition *src,
-                              const char *module_qn, CBMLSPDef *dst) {
+                              const char *module_qn, CBMLanguage lang,
+                              CBMLSPDef *dst) {
     const char *label = pxc_map_label(src->label);
     if (!label || !src->qualified_name || !src->name) return -1;
     memset(dst, 0, sizeof(*dst));
@@ -141,6 +142,7 @@ static int pxc_build_lsp_def(CBMArena *arena, const CBMDefinition *src,
      * piece, which is what's already stored. */
     dst->return_types = src->return_type;
     dst->embedded_types = pxc_join_pipe(arena, src->base_classes);
+    dst->lang = lang;
     return 0;
 }
 
@@ -174,6 +176,7 @@ CBMLSPDef *cbm_pxc_collect_all_defs(CBMFileResult **cache,
             if (pxc_build_lsp_def(&cache[fi]->arena,
                                    &cache[fi]->defs.items[di],
                                    def_modules[fi],
+                                   files[fi].language,
                                    &defs[idx]) == 0) {
                 idx++;
             }

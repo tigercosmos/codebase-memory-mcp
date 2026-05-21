@@ -3111,6 +3111,7 @@ void cbm_run_py_lsp_cross(
     CBMTypeRegistry reg;
     cbm_registry_init(&reg, arena);
     cbm_python_stdlib_register(&reg, arena);
+    /* per-file path: defs[] already filtered by caller, no lang-check needed */
     py_register_lsp_defs(arena, &reg, defs, def_count);
 
     /* Finalize registry — O(1) lookups. See go_lsp.c "3c. Finalize"
@@ -3119,6 +3120,63 @@ void cbm_run_py_lsp_cross(
 
     PyLSPContext ctx;
     py_lsp_init(&ctx, arena, source, source_len, &reg, module_qn, out);
+    for (int i = 0; i < import_count; i++) {
+        if (import_names && import_qns && import_names[i] && import_qns[i]) {
+            py_lsp_add_import(&ctx, import_names[i], import_qns[i]);
+        }
+    }
+    py_lsp_process_file(&ctx, root);
+
+    if (owns_tree && tree) ts_tree_delete(tree);
+    if (parser) ts_parser_delete(parser);
+}
+
+/* ── Tier 2: pre-built per-language registry (mirrors Go pilot) ── */
+CBMTypeRegistry* cbm_py_build_cross_registry(
+    CBMArena* arena, CBMLSPDef* defs, int def_count) {
+    if (!arena) return NULL;
+    CBMTypeRegistry* reg = (CBMTypeRegistry*)cbm_arena_alloc(arena, sizeof(*reg));
+    if (!reg) return NULL;
+    cbm_registry_init(reg, arena);
+    cbm_python_stdlib_register(reg, arena);
+
+    /* Filter to Python defs only — defs[] is mixed-language all_defs. */
+    for (int i = 0; i < def_count; i++) {
+        CBMLSPDef* d = &defs[i];
+        if (d->lang != CBM_LANG_PYTHON) continue;
+        /* Reuse the existing register fn on a single-def slice (n=1 inline). */
+        py_register_lsp_defs(arena, reg, d, 1);
+    }
+
+    cbm_registry_finalize(reg);
+    return reg;
+}
+
+void cbm_run_py_lsp_cross_with_registry(
+    CBMArena* arena,
+    const char* source, int source_len,
+    const char* module_qn,
+    CBMTypeRegistry* reg,
+    const char** import_names, const char** import_qns, int import_count,
+    TSTree* cached_tree,
+    CBMResolvedCallArray* out) {
+    if (!arena || !source || source_len <= 0 || !out || !reg) return;
+
+    TSParser* parser = NULL;
+    TSTree* tree = cached_tree;
+    bool owns_tree = false;
+    if (!tree) {
+        parser = ts_parser_new();
+        if (!parser) return;
+        ts_parser_set_language(parser, tree_sitter_python());
+        tree = ts_parser_parse_string(parser, NULL, source, (uint32_t)source_len);
+        owns_tree = true;
+        if (!tree) { ts_parser_delete(parser); return; }
+    }
+    TSNode root = ts_tree_root_node(tree);
+
+    PyLSPContext ctx;
+    py_lsp_init(&ctx, arena, source, source_len, reg, module_qn, out);
     for (int i = 0; i < import_count; i++) {
         if (import_names && import_qns && import_names[i] && import_qns[i]) {
             py_lsp_add_import(&ctx, import_names[i], import_qns[i]);

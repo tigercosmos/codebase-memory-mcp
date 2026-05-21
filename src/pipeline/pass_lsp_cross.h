@@ -93,6 +93,43 @@ CBMLSPDef *cbm_pxc_filter_defs_for_file(const CBMModuleDefIndex *idx,
                                         int imp_count,
                                         int *out_count);
 
+/* ── Tier 2 full: pre-built per-language cross-LSP registries ─────
+ *
+ * Each non-NULL registry is built ONCE in pipeline.c (in a dedicated
+ * cross_lsp_arena), finalized, and shared READ-ONLY across all
+ * resolve workers for files of that language. The worker uses the
+ * matching cbm_run_X_lsp_cross_with_registry variant which skips the
+ * per-file registry build entirely. NULL → fall back to the per-file
+ * cbm_pxc_run_one path. */
+typedef struct {
+    CBMTypeRegistry *go;     /* CBM_LANG_GO */
+    CBMTypeRegistry *c;      /* CBM_LANG_C, CBM_LANG_CPP, CBM_LANG_CUDA */
+    CBMTypeRegistry *python; /* CBM_LANG_PYTHON */
+    CBMTypeRegistry *ts;     /* CBM_LANG_JAVASCRIPT, TYPESCRIPT, TSX */
+    CBMTypeRegistry *php;    /* CBM_LANG_PHP */
+    CBMTypeRegistry *cs;     /* CBM_LANG_CSHARP */
+} CBMCrossLspRegistries;
+
+/* Return the appropriate pre-built registry for a language, or NULL
+ * if none was built (or language has no cross-LSP entrypoint). */
+static inline CBMTypeRegistry *cbm_pxc_registry_for_lang(
+    const CBMCrossLspRegistries *r, CBMLanguage lang) {
+    if (!r) return NULL;
+    switch (lang) {
+    case CBM_LANG_GO:         return r->go;
+    case CBM_LANG_C:          /* fallthrough */
+    case CBM_LANG_CPP:        /* fallthrough */
+    case CBM_LANG_CUDA:       return r->c;
+    case CBM_LANG_PYTHON:     return r->python;
+    case CBM_LANG_JAVASCRIPT: /* fallthrough */
+    case CBM_LANG_TYPESCRIPT: /* fallthrough */
+    case CBM_LANG_TSX:        return r->ts;
+    case CBM_LANG_PHP:        return r->php;
+    case CBM_LANG_CSHARP:     return r->cs;
+    default:                  return NULL;
+    }
+}
+
 /* Run the cross-file LSP resolver for non-TS languages. Appends
  * resolved CALLS into r->resolved_calls (lives in r->arena). Caller
  * owns source, module_qn, all_defs, imp_keys, imp_vals.

@@ -369,6 +369,9 @@ int cbm_build_registry_from_cache(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t
  * pulling the pass header into every consumer of pipeline_internal.h. */
 struct CBMModuleDefIndex;
 
+/* Forward-declared in pass_lsp_cross.h. */
+struct CBMCrossLspRegistries;
+
 int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count,
                          CBMFileResult **result_cache, _Atomic int64_t *shared_ids,
                          int worker_count,
@@ -378,11 +381,15 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
                           * worker forwards them to). Pass NULL/0/NULL to skip. */
                          CBMLSPDef *all_defs, int def_count,
                          char *const *def_modules,
-                         /* Optional inverted index module_qn → defs[] — when
-                          * present, the fused worker filters the global all_defs
-                          * down to just the per-file relevant subset (gopls pattern).
-                          * Pass NULL to disable filtering (each file sees all_defs). */
-                         struct CBMModuleDefIndex *module_def_index);
+                         /* Optional inverted index module_qn → defs[] — fallback
+                          * path when there's no pre-built registry for this lang. */
+                         struct CBMModuleDefIndex *module_def_index,
+                         /* Optional Tier 2 full: pre-built per-language registries.
+                          * For each language with a non-NULL entry, workers use the
+                          * cbm_run_X_lsp_cross_with_registry fast path (skip per-
+                          * file registry build entirely). Falls back to the filter
+                          * + per-file build path when entry is NULL or struct is NULL. */
+                         struct CBMCrossLspRegistries *cross_registries);
 
 /* Post-merge: create Route nodes for HTTP_CALLS/ASYNC_CALLS edges that
  * have url_path in properties but point to library functions instead of routes.

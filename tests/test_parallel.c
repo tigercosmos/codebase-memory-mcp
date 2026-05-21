@@ -153,7 +153,8 @@ static cbm_gbuf_t *run_parallel(const char *project, const char *repo_path, cbm_
 
     cbm_parallel_resolve(&ctx, files, file_count, result_cache, &shared_ids,
                          worker_count, all_defs, def_count, def_modules,
-                         module_def_index);
+                         module_def_index,
+                         NULL /* cross_registries — tests use per-file path */);
     cbm_gbuf_set_next_id(gbuf, atomic_load(&shared_ids));
 
     cbm_pxc_free_module_def_index(module_def_index);

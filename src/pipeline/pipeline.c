@@ -597,15 +597,30 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
      * smaller per file. */
     CBMModuleDefIndex *module_def_index =
         all_defs ? cbm_pxc_build_module_def_index(all_defs, def_count) : NULL;
+    /* Tier 2 full: pre-build per-language cross-LSP registries.
+     * Built ONCE here; shared READ-ONLY across all files of that language
+     * during resolve. Per-file work is then: parse + AST walk + O(1) lookups
+     * — no registry build, no Phase 1b mutations. Languages added so far:
+     * Go, Python. Others (C/C++, TS/JS, PHP, C#) fall back to per-file. */
+    CBMArena cross_lsp_arena;
+    cbm_arena_init(&cross_lsp_arena);
+    CBMCrossLspRegistries cross_registries = {0};
+    if (all_defs) {
+        cross_registries.go =
+            cbm_go_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
+        cross_registries.python =
+            cbm_py_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
+    }
     cbm_log_info("pass.timing", "pass", "lsp_cross_prepare", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(*t)));
     cbm_clock_gettime(CLOCK_MONOTONIC, t);
     rc = cbm_parallel_resolve(ctx, files, file_count, cache, &shared_ids,
                               worker_count, all_defs, def_count, def_modules,
-                              module_def_index);
+                              module_def_index, &cross_registries);
     cbm_log_info("pass.timing", "pass", "parallel_resolve", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(*t)));
     cbm_pxc_free_module_def_index(module_def_index);
+    cbm_arena_destroy(&cross_lsp_arena); /* releases all per-lang registries */
     free(all_defs);
     if (def_modules) {
         for (int i = 0; i < file_count; i++) {

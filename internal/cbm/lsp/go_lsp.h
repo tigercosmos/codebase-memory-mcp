@@ -81,6 +81,7 @@ typedef struct {
     const char* field_defs;     // "|"-separated "name:type" pairs (for struct fields, e.g. "Binder:Binder|Name:string")
     const char* method_names_str; // "|"-separated method names for interfaces (e.g. "Get|Put|Delete")
     bool is_interface;
+    CBMLanguage lang;           // language of the file that defined this — used by Tier 2 per-language registry build to filter all_defs
 } CBMLSPDef;
 
 // Parse source, build registry from defs + stdlib, run LSP.
@@ -93,6 +94,24 @@ void cbm_run_go_lsp_cross(
     const char* source, int source_len,
     const char* module_qn,
     CBMLSPDef* defs, int def_count,
+    const char** import_names, const char** import_qns, int import_count,
+    TSTree* cached_tree,           // NULL = parse internally
+    CBMResolvedCallArray* out);
+
+/* Tier 2 (gopls package-summary pattern):
+ * Build a project-wide, finalized CBMTypeRegistry from all Go defs ONCE.
+ * Run cross-file LSP per file using that shared registry — no per-file
+ * registry build, O(1) lookups, no Phase 1b/1c mutations. Reg is borrowed
+ * from arena (arena owns the storage); reg pointer is valid for arena
+ * lifetime. */
+CBMTypeRegistry* cbm_go_build_cross_registry(
+    CBMArena* arena, CBMLSPDef* defs, int def_count);
+
+void cbm_run_go_lsp_cross_with_registry(
+    CBMArena* arena,
+    const char* source, int source_len,
+    const char* module_qn,
+    CBMTypeRegistry* reg,          // pre-built, finalized, READ-ONLY
     const char** import_names, const char** import_qns, int import_count,
     TSTree* cached_tree,           // NULL = parse internally
     CBMResolvedCallArray* out);

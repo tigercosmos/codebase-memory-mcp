@@ -2709,6 +2709,124 @@ void cbm_run_go_lsp_cross(
     }
 }
 
+/* ── Tier 2: pre-built per-language registry (gopls package summary pattern) ──
+ *
+ * cbm_go_build_cross_registry runs the registry build ONCE per project (in
+ * pipeline.c, before the parallel resolve workers fire). The returned
+ * registry is finalized (O(1) lookups) and shared READ-ONLY across all
+ * workers in the resolve phase.
+ *
+ * cbm_run_go_lsp_cross_with_registry is the per-file entrypoint used by
+ * the resolve worker. It SKIPS the registry build (uses the pre-built reg)
+ * AND skips Phase 1b/1c AST scans (those mutate the registry, which would
+ * race with other workers reading the shared reg). Accuracy trade-off:
+ * file-local type aliases and struct embeddings discovered ONLY by Phase
+ * 1b (and not already in defs[] embedded_types/field_defs strings) are
+ * missed. In practice the per-file LSP during extract already captures
+ * those via the def strings. */
+CBMTypeRegistry* cbm_go_build_cross_registry(
+    CBMArena* arena, CBMLSPDef* defs, int def_count) {
+    if (!arena) return NULL;
+    CBMTypeRegistry* reg = (CBMTypeRegistry*)cbm_arena_alloc(arena, sizeof(*reg));
+    if (!reg) return NULL;
+    cbm_registry_init(reg, arena);
+    cbm_go_stdlib_register(reg, arena);
+
+    for (int i = 0; i < def_count; i++) {
+        CBMLSPDef* d = &defs[i];
+        if (!d->qualified_name || !d->short_name || !d->label) continue;
+        /* Filter to Go defs only — the all_defs[] array is mixed-language. */
+        if (d->lang != CBM_LANG_GO) continue;
+        /* In the pre-built path every def carries its own def_module_qn
+         * (set by cbm_pxc_collect_all_defs). There is no caller module to
+         * fall back to — this registry is project-wide, not per-file. */
+        const char* def_mod = d->def_module_qn ? d->def_module_qn : "";
+
+        if (strcmp(d->label, "Type") == 0 || strcmp(d->label, "Class") == 0 ||
+            strcmp(d->label, "Interface") == 0) {
+            CBMRegisteredType rt;
+            memset(&rt, 0, sizeof(rt));
+            rt.qualified_name = d->qualified_name; /* borrowed */
+            rt.short_name = d->short_name;
+            rt.is_interface = d->is_interface || strcmp(d->label, "Interface") == 0;
+            rt.embedded_types = split_pipe_strings(arena, d->embedded_types);
+            if (rt.is_interface && d->method_names_str && d->method_names_str[0]) {
+                rt.method_names = split_pipe_strings(arena, d->method_names_str);
+            }
+            cbm_registry_add_type(reg, rt);
+            if (d->field_defs && d->field_defs[0]) {
+                parse_field_defs_into_type(arena, reg, rt.qualified_name,
+                                           d->field_defs, def_mod);
+            }
+        }
+
+        if (strcmp(d->label, "Function") == 0 || strcmp(d->label, "Method") == 0) {
+            CBMRegisteredFunc rf;
+            memset(&rf, 0, sizeof(rf));
+            rf.qualified_name = d->qualified_name; /* borrowed */
+            rf.short_name = d->short_name;
+            const CBMType** ret_types = split_pipe_types(arena, d->return_types, def_mod);
+            rf.signature = cbm_type_func(arena, NULL, NULL, ret_types);
+            if (strcmp(d->label, "Method") == 0 && d->receiver_type && d->receiver_type[0]) {
+                rf.receiver_type = d->receiver_type;
+                if (!cbm_registry_lookup_type(reg, rf.receiver_type)) {
+                    CBMRegisteredType auto_type;
+                    memset(&auto_type, 0, sizeof(auto_type));
+                    auto_type.qualified_name = rf.receiver_type;
+                    const char* dot = strrchr(d->receiver_type, '.');
+                    auto_type.short_name = dot ? dot + 1 : rf.receiver_type;
+                    cbm_registry_add_type(reg, auto_type);
+                }
+            }
+            cbm_registry_add_func(reg, rf);
+        }
+    }
+
+    cbm_registry_finalize(reg);
+    return reg;
+}
+
+void cbm_run_go_lsp_cross_with_registry(
+    CBMArena* arena,
+    const char* source, int source_len,
+    const char* module_qn,
+    CBMTypeRegistry* reg,
+    const char** import_names, const char** import_qns, int import_count,
+    TSTree* cached_tree,
+    CBMResolvedCallArray* out) {
+    if (!source || source_len <= 0 || !reg) return;
+
+    TSParser* parser = NULL;
+    TSTree* tree = cached_tree;
+    bool owns_tree = false;
+    if (!tree) {
+        parser = ts_parser_new();
+        if (!parser) return;
+        ts_parser_set_language(parser, tree_sitter_go());
+        tree = ts_parser_parse_string(parser, NULL, source, source_len);
+        owns_tree = true;
+        if (!tree) { ts_parser_delete(parser); return; }
+    }
+    TSNode root = ts_tree_root_node(tree);
+
+    /* Phase 1b/1c (per-file AST mutations on registry) DELIBERATELY SKIPPED —
+     * shared registry must stay immutable across parallel workers. */
+
+    GoLSPContext ctx;
+    go_lsp_init(&ctx, arena, source, source_len, reg, module_qn, out);
+    for (int i = 0; i < import_count; i++) {
+        if (import_names[i] && import_qns[i]) {
+            go_lsp_add_import(&ctx, import_names[i], import_qns[i]);
+        }
+    }
+    go_lsp_process_file(&ctx, root);
+
+    if (owns_tree) {
+        ts_tree_delete(tree);
+        if (parser) ts_parser_delete(parser);
+    }
+}
+
 // --- Batch cross-file LSP ---
 
 void cbm_batch_go_lsp_cross(

@@ -896,6 +896,10 @@ typedef struct {
      * to shrink the def array passed to the LSP from O(all_defs) to
      * O(relevant_defs). NULL → each file sees the full all_defs[]. */
     struct CBMModuleDefIndex *module_def_index;
+    /* Tier 2 full: pre-built per-language registries (project-wide,
+     * finalized, READ-ONLY). When non-NULL for a lang, the worker uses
+     * cbm_run_X_lsp_cross_with_registry — skip per-file build entirely. */
+    struct CBMCrossLspRegistries *cross_registries;
 
     /* Counters for parallel.resolve.lsp_cross_done summary. */
     _Atomic int lsp_cross_processed;
@@ -1822,39 +1826,69 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                     ? rc->def_modules[file_idx]
                     : module_qn;
 
-                /* gopls pattern: filter all_defs down to just the defs
-                 * this file actually needs (own_module + imp_vals
-                 * imported modules). For a typical file with ~10
-                 * imports, this slashes the per-file registry-build
-                 * cost from O(all_defs) to O(relevant_defs) — usually
-                 * 50-100× smaller. */
-                CBMLSPDef *file_defs = rc->all_defs;
-                int file_def_count = rc->def_count;
-                CBMLSPDef *filtered = NULL;
-                if (rc->module_def_index) {
-                    int filtered_count = 0;
-                    filtered = cbm_pxc_filter_defs_for_file(
-                        rc->module_def_index, rc->all_defs,
-                        def_module, imp_vals, imp_count,
-                        &filtered_count);
-                    if (filtered) {
-                        file_defs = filtered;
-                        file_def_count = filtered_count;
+                uint64_t lsp_t0 = extract_now_ns();
+
+                /* Tier 2 full fast path: pre-built per-language registry.
+                 * When available, skip the per-file registry build entirely
+                 * and pass the shared finalized registry. Dispatch per-lang
+                 * to the appropriate _with_registry variant. */
+                bool used_prebuilt = false;
+                CBMTypeRegistry *prebuilt =
+                    cbm_pxc_registry_for_lang(rc->cross_registries, lang);
+                if (prebuilt) {
+                    switch (lang) {
+                    case CBM_LANG_GO:
+                        cbm_run_go_lsp_cross_with_registry(
+                            &result->arena, result->source, result->source_len,
+                            def_module, prebuilt,
+                            imp_keys, imp_vals, imp_count,
+                            result->cached_tree, &result->resolved_calls);
+                        used_prebuilt = true;
+                        break;
+                    case CBM_LANG_PYTHON:
+                        cbm_run_py_lsp_cross_with_registry(
+                            &result->arena, result->source, result->source_len,
+                            def_module, prebuilt,
+                            imp_keys, imp_vals, imp_count,
+                            result->cached_tree, &result->resolved_calls);
+                        used_prebuilt = true;
+                        break;
+                    /* C/C++/CUDA, TS/JS/TSX, PHP, C# fall through to the
+                     * per-file build path below until their _with_registry
+                     * variants are added in follow-up commits. */
+                    default:
+                        break;
                     }
                 }
 
-                uint64_t lsp_t0 = extract_now_ns();
-                if (lang == CBM_LANG_JAVASCRIPT || lang == CBM_LANG_TYPESCRIPT ||
-                    lang == CBM_LANG_TSX) {
-                    bool js, jsx, dts;
-                    cbm_pxc_ts_modes(lang, rel, &js, &jsx, &dts);
-                    cbm_pxc_run_one_ts(result, result->source, result->source_len,
-                                       def_module, file_defs, file_def_count,
-                                       imp_keys, imp_vals, imp_count, js, jsx, dts);
-                } else {
-                    cbm_pxc_run_one(lang, result, result->source, result->source_len,
-                                    def_module, file_defs, file_def_count,
-                                    imp_keys, imp_vals, imp_count);
+                CBMLSPDef *filtered = NULL;
+                if (!used_prebuilt) {
+                    /* Fallback: gopls per-file filter + per-file registry build. */
+                    CBMLSPDef *file_defs = rc->all_defs;
+                    int file_def_count = rc->def_count;
+                    if (rc->module_def_index) {
+                        int filtered_count = 0;
+                        filtered = cbm_pxc_filter_defs_for_file(
+                            rc->module_def_index, rc->all_defs,
+                            def_module, imp_vals, imp_count,
+                            &filtered_count);
+                        if (filtered) {
+                            file_defs = filtered;
+                            file_def_count = filtered_count;
+                        }
+                    }
+                    if (lang == CBM_LANG_JAVASCRIPT || lang == CBM_LANG_TYPESCRIPT ||
+                        lang == CBM_LANG_TSX) {
+                        bool js, jsx, dts;
+                        cbm_pxc_ts_modes(lang, rel, &js, &jsx, &dts);
+                        cbm_pxc_run_one_ts(result, result->source, result->source_len,
+                                           def_module, file_defs, file_def_count,
+                                           imp_keys, imp_vals, imp_count, js, jsx, dts);
+                    } else {
+                        cbm_pxc_run_one(lang, result, result->source, result->source_len,
+                                        def_module, file_defs, file_def_count,
+                                        imp_keys, imp_vals, imp_count);
+                    }
                 }
                 free(filtered);
                 cbm_slab_reclaim();
@@ -1896,7 +1930,8 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
                          CBMFileResult **result_cache, _Atomic int64_t *shared_ids,
                          int worker_count, CBMLSPDef *all_defs, int def_count,
                          char *const *def_modules,
-                         struct CBMModuleDefIndex *module_def_index) {
+                         struct CBMModuleDefIndex *module_def_index,
+                         struct CBMCrossLspRegistries *cross_registries) {
     if (file_count == 0) {
         return 0;
     }
@@ -1927,6 +1962,7 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
         .def_count = def_count,
         .def_modules = def_modules,
         .module_def_index = module_def_index,
+        .cross_registries = cross_registries,
     };
     atomic_init(&rc.next_file_idx, 0);
     atomic_init(&rc.lsp_cross_processed, 0);

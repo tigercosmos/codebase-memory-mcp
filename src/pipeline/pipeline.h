@@ -139,6 +139,22 @@ cbm_resolution_t cbm_registry_resolve(const cbm_registry_t *r, const char *calle
 void cbm_registry_reach_cache_begin(int estimated_capacity);
 void cbm_registry_reach_cache_end(void);
 
+/* Per-file import-map prefix → module-QN hash. Turns the linear
+ * strcmp scan inside resolve_import_map into O(1). Keys/values are
+ * BORROWED — caller must keep the import_map arrays alive for the
+ * cache lifetime. Invalidate between files via _end. */
+void cbm_registry_import_map_cache_begin(const char **keys, const char **vals, int count);
+void cbm_registry_import_map_cache_end(void);
+
+/* Per-file full-result cache for cbm_registry_resolve. The same
+ * callee_name appears in many call sites within a file; module_qn
+ * is constant per file so each name resolves identically. First
+ * lookup does the full strategy chain; repeats are O(1) hash hits.
+ * This eliminates ~75% of the resolve-chain work on K8s where the
+ * same names ("Get", "Add", "New", etc) appear hundreds of times. */
+void cbm_registry_resolve_cache_begin(int estimated_capacity);
+void cbm_registry_resolve_cache_end(void);
+
 /* Check if a qualified name exists in the registry. */
 bool cbm_registry_exists(const cbm_registry_t *r, const char *qn);
 

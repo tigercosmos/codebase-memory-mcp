@@ -925,6 +925,15 @@ typedef struct {
      * cbm_parallel_for synchronization barrier at the end. */
     _Atomic uint64_t time_ns_total_loop;
     _Atomic int      total_files_visited;
+    /* Sub-breakdowns inside resolve_file_calls — finds the 553µs-per-
+     * iteration hot path that the high-level resolve_calls counter
+     * doesn't pinpoint. */
+    _Atomic uint64_t time_ns_rc_lsp_lookup;     /* lsp_idx + fallback scan */
+    _Atomic uint64_t time_ns_rc_resolve;        /* lsp_target_node OR registry_resolve */
+    _Atomic uint64_t time_ns_rc_hint;           /* try_field_type_hint */
+    _Atomic uint64_t time_ns_rc_target;         /* gbuf_find_by_qn for target */
+    _Atomic uint64_t time_ns_rc_emit;           /* emit_service_edge */
+    _Atomic uint64_t time_ns_rc_source;         /* find_source_node */
 } resolve_ctx_t;
 
 /* Minimum buffer space needed per arg JSON object */
@@ -1592,8 +1601,10 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
         if (!call->callee_name) {
             continue;
         }
+        uint64_t _rc_t0 = extract_now_ns();
         const cbm_gbuf_node_t *source_node =
             find_source_node(rc->main_gbuf, rc->project_name, rel, call->enclosing_func_qn);
+        atomic_fetch_add_explicit(&rc->time_ns_rc_source, extract_now_ns() - _rc_t0, memory_order_relaxed);
         if (!source_node) {
             continue;
         }
@@ -1605,6 +1616,7 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
          * depending on whether parallel mode kicked in. */
         cbm_resolution_t res = {0};
         const CBMResolvedCall *lsp = NULL;
+        _rc_t0 = extract_now_ns();
         if (lsp_idx && call->enclosing_func_qn) {
             char key[1024];
             int kn = snprintf(key, sizeof(key), "%s|%s",
@@ -1619,6 +1631,9 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
              * name). Keeps semantics identical. */
             lsp = cbm_pipeline_find_lsp_resolution(&result->resolved_calls, call);
         }
+        atomic_fetch_add_explicit(&rc->time_ns_rc_lsp_lookup, extract_now_ns() - _rc_t0, memory_order_relaxed);
+        _rc_t0 = extract_now_ns();
+        const cbm_gbuf_node_t *lsp_target = NULL;
         if (lsp) {
             /* Canonicalise to the gbuf node's QN so res.qualified_name matches
              * the gbuf even when the cross-file fallback had to prefix the
@@ -1626,7 +1641,7 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
              * empty — the LSP was confident but its target isn't in the gbuf
              * (external/unindexed), so drop the edge rather than fall back to
              * the registry resolver, matching prior single-lookup semantics. */
-            const cbm_gbuf_node_t *lsp_target =
+            lsp_target =
                 cbm_pipeline_lsp_target_node(rc->main_gbuf, rc->project_name, lsp->callee_qn);
             if (lsp_target) {
                 res.qualified_name = lsp_target->qualified_name;
@@ -1639,8 +1654,11 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
             res = cbm_registry_resolve(rc->registry, call->callee_name, module_qn,
                                        imp_keys, imp_vals, imp_count);
         }
+        atomic_fetch_add_explicit(&rc->time_ns_rc_resolve, extract_now_ns() - _rc_t0, memory_order_relaxed);
 
+        _rc_t0 = extract_now_ns();
         try_field_type_hint(rc, &res, call->callee_name, source_node->id);
+        atomic_fetch_add_explicit(&rc->time_ns_rc_hint, extract_now_ns() - _rc_t0, memory_order_relaxed);
 
         if (!res.qualified_name || res.qualified_name[0] == '\0') {
             if (cbm_service_pattern_route_method(call->callee_name) != NULL) {
@@ -1653,12 +1671,25 @@ static void resolve_file_calls(resolve_ctx_t *rc, resolve_worker_state_t *ws, CB
             }
             continue;
         }
-        const cbm_gbuf_node_t *target_node = cbm_gbuf_find_by_qn(rc->main_gbuf, res.qualified_name);
+        /* Reuse lsp_target as target_node when LSP resolved — avoids a
+         * second cbm_gbuf_find_by_qn lookup. try_field_type_hint may have
+         * upgraded res.qualified_name to a different candidate, in which
+         * case we must re-resolve. */
+        _rc_t0 = extract_now_ns();
+        const cbm_gbuf_node_t *target_node;
+        if (lsp_target && res.qualified_name == lsp_target->qualified_name) {
+            target_node = lsp_target;
+        } else {
+            target_node = cbm_gbuf_find_by_qn(rc->main_gbuf, res.qualified_name);
+        }
+        atomic_fetch_add_explicit(&rc->time_ns_rc_target, extract_now_ns() - _rc_t0, memory_order_relaxed);
         if (!target_node || source_node->id == target_node->id) {
             continue;
         }
+        _rc_t0 = extract_now_ns();
         emit_service_edge(ws->local_edge_buf, source_node, target_node, call, &res, module_qn,
                           rc->registry, rc->main_gbuf, imp_keys, imp_vals, imp_count);
+        atomic_fetch_add_explicit(&rc->time_ns_rc_emit, extract_now_ns() - _rc_t0, memory_order_relaxed);
         ws->calls_resolved++;
     }
     if (lsp_idx) {
@@ -1946,6 +1977,20 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
          * cache is sound; invalidated at file exit. */
         cbm_registry_reach_cache_begin(result->calls.count + result->usages.count + 64);
 
+        /* Per-file import-map prefix → module-qn hash. resolve_import_map
+         * was doing O(imports) linear strcmp per call; with this it
+         * becomes O(1). Keys/values borrowed from imp_keys/imp_vals
+         * which outlive this scope. */
+        cbm_registry_import_map_cache_begin(imp_keys, imp_vals, imp_count);
+
+        /* THE BIG ONE: per-file cache of cbm_registry_resolve results.
+         * Same callee_name in multiple call sites resolves identically
+         * within a file (module_qn is fixed) — first call walks the
+         * strategy chain, repeats are O(1). On K8s this targets the
+         * 98.7% hot spot in resolve_file_calls (881 of 893s CPU). */
+        cbm_registry_resolve_cache_begin(
+            result->calls.count + result->usages.count + 64);
+
         char *module_qn = cbm_pipeline_fqn_module(rc->project_name, rel);
 
         /* ── Cross-file LSP (FUSED) ─────────────────────────────
@@ -2092,6 +2137,8 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
         atomic_fetch_add_explicit(&rc->time_ns_semantic, extract_now_ns() - _ph_t0, memory_order_relaxed);
 
         cbm_registry_reach_cache_end();
+        cbm_registry_import_map_cache_end();
+        cbm_registry_resolve_cache_end();
 
         free(module_qn);
         free_import_map(imp_keys, imp_vals, imp_count);
@@ -2247,5 +2294,33 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
                  "resolve_throws", thr_buf,
                  "resolve_rw", rw_buf,
                  "resolve_semantic", sem_buf);
+
+    char src_buf[32], lsp_buf[32], rsv_buf[32], hnt_buf[32], tgt_buf[32], emt_buf[32];
+    snprintf(src_buf, sizeof(src_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_rc_source,
+                                                       memory_order_relaxed) / 1000000ULL));
+    snprintf(lsp_buf, sizeof(lsp_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_rc_lsp_lookup,
+                                                       memory_order_relaxed) / 1000000ULL));
+    snprintf(rsv_buf, sizeof(rsv_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_rc_resolve,
+                                                       memory_order_relaxed) / 1000000ULL));
+    snprintf(hnt_buf, sizeof(hnt_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_rc_hint,
+                                                       memory_order_relaxed) / 1000000ULL));
+    snprintf(tgt_buf, sizeof(tgt_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_rc_target,
+                                                       memory_order_relaxed) / 1000000ULL));
+    snprintf(emt_buf, sizeof(emt_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_rc_emit,
+                                                       memory_order_relaxed) / 1000000ULL));
+    cbm_log_info("parallel.resolve.calls_breakdown",
+                 "find_source", src_buf,
+                 "lsp_lookup", lsp_buf,
+                 "resolve", rsv_buf);
+    cbm_log_info("parallel.resolve.calls_breakdown2",
+                 "field_hint", hnt_buf,
+                 "find_target", tgt_buf,
+                 "emit_edge", emt_buf);
     return 0;
 }

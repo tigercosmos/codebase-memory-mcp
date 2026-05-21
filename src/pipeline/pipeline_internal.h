@@ -369,8 +369,9 @@ int cbm_build_registry_from_cache(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t
  * pulling the pass header into every consumer of pipeline_internal.h. */
 struct CBMModuleDefIndex;
 
-/* Forward-declared in pass_lsp_cross.h. */
-struct CBMCrossLspRegistries;
+/* cbm_parallel_resolve's cross_registries param is typed `void*` to avoid
+ * pulling lsp/go_lsp.h into every TU that includes pipeline_internal.h.
+ * Callers cast a CBMCrossLspRegistries* (defined in pass_lsp_cross.h). */
 
 int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count,
                          CBMFileResult **result_cache, _Atomic int64_t *shared_ids,
@@ -388,8 +389,10 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
                           * For each language with a non-NULL entry, workers use the
                           * cbm_run_X_lsp_cross_with_registry fast path (skip per-
                           * file registry build entirely). Falls back to the filter
-                          * + per-file build path when entry is NULL or struct is NULL. */
-                         struct CBMCrossLspRegistries *cross_registries);
+                          * + per-file build path when entry is NULL or struct is NULL.
+                          * Typed as void* here to dodge the typedef/tag ordering
+                          * problem — pass_parallel.c casts back to CBMCrossLspRegistries*. */
+                         void *cross_registries);
 
 /* Post-merge: create Route nodes for HTTP_CALLS/ASYNC_CALLS edges that
  * have url_path in properties but point to library functions instead of routes.

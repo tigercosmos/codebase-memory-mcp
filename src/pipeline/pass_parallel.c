@@ -898,8 +898,9 @@ typedef struct {
     struct CBMModuleDefIndex *module_def_index;
     /* Tier 2 full: pre-built per-language registries (project-wide,
      * finalized, READ-ONLY). When non-NULL for a lang, the worker uses
-     * cbm_run_X_lsp_cross_with_registry — skip per-file build entirely. */
-    struct CBMCrossLspRegistries *cross_registries;
+     * cbm_run_X_lsp_cross_with_registry — skip per-file build entirely.
+     * Stored as CBMCrossLspRegistries* (typedef from pass_lsp_cross.h). */
+    CBMCrossLspRegistries *cross_registries;
 
     /* Counters for parallel.resolve.lsp_cross_done summary. */
     _Atomic int lsp_cross_processed;
@@ -1781,13 +1782,22 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
         }
 
         CBMLanguage lang = rc->files[file_idx].language;
+        /* Cross-file LSP is a per-file tree-sitter re-parse + AST walk +
+         * registry lookups — ~50-150ms per file. It can ONLY find calls
+         * that exist in the AST. If the per-file extract found zero calls,
+         * cross-LSP will too: the AST is the same. And if every call is
+         * already resolved (resolved_calls.count >= calls.count), there's
+         * nothing left for cross-LSP to improve. Skip in both cases —
+         * pure perf win, zero semantic loss. This is the smart-pruning
+         * pre-condition that brings down kubernetes resolve time
+         * dramatically (most files have no cross-file calls left to
+         * resolve once per-file LSP has run). */
         bool cross_lsp_eligible =
-            (rc->all_defs && rc->def_count > 0 && cbm_pxc_has_cross_lsp(lang));
+            (rc->all_defs && rc->def_count > 0 && cbm_pxc_has_cross_lsp(lang) &&
+             result->calls.count > 0 &&
+             result->resolved_calls.count < result->calls.count);
 
-        /* Skip files with nothing to resolve. Cross-file LSP can find
-         * CALLS that the per-file extract missed (the whole point of
-         * the LSP method), so do NOT skip an LSP-eligible file just
-         * because its initial extract found no calls/defs/etc. */
+        /* Skip files with nothing else to resolve and no cross-LSP work. */
         if (result->calls.count == 0 && result->usages.count == 0 && result->throws.count == 0 &&
             result->rw.count == 0 && result->defs.count == 0 && result->impl_traits.count == 0 &&
             !cross_lsp_eligible) {
@@ -1931,7 +1941,9 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
                          int worker_count, CBMLSPDef *all_defs, int def_count,
                          char *const *def_modules,
                          struct CBMModuleDefIndex *module_def_index,
-                         struct CBMCrossLspRegistries *cross_registries) {
+                         void *cross_registries_v) {
+    /* See header: typed as void* across the TU boundary; cast back here. */
+    CBMCrossLspRegistries *cross_registries = (CBMCrossLspRegistries *)cross_registries_v;
     if (file_count == 0) {
         return 0;
     }

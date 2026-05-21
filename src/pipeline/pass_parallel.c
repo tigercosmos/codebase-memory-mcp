@@ -1782,6 +1782,31 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
         }
 
         CBMLanguage lang = rc->files[file_idx].language;
+        const char *rel = rc->files[file_idx].rel_path;
+
+        /* Skip cross-LSP for machine-generated files — they're huge (10k-
+         * 70k lines for k8s protobuf/openapi), have low semantic value for
+         * graph navigation (boilerplate getters/setters/marshal), and
+         * dominate the cross-LSP wall time when they have even one
+         * unresolved call (tree-sitter parse on a 70k-line file is ~1-2s).
+         * The per-file LSP during extract still indexes their defs/calls
+         * normally — only the cross-file resolution refinement is skipped. */
+        bool is_generated = false;
+        if (rel) {
+            is_generated =
+                (strstr(rel, ".pb.go") != NULL) ||
+                (strstr(rel, "zz_generated") != NULL) ||
+                (strstr(rel, "_generated.go") != NULL) ||
+                (strstr(rel, ".gen.go") != NULL) ||
+                (strstr(rel, "/applyconfigurations/") != NULL) ||
+                (strstr(rel, "_pb2.py") != NULL) ||
+                (strstr(rel, "_pb2_grpc.py") != NULL) ||
+                (strstr(rel, ".pb.cc") != NULL) ||
+                (strstr(rel, ".pb.h") != NULL) ||
+                (strstr(rel, ".pb-c.c") != NULL) ||
+                (strstr(rel, ".pb-c.h") != NULL);
+        }
+
         /* Cross-file LSP is a per-file tree-sitter re-parse + AST walk +
          * registry lookups — ~50-150ms per file. It can ONLY find calls
          * that exist in the AST. If the per-file extract found zero calls,
@@ -1795,7 +1820,8 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
         bool cross_lsp_eligible =
             (rc->all_defs && rc->def_count > 0 && cbm_pxc_has_cross_lsp(lang) &&
              result->calls.count > 0 &&
-             result->resolved_calls.count < result->calls.count);
+             result->resolved_calls.count < result->calls.count &&
+             !is_generated);
 
         /* Skip files with nothing else to resolve and no cross-LSP work. */
         if (result->calls.count == 0 && result->usages.count == 0 && result->throws.count == 0 &&

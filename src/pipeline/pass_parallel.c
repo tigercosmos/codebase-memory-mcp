@@ -906,6 +906,25 @@ typedef struct {
     /* Counters for parallel.resolve.lsp_cross_done summary. */
     _Atomic int lsp_cross_processed;
     _Atomic int lsp_cross_skipped_no_source;
+
+    /* Per-sub-phase timing (ns aggregated across workers) — surfaces
+     * exactly where parallel_resolve's wall time is spent so we stop
+     * guessing about hot paths. Logged once at the end of
+     * cbm_parallel_resolve. */
+    _Atomic uint64_t time_ns_import_map;
+    _Atomic uint64_t time_ns_cross_lsp;
+    _Atomic uint64_t time_ns_calls;
+    _Atomic uint64_t time_ns_usages;
+    _Atomic uint64_t time_ns_throws;
+    _Atomic uint64_t time_ns_rw;
+    _Atomic uint64_t time_ns_semantic;
+    /* Whole-iteration timer — captures everything from atomic file_idx
+     * pickup through cleanup. If this >> sum of sub-phases, the
+     * unmeasured cost is either in skip-eligibility checks, gbuf
+     * setup, or — most likely — workers waiting on the
+     * cbm_parallel_for synchronization barrier at the end. */
+    _Atomic uint64_t time_ns_total_loop;
+    _Atomic int      total_files_visited;
 } resolve_ctx_t;
 
 /* Minimum buffer space needed per arg JSON object */
@@ -1839,10 +1858,16 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
             break;
         }
 
+        uint64_t _loop_t0 = extract_now_ns();
+
         CBMFileResult *result = rc->result_cache[file_idx];
         if (!result) {
+            atomic_fetch_add_explicit(&rc->time_ns_total_loop,
+                                      extract_now_ns() - _loop_t0,
+                                      memory_order_relaxed);
             continue;
         }
+        atomic_fetch_add_explicit(&rc->total_files_visited, 1, memory_order_relaxed);
 
         CBMLanguage lang = rc->files[file_idx].language;
         const char *rel = rc->files[file_idx].rel_path;
@@ -1900,7 +1925,10 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
         const char **imp_keys = NULL;
         const char **imp_vals = NULL;
         int imp_count = 0;
+        uint64_t _imp_t0 = extract_now_ns();
         build_import_map(rc->main_gbuf, rc->project_name, rel, &imp_keys, &imp_vals, &imp_count);
+        atomic_fetch_add_explicit(&rc->time_ns_import_map,
+                                  extract_now_ns() - _imp_t0, memory_order_relaxed);
 
         char *module_qn = cbm_pipeline_fqn_module(rc->project_name, rel);
 
@@ -2002,7 +2030,10 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                 }
                 free(filtered);
                 cbm_slab_reclaim();
-                uint64_t lsp_elapsed_ms = (extract_now_ns() - lsp_t0) / PP_USEC_PER_MS;
+                uint64_t lsp_elapsed_ns = extract_now_ns() - lsp_t0;
+                atomic_fetch_add_explicit(&rc->time_ns_cross_lsp,
+                                          lsp_elapsed_ns, memory_order_relaxed);
+                uint64_t lsp_elapsed_ms = lsp_elapsed_ns / PP_USEC_PER_MS;
                 if (lsp_elapsed_ms > PP_TIMER_THRESH) {
                     cbm_log_info("parallel.resolve.lsp_cross.slow",
                                  "elapsed_ms", itoa_log((int)lsp_elapsed_ms),
@@ -2016,23 +2047,40 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
             }
         }
 
+        /* Per-sub-phase wall-clock so we can attribute the dominant cost. */
+        uint64_t _ph_t0;
+
         /* ── CALLS resolution ──────────────────────────────────── */
+        _ph_t0 = extract_now_ns();
         resolve_file_calls(rc, ws, result, rel, module_qn, imp_keys, imp_vals, imp_count);
+        atomic_fetch_add_explicit(&rc->time_ns_calls, extract_now_ns() - _ph_t0, memory_order_relaxed);
 
         /* ── USAGE resolution ──────────────────────────────────── */
+        _ph_t0 = extract_now_ns();
         resolve_file_usages(rc, ws, result, rel, module_qn, imp_keys, imp_vals, imp_count);
+        atomic_fetch_add_explicit(&rc->time_ns_usages, extract_now_ns() - _ph_t0, memory_order_relaxed);
 
         /* ── THROWS / RAISES ───────────────────────────────────── */
+        _ph_t0 = extract_now_ns();
         resolve_file_throws(rc, ws, result, module_qn, imp_keys, imp_vals, imp_count);
+        atomic_fetch_add_explicit(&rc->time_ns_throws, extract_now_ns() - _ph_t0, memory_order_relaxed);
 
         /* ── READS / WRITES ────────────────────────────────────── */
+        _ph_t0 = extract_now_ns();
         resolve_file_rw(rc, ws, result, rel, module_qn, imp_keys, imp_vals, imp_count);
+        atomic_fetch_add_explicit(&rc->time_ns_rw, extract_now_ns() - _ph_t0, memory_order_relaxed);
 
         /* ── INHERITS + DECORATES + IMPLEMENTS ──────────────────── */
+        _ph_t0 = extract_now_ns();
         resolve_file_semantic(rc, ws, result, module_qn, imp_keys, imp_vals, imp_count);
+        atomic_fetch_add_explicit(&rc->time_ns_semantic, extract_now_ns() - _ph_t0, memory_order_relaxed);
 
         free(module_qn);
         free_import_map(imp_keys, imp_vals, imp_count);
+
+        atomic_fetch_add_explicit(&rc->time_ns_total_loop,
+                                  extract_now_ns() - _loop_t0,
+                                  memory_order_relaxed);
     }
 }
 
@@ -2130,5 +2178,54 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
     cbm_log_info("parallel.resolve.done", "calls", itoa_log(total_calls), "usages",
                  itoa_log(total_usages), "semantic", itoa_log(total_semantic + go_impl),
                  "lsp_overrides", itoa_log(total_lsp_overrides));
+
+    /* Per-sub-phase breakdown so we stop guessing about hot paths.
+     * Numbers are summed across workers (total CPU-ms, not wall-time).
+     * Split into multiple log lines because itoa_log uses a 4-slot TLS
+     * ring buffer — more than 4 values per log_info call would alias
+     * each other (we hit that bug in the first profiling run). */
+    char loop_buf[32], visits_buf[32];
+    snprintf(loop_buf, sizeof(loop_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_total_loop,
+                                                       memory_order_relaxed) / 1000000ULL));
+    snprintf(visits_buf, sizeof(visits_buf), "%d",
+             atomic_load_explicit(&rc.total_files_visited, memory_order_relaxed));
+    cbm_log_info("parallel.resolve.phase_summary",
+                 "total_loop_cpu_ms", loop_buf,
+                 "files_visited", visits_buf);
+
+    char imp_buf[32], xls_buf[32], cal_buf[32];
+    snprintf(imp_buf, sizeof(imp_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_import_map,
+                                                       memory_order_relaxed) / 1000000ULL));
+    snprintf(xls_buf, sizeof(xls_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_cross_lsp,
+                                                       memory_order_relaxed) / 1000000ULL));
+    snprintf(cal_buf, sizeof(cal_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_calls,
+                                                       memory_order_relaxed) / 1000000ULL));
+    cbm_log_info("parallel.resolve.phase_ms_a",
+                 "import_map", imp_buf,
+                 "cross_lsp", xls_buf,
+                 "resolve_calls", cal_buf);
+
+    char use_buf[32], thr_buf[32], rw_buf[32], sem_buf[32];
+    snprintf(use_buf, sizeof(use_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_usages,
+                                                       memory_order_relaxed) / 1000000ULL));
+    snprintf(thr_buf, sizeof(thr_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_throws,
+                                                       memory_order_relaxed) / 1000000ULL));
+    snprintf(rw_buf, sizeof(rw_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_rw,
+                                                       memory_order_relaxed) / 1000000ULL));
+    snprintf(sem_buf, sizeof(sem_buf), "%llu",
+             (unsigned long long)(atomic_load_explicit(&rc.time_ns_semantic,
+                                                       memory_order_relaxed) / 1000000ULL));
+    cbm_log_info("parallel.resolve.phase_ms_b",
+                 "resolve_usages", use_buf,
+                 "resolve_throws", thr_buf,
+                 "resolve_rw", rw_buf,
+                 "resolve_semantic", sem_buf);
     return 0;
 }

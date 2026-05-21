@@ -14,6 +14,7 @@
 
 #include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <string.h>
 
 /* ── Library identifier → edge type ────────────────────────────── */
@@ -545,6 +546,45 @@ static const lib_pattern_t *match_qn(const char *qn, const lib_pattern_t *patter
 
 /* ── Public API ────────────────────────────────────────────────── */
 
+/* Per-worker TLS cache of cbm_service_pattern_match results.
+ * The hot path in resolve_file_calls invokes pattern matching for
+ * EVERY resolved CALL (via emit_service_edge) — that's 6 pattern-list
+ * scans × ~30 patterns × strstr per call. On kubernetes (~600k
+ * resolved call edges), the same resolved QN (e.g. "context.Context.
+ * Done", "fmt.Errorf", "errors.New") repeats hundreds of thousands of
+ * times. A simple TLS hash cache turns the linear scan into one
+ * lookup after the first miss for that QN. Lifetime is per-worker for
+ * the duration of the parallel_resolve phase. */
+#include "foundation/hash_table.h"
+#include "foundation/compat.h"
+
+static CBM_TLS CBMHashTable *_svc_cache = NULL;
+/* Encode the enum + 1 in the pointer so 0/NULL means "miss". */
+static inline void *svc_enum_to_ptr(cbm_svc_kind_t k) {
+    return (void *)(uintptr_t)((unsigned)k + 1u);
+}
+static inline cbm_svc_kind_t svc_ptr_to_enum(void *p) {
+    return (cbm_svc_kind_t)((uintptr_t)p - 1u);
+}
+
+static void svc_cache_free_key(const char *key, void *val, void *ud) {
+    (void)val;
+    (void)ud;
+    free((char *)key);
+}
+
+void cbm_service_pattern_cache_begin(void) {
+    if (_svc_cache) return; /* idempotent */
+    _svc_cache = cbm_ht_create(8192);
+}
+
+void cbm_service_pattern_cache_end(void) {
+    if (!_svc_cache) return;
+    cbm_ht_foreach(_svc_cache, svc_cache_free_key, NULL);
+    cbm_ht_free(_svc_cache);
+    _svc_cache = NULL;
+}
+
 void cbm_service_patterns_init(void) {
     /* No-op — tables are static const */
 }
@@ -554,44 +594,31 @@ cbm_svc_kind_t cbm_service_pattern_match(const char *resolved_qn) {
         return CBM_SVC_NONE;
     }
 
+    if (_svc_cache) {
+        void *cached = cbm_ht_get(_svc_cache, resolved_qn);
+        if (cached) {
+            return svc_ptr_to_enum(cached);
+        }
+    }
+
+    cbm_svc_kind_t result = CBM_SVC_NONE;
+    const lib_pattern_t *p;
+
     /* Route registration checked first — prevents gin/echo from matching
      * as HTTP clients (both have .get/.post suffixes). */
-    const lib_pattern_t *p = match_qn(resolved_qn, route_reg_libraries);
-    if (p) {
-        return p->kind;
-    }
+    if ((p = match_qn(resolved_qn, route_reg_libraries)))   result = p->kind;
+    else if ((p = match_qn(resolved_qn, http_libraries)))   result = p->kind;
+    else if ((p = match_qn(resolved_qn, async_libraries)))  result = p->kind;
+    else if ((p = match_qn(resolved_qn, config_libraries))) result = p->kind;
+    else if ((p = match_qn(resolved_qn, grpc_libraries)))   result = p->kind;
+    else if ((p = match_qn(resolved_qn, graphql_libraries))) result = p->kind;
+    else if ((p = match_qn(resolved_qn, trpc_libraries)))   result = p->kind;
 
-    p = match_qn(resolved_qn, http_libraries);
-    if (p) {
-        return p->kind;
+    if (_svc_cache) {
+        char *kdup = strdup(resolved_qn);
+        if (kdup) cbm_ht_set(_svc_cache, kdup, svc_enum_to_ptr(result));
     }
-
-    p = match_qn(resolved_qn, async_libraries);
-    if (p) {
-        return p->kind;
-    }
-
-    p = match_qn(resolved_qn, config_libraries);
-    if (p) {
-        return p->kind;
-    }
-
-    p = match_qn(resolved_qn, grpc_libraries);
-    if (p) {
-        return p->kind;
-    }
-
-    p = match_qn(resolved_qn, graphql_libraries);
-    if (p) {
-        return p->kind;
-    }
-
-    p = match_qn(resolved_qn, trpc_libraries);
-    if (p) {
-        return p->kind;
-    }
-
-    return CBM_SVC_NONE;
+    return result;
 }
 
 const char *cbm_service_pattern_http_method(const char *callee_name) {

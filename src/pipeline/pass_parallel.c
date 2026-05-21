@@ -1848,6 +1848,14 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
             cbm_gbuf_new_shared_ids(rc->project_name, rc->repo_path, rc->shared_ids);
     }
 
+    /* Per-worker service-pattern result cache. The same resolved QN
+     * (e.g. "fmt.Errorf", "context.Context.Done") appears in many
+     * call edges across many files within a project — caching turns
+     * cbm_service_pattern_match's 6 × 30 × strstr scan into one hash
+     * lookup after the first miss for each QN. Scoped to the worker's
+     * lifetime in the parallel_resolve phase. */
+    cbm_service_pattern_cache_begin();
+
     while (SKIP_ONE) {
         int file_idx =
             atomic_fetch_add_explicit(&rc->next_file_idx, SKIP_ONE, memory_order_relaxed);
@@ -2092,6 +2100,8 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                                   extract_now_ns() - _loop_t0,
                                   memory_order_relaxed);
     }
+
+    cbm_service_pattern_cache_end();
 }
 
 int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count,

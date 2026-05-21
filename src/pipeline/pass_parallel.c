@@ -1930,6 +1930,14 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
         atomic_fetch_add_explicit(&rc->time_ns_import_map,
                                   extract_now_ns() - _imp_t0, memory_order_relaxed);
 
+        /* Per-file is_import_reachable memoization. Spans all 5 resolve
+         * sub-passes (calls/usages/throws/rw/semantic) which all flow
+         * through cbm_registry_resolve. Same callee_name appears in
+         * many call sites — first eval pays the strstr cost, repeats
+         * are O(1) hash. Imports are constant within a file so the
+         * cache is sound; invalidated at file exit. */
+        cbm_registry_reach_cache_begin(result->calls.count + result->usages.count + 64);
+
         char *module_qn = cbm_pipeline_fqn_module(rc->project_name, rel);
 
         /* ── Cross-file LSP (FUSED) ─────────────────────────────
@@ -2074,6 +2082,8 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
         _ph_t0 = extract_now_ns();
         resolve_file_semantic(rc, ws, result, module_qn, imp_keys, imp_vals, imp_count);
         atomic_fetch_add_explicit(&rc->time_ns_semantic, extract_now_ns() - _ph_t0, memory_order_relaxed);
+
+        cbm_registry_reach_cache_end();
 
         free(module_qn);
         free_import_map(imp_keys, imp_vals, imp_count);

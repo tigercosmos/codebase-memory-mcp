@@ -131,6 +131,14 @@ cbm_resolution_t cbm_registry_resolve(const cbm_registry_t *r, const char *calle
                                       const char *module_qn, const char **import_map_keys,
                                       const char **import_map_vals, int import_map_count);
 
+/* Per-file memoization cache for is_import_reachable. Thread-local —
+ * each resolve worker owns its own cache. Call _begin at the start
+ * of resolve_file_calls (or any per-file resolve loop) and _end at
+ * the end. The cache MUST be invalidated between files because
+ * is_import_reachable's truth depends on the file's import_vals. */
+void cbm_registry_reach_cache_begin(int estimated_capacity);
+void cbm_registry_reach_cache_end(void);
+
 /* Check if a qualified name exists in the registry. */
 bool cbm_registry_exists(const cbm_registry_t *r, const char *qn);
 

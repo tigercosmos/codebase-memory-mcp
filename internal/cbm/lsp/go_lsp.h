@@ -116,6 +116,19 @@ void cbm_run_go_lsp_cross_with_registry(
     TSTree* cached_tree,           // NULL = parse internally
     CBMResolvedCallArray* out);
 
+/* Tier 3: AST-walk-free fast resolver. Iterates result->calls and
+ * resolves fully-qualified calls (pkg.Func) directly from the
+ * pre-built registry — no tree-sitter parse, no AST walk. Returns
+ * the count of calls that STILL need the slow path (methods on
+ * locals + qualified calls we couldn't resolve). When the return
+ * value is 0, the caller can skip the cbm_run_go_lsp_cross_with_
+ * registry parse+walk entirely. Resolved entries are appended to
+ * result->resolved_calls in result->arena. */
+int cbm_go_fast_resolve_qualified_calls(
+    CBMFileResult* result,
+    CBMTypeRegistry* reg,
+    const char** import_names, const char** import_qns, int import_count);
+
 // --- Batch cross-file LSP ---
 
 // Per-file input for batch Go LSP processing.

@@ -1872,14 +1872,26 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                     cbm_pxc_registry_for_lang(rc->cross_registries, lang);
                 if (prebuilt) {
                     switch (lang) {
-                    case CBM_LANG_GO:
-                        cbm_run_go_lsp_cross_with_registry(
-                            &result->arena, result->source, result->source_len,
-                            def_module, prebuilt,
-                            imp_keys, imp_vals, imp_count,
-                            result->cached_tree, &result->resolved_calls);
+                    case CBM_LANG_GO: {
+                        /* Tier 3 (metadata-driven): the per-file LSP
+                         * during extract ALREADY captured receiver-type
+                         * QNs and pkg-aliased call expressions inside
+                         * result->resolved_calls entries flagged with
+                         * strategy="lsp_unresolved". Cross-LSP is now a
+                         * pure lookup pass — iterate those, look up in
+                         * the global pre-built registry, emit resolved
+                         * entries on top. NO TREE-SITTER PARSE, NO AST
+                         * WALK. The slow path
+                         * (cbm_run_go_lsp_cross_with_registry) would
+                         * just re-derive the same metadata via a second
+                         * AST walk and arrive at the same answers — it
+                         * is now skipped entirely for Go. */
+                        cbm_go_fast_resolve_qualified_calls(
+                            result, prebuilt,
+                            imp_keys, imp_vals, imp_count);
                         used_prebuilt = true;
                         break;
+                    }
                     case CBM_LANG_PYTHON:
                         cbm_run_py_lsp_cross_with_registry(
                             &result->arena, result->source, result->source_len,

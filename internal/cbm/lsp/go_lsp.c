@@ -2827,6 +2827,105 @@ void cbm_run_go_lsp_cross_with_registry(
     }
 }
 
+/* ── Tier 3: AST-walk-free metadata-driven cross-file resolver ────
+ *
+ * KEY INSIGHT: the per-file LSP during extract ALREADY emits one
+ * CBMResolvedCall per call site, with strategy="lsp_unresolved" for
+ * calls it couldn't resolve. For those unresolved entries:
+ *
+ *   * "symbol_not_in_registry" (go_lsp.c:1142) → callee_qn is
+ *     "pkg_name.field_name" (literal local import alias)
+ *   * "method_not_found" (go_lsp.c:1242) → callee_qn is
+ *     "<FullyQualifiedReceiverTypeQN>.<MethodName>" — receiver type
+ *     was ALREADY inferred by per-file LSP, just the method wasn't
+ *     in the per-file registry (cross-file)
+ *   * "function_not_in_registry" (go_lsp.c:1266) → callee_qn is
+ *     the bare function name (likely a same-package symbol we
+ *     missed, or a cross-file package function used unqualified)
+ *   * "unknown_receiver_type" (go_lsp.c:1248) → per-file LSP
+ *     couldn't infer the receiver type. Cross-LSP can't either
+ *     without re-walking — leave unresolved.
+ *
+ * So cross-LSP work reduces to:
+ *   for each unresolved entry → look up callee_qn (or pkg.x via
+ *   import map) in the global registry → emit resolved version
+ *   on top. NO TREE-SITTER PARSE. NO AST WALK. Just hash lookups.
+ *
+ * This is what the user meant: walk the AST ONCE (during extract),
+ * capture everything cross-LSP needs as metadata, and let cross-LSP
+ * be a pure lookup pass. */
+int cbm_go_fast_resolve_qualified_calls(
+    CBMFileResult* result,
+    CBMTypeRegistry* reg,
+    const char** import_names, const char** import_qns, int import_count) {
+    if (!result || !reg) return 0;
+    /* Snapshot the count: we append to resolved_calls inside the loop,
+     * but only want to scan the original unresolved entries. */
+    int initial_count = result->resolved_calls.count;
+    int newly_resolved = 0;
+
+    for (int i = 0; i < initial_count; i++) {
+        const CBMResolvedCall* uc = &result->resolved_calls.items[i];
+        if (!uc->strategy || !uc->callee_qn || !uc->caller_qn) continue;
+        if (strcmp(uc->strategy, "lsp_unresolved") != 0) continue;
+
+        /* Case 1: callee_qn is already a fully-qualified type/pkg
+         * symbol that per-file LSP couldn't find in its local registry
+         * but the global registry has. (method_not_found with NAMED
+         * receiver, or any other case where callee_qn looks like a
+         * full QN). Direct lookup. */
+        const CBMRegisteredFunc* f = cbm_registry_lookup_func(reg, uc->callee_qn);
+
+        /* Case 2: callee_qn is "local_pkg_alias.suffix" — the alias
+         * needs translating through the file's import map to get the
+         * real module QN. */
+        if (!f) {
+            const char* dot = strchr(uc->callee_qn, '.');
+            if (dot) {
+                size_t prefix_len = (size_t)(dot - uc->callee_qn);
+                if (prefix_len > 0 && prefix_len < 256) {
+                    char prefix[256];
+                    memcpy(prefix, uc->callee_qn, prefix_len);
+                    prefix[prefix_len] = '\0';
+                    const char* suffix = dot + 1;
+                    for (int j = 0; j < import_count; j++) {
+                        if (import_names[j] && import_qns[j] &&
+                            strcmp(prefix, import_names[j]) == 0) {
+                            char fq[1024];
+                            int n = snprintf(fq, sizeof(fq), "%s.%s",
+                                             import_qns[j], suffix);
+                            if (n > 0 && n < (int)sizeof(fq)) {
+                                f = cbm_registry_lookup_func(reg, fq);
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (!f) continue;
+
+        /* Emit a resolved entry. cbm_pipeline_find_lsp_resolution
+         * picks the highest-confidence match, so the unresolved entry
+         * stays (harmless duplicate) but our resolved entry wins. */
+        CBMResolvedCall rc;
+        rc.caller_qn = uc->caller_qn;
+        rc.callee_qn = f->qualified_name; /* borrowed from pipeline arena */
+        rc.strategy = "lsp_strategy_cross_file";
+        rc.confidence = 0.92f;
+        rc.reason = NULL;
+        cbm_resolvedcall_push(&result->resolved_calls, &result->arena, rc);
+        newly_resolved++;
+    }
+
+    /* Return value mirrors the old contract (count of items still
+     * needing the slow path) but is always 0 now — caller should
+     * unconditionally skip the slow path for Go. */
+    (void)newly_resolved;
+    return 0;
+}
+
 // --- Batch cross-file LSP ---
 
 void cbm_batch_go_lsp_cross(

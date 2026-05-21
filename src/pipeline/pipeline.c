@@ -572,17 +572,47 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
         free(cache);
         return rc != 0 ? rc : CBM_NOT_FOUND;
     }
-    /* Cross-file LSP: augments per-file resolved_calls with cross-file
-     * type-aware resolutions before parallel_resolve emits CALLS edges.
-     * Soft-failures only — log and continue. */
+    /* Cross-file LSP precondition: build a project-wide CBMLSPDef[]
+     * once. The fused resolve_worker invokes cbm_pxc_run_one(_ts) per
+     * file using these defs + the file's IMPORTS map, so cross-file
+     * type-resolved CALLS land in result->resolved_calls before the
+     * CALLS-edge emission. This replaces the old sequential
+     * cbm_pipeline_pass_lsp_cross pass which re-read every source from
+     * disk and re-parsed every tree on a single thread (~520s on
+     * kubernetes). Soft-failure: NULL all_defs / NULL def_modules just
+     * mean cross-file LSP no-ops; per-file LSP already ran during
+     * extract. */
     cbm_clock_gettime(CLOCK_MONOTONIC, t);
-    (void)cbm_pipeline_pass_lsp_cross(ctx, files, file_count, cache);
-    cbm_log_info("pass.timing", "pass", "lsp_cross", "elapsed_ms",
+    char **def_modules = (char **)calloc((size_t)file_count, sizeof(char *));
+    int def_count = 0;
+    CBMLSPDef *all_defs = def_modules
+        ? cbm_pxc_collect_all_defs(cache, files, file_count, ctx->project_name,
+                                   def_modules, &def_count)
+        : NULL;
+    /* Build inverted index: module_qn → defs. The fused resolve_worker
+     * uses this to filter the global all_defs[] down to just the defs
+     * each file actually needs (own_module + imported modules) — the
+     * gopls "package summary" pattern. Drops per-file registry build
+     * cost from O(all_defs) to O(relevant_defs), typically 50-100×
+     * smaller per file. */
+    CBMModuleDefIndex *module_def_index =
+        all_defs ? cbm_pxc_build_module_def_index(all_defs, def_count) : NULL;
+    cbm_log_info("pass.timing", "pass", "lsp_cross_prepare", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(*t)));
     cbm_clock_gettime(CLOCK_MONOTONIC, t);
-    rc = cbm_parallel_resolve(ctx, files, file_count, cache, &shared_ids, worker_count);
+    rc = cbm_parallel_resolve(ctx, files, file_count, cache, &shared_ids,
+                              worker_count, all_defs, def_count, def_modules,
+                              module_def_index);
     cbm_log_info("pass.timing", "pass", "parallel_resolve", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(*t)));
+    cbm_pxc_free_module_def_index(module_def_index);
+    free(all_defs);
+    if (def_modules) {
+        for (int i = 0; i < file_count; i++) {
+            free(def_modules[i]);
+        }
+        free(def_modules);
+    }
     cbm_gbuf_set_next_id(p->gbuf, atomic_load(&shared_ids));
     cbm_pipeline_extract_infra_routes(p->gbuf, files, cache, file_count);
     cbm_pipeline_process_infra_bindings(p->gbuf, files, cache, file_count);

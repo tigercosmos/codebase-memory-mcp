@@ -22,6 +22,7 @@
 #include "lsp/php_lsp.h"
 #include "graph_buffer/graph_buffer.h"
 #include "foundation/constants.h"
+#include "foundation/hash_table.h"
 #include "foundation/log.h"
 
 #include <stdio.h>
@@ -146,7 +147,7 @@ static int pxc_build_lsp_def(CBMArena *arena, const CBMDefinition *src,
 /* Collect a project-wide CBMLSPDef[] from all cached results. Returns a
  * malloc'd array (caller frees) of length *out_count. String fields are
  * borrowed from cache[i]->arena and from def_modules[i] (also borrowed). */
-static CBMLSPDef *pxc_collect_all_defs(CBMFileResult **cache,
+CBMLSPDef *cbm_pxc_collect_all_defs(CBMFileResult **cache,
                                        const cbm_file_info_t *files, int file_count,
                                        const char *project_name,
                                        char **def_modules, int *out_count) {
@@ -246,7 +247,7 @@ static void pxc_free_import_map(const char **keys, const char **vals, int count)
 }
 
 /* Detect TS dialect flags from a relative path. */
-static void pxc_ts_modes(CBMLanguage lang, const char *rel_path,
+void cbm_pxc_ts_modes(CBMLanguage lang, const char *rel_path,
                           bool *out_js, bool *out_jsx, bool *out_dts) {
     *out_js = (lang == CBM_LANG_JAVASCRIPT);
     *out_jsx = (lang == CBM_LANG_TSX);
@@ -264,7 +265,7 @@ static void pxc_ts_modes(CBMLanguage lang, const char *rel_path,
 }
 
 /* Returns true when this language has a cross-file LSP wired up. */
-static bool pxc_has_cross_lsp(CBMLanguage lang) {
+bool cbm_pxc_has_cross_lsp(CBMLanguage lang) {
     switch (lang) {
     case CBM_LANG_GO:
     case CBM_LANG_C:
@@ -328,7 +329,7 @@ static void pxc_append_results(CBMArena *dst_arena, CBMResolvedCallArray *dst_ca
  * directly across N files (test_incremental.c saw 3.5 GB peak on a
  * 1100-file repo before this fix). Output gets copied into the file's own
  * arena and merged into result->resolved_calls. */
-static void pxc_run_one(CBMLanguage lang, CBMFileResult *r, const char *source,
+void cbm_pxc_run_one(CBMLanguage lang, CBMFileResult *r, const char *source,
                          int source_len, const char *module_qn,
                          CBMLSPDef *defs, int def_count,
                          const char **imp_names, const char **imp_qns, int imp_count) {
@@ -376,9 +377,9 @@ static void pxc_run_one(CBMLanguage lang, CBMFileResult *r, const char *source,
     cbm_arena_destroy(&scratch);
 }
 
-/* Variant of pxc_run_one for TS/JS/JSX/TSX with explicit dialect flags.
- * Same scratch-arena lifecycle as pxc_run_one. */
-static void pxc_run_one_ts(CBMFileResult *r, const char *source, int source_len,
+/* Variant of cbm_pxc_run_one for TS/JS/JSX/TSX with explicit dialect
+ * flags. Same scratch-arena lifecycle as cbm_pxc_run_one. */
+void cbm_pxc_run_one_ts(CBMFileResult *r, const char *source, int source_len,
                             const char *module_qn,
                             CBMLSPDef *defs, int def_count,
                             const char **imp_names, const char **imp_qns, int imp_count,
@@ -415,7 +416,7 @@ int cbm_pipeline_pass_lsp_cross(cbm_pipeline_ctx_t *ctx,
     }
 
     int def_count = 0;
-    CBMLSPDef *all_defs = pxc_collect_all_defs(cache, files, file_count,
+    CBMLSPDef *all_defs = cbm_pxc_collect_all_defs(cache, files, file_count,
                                                 ctx->project_name, def_modules,
                                                 &def_count);
 
@@ -427,7 +428,7 @@ int cbm_pipeline_pass_lsp_cross(cbm_pipeline_ctx_t *ctx,
     for (int i = 0; i < file_count; i++) {
         if (!cache[i]) continue;
         CBMLanguage lang = files[i].language;
-        if (!pxc_has_cross_lsp(lang)) {
+        if (!cbm_pxc_has_cross_lsp(lang)) {
             skipped_no_lsp++;
             continue;
         }
@@ -453,12 +454,12 @@ int cbm_pipeline_pass_lsp_cross(cbm_pipeline_ctx_t *ctx,
         if (lang == CBM_LANG_JAVASCRIPT || lang == CBM_LANG_TYPESCRIPT ||
             lang == CBM_LANG_TSX) {
             bool js, jsx, dts;
-            pxc_ts_modes(lang, files[i].rel_path, &js, &jsx, &dts);
-            pxc_run_one_ts(cache[i], source, source_len, def_modules[i],
+            cbm_pxc_ts_modes(lang, files[i].rel_path, &js, &jsx, &dts);
+            cbm_pxc_run_one_ts(cache[i], source, source_len, def_modules[i],
                             all_defs, def_count, imp_keys, imp_vals, imp_count,
                             js, jsx, dts);
         } else {
-            pxc_run_one(lang, cache[i], source, source_len, def_modules[i],
+            cbm_pxc_run_one(lang, cache[i], source, source_len, def_modules[i],
                          all_defs, def_count, imp_keys, imp_vals, imp_count);
         }
         per_lang_calls++;
@@ -479,4 +480,131 @@ int cbm_pipeline_pass_lsp_cross(cbm_pipeline_ctx_t *ctx,
                  "defs_total", itoa_buf(def_count),
                  "lsp_calls", itoa_buf(per_lang_calls));
     return 0;
+}
+
+/* ── Per-module def index (gopls "package summary" pattern) ──── */
+
+typedef struct {
+    int count;
+    int cap;
+    int *indices; /* malloc'd; indices into the caller's all_defs[] */
+} pxc_module_entry_t;
+
+struct CBMModuleDefIndex {
+    CBMHashTable *ht; /* module_qn → pxc_module_entry_t* */
+};
+
+/* cbm_ht_foreach callback: free each pxc_module_entry_t. */
+static void pxc_module_entry_free_cb(const char *key, void *value, void *userdata) {
+    (void)key;
+    (void)userdata;
+    pxc_module_entry_t *e = (pxc_module_entry_t *)value;
+    if (!e) return;
+    free(e->indices);
+    free(e);
+}
+
+CBMModuleDefIndex *cbm_pxc_build_module_def_index(CBMLSPDef *all_defs, int def_count) {
+    if (!all_defs || def_count <= 0) return NULL;
+
+    CBMHashTable *ht = cbm_ht_create(64);
+    if (!ht) return NULL;
+
+    /* Single pass: append each def's index into its module's dynamic array. */
+    for (int i = 0; i < def_count; i++) {
+        const char *mod = all_defs[i].def_module_qn;
+        if (!mod) continue;
+        pxc_module_entry_t *e = (pxc_module_entry_t *)cbm_ht_get(ht, mod);
+        if (!e) {
+            e = (pxc_module_entry_t *)calloc(1, sizeof(*e));
+            if (!e) continue;
+            e->cap = 16;
+            e->indices = (int *)malloc((size_t)e->cap * sizeof(int));
+            if (!e->indices) {
+                free(e);
+                continue;
+            }
+            cbm_ht_set(ht, mod, e);
+        }
+        if (e->count >= e->cap) {
+            int new_cap = e->cap * 2;
+            int *new_indices = (int *)realloc(e->indices, (size_t)new_cap * sizeof(int));
+            if (!new_indices) continue; /* drop this entry, keep going */
+            e->indices = new_indices;
+            e->cap = new_cap;
+        }
+        e->indices[e->count++] = i;
+    }
+
+    CBMModuleDefIndex *idx = (CBMModuleDefIndex *)calloc(1, sizeof(*idx));
+    if (!idx) {
+        cbm_ht_foreach(ht, pxc_module_entry_free_cb, NULL);
+        cbm_ht_free(ht);
+        return NULL;
+    }
+    idx->ht = ht;
+    return idx;
+}
+
+void cbm_pxc_free_module_def_index(CBMModuleDefIndex *idx) {
+    if (!idx) return;
+    if (idx->ht) {
+        cbm_ht_foreach(idx->ht, pxc_module_entry_free_cb, NULL);
+        cbm_ht_free(idx->ht);
+    }
+    free(idx);
+}
+
+CBMLSPDef *cbm_pxc_filter_defs_for_file(const CBMModuleDefIndex *idx,
+                                        CBMLSPDef *all_defs,
+                                        const char *own_module,
+                                        const char *const *imp_qns,
+                                        int imp_count,
+                                        int *out_count) {
+    if (out_count) *out_count = 0;
+    if (!idx || !idx->ht || !all_defs || !out_count) return NULL;
+
+    /* Dedup module list (own_module may appear in imp_qns). For typical
+     * imp_count ~10 this O(N²) scan is fine and avoids registering the
+     * same def twice in the per-file registry. */
+    const char *seen[64];
+    int seen_count = 0;
+    if (own_module) {
+        seen[seen_count++] = own_module;
+    }
+    for (int i = 0; i < imp_count && seen_count < (int)(sizeof(seen) / sizeof(seen[0])); i++) {
+        if (!imp_qns[i]) continue;
+        bool dup = false;
+        for (int s = 0; s < seen_count; s++) {
+            if (strcmp(seen[s], imp_qns[i]) == 0) {
+                dup = true;
+                break;
+            }
+        }
+        if (!dup) seen[seen_count++] = imp_qns[i];
+    }
+
+    /* Pass 1: total relevant defs. */
+    int total = 0;
+    for (int s = 0; s < seen_count; s++) {
+        pxc_module_entry_t *e = (pxc_module_entry_t *)cbm_ht_get(idx->ht, seen[s]);
+        if (e) total += e->count;
+    }
+    if (total == 0) return NULL;
+
+    /* Pass 2: copy CBMLSPDef structs (string fields stay borrowed from the
+     * caller's all_defs[] arena). */
+    CBMLSPDef *out = (CBMLSPDef *)malloc((size_t)total * sizeof(CBMLSPDef));
+    if (!out) return NULL;
+
+    int n = 0;
+    for (int s = 0; s < seen_count; s++) {
+        pxc_module_entry_t *e = (pxc_module_entry_t *)cbm_ht_get(idx->ht, seen[s]);
+        if (!e) continue;
+        for (int j = 0; j < e->count; j++) {
+            out[n++] = all_defs[e->indices[j]];
+        }
+    }
+    *out_count = n;
+    return out;
 }

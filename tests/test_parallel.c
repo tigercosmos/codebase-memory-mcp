@@ -139,13 +139,31 @@ static cbm_gbuf_t *run_parallel(const char *project, const char *repo_path, cbm_
     cbm_build_registry_from_cache(&ctx, files, file_count, result_cache);
 
     /* Cross-file LSP — mirrors run_parallel_pipeline ordering in pipeline.c.
-     * Augments per-file resolved_calls with cross-file type-aware resolutions
-     * (e.g. method calls on imported classes) before parallel_resolve emits
-     * the call edges. */
-    cbm_pipeline_pass_lsp_cross(&ctx, files, file_count, result_cache);
+     * Build the project-wide all_defs[] precondition, then feed it into
+     * cbm_parallel_resolve where the fused resolve_worker invokes
+     * cbm_pxc_run_one(_ts) per file BEFORE materializing CALLS edges. */
+    char **def_modules = (char **)calloc((size_t)file_count, sizeof(char *));
+    int def_count = 0;
+    CBMLSPDef *all_defs = def_modules
+        ? cbm_pxc_collect_all_defs(result_cache, files, file_count, ctx.project_name,
+                                   def_modules, &def_count)
+        : NULL;
+    CBMModuleDefIndex *module_def_index =
+        all_defs ? cbm_pxc_build_module_def_index(all_defs, def_count) : NULL;
 
-    cbm_parallel_resolve(&ctx, files, file_count, result_cache, &shared_ids, worker_count);
+    cbm_parallel_resolve(&ctx, files, file_count, result_cache, &shared_ids,
+                         worker_count, all_defs, def_count, def_modules,
+                         module_def_index);
     cbm_gbuf_set_next_id(gbuf, atomic_load(&shared_ids));
+
+    cbm_pxc_free_module_def_index(module_def_index);
+    free(all_defs);
+    if (def_modules) {
+        for (int i = 0; i < file_count; i++) {
+            free(def_modules[i]);
+        }
+        free(def_modules);
+    }
 
     for (int i = 0; i < file_count; i++)
         if (result_cache[i])

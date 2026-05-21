@@ -14,6 +14,7 @@
 #include "discover/discover.h"
 #include "foundation/hash_table.h"
 #include "cbm.h"
+#include "lsp/go_lsp.h" /* CBMLSPDef for cbm_parallel_resolve cross-LSP inputs */
 #include <stdatomic.h>
 
 /* ── Shared pipeline constants ─────────────────────────────────── */
@@ -363,9 +364,25 @@ int cbm_build_registry_from_cache(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t
  * Each worker resolves calls, usages, throws, rw, inherits, decorates,
  * and implements edges into per-worker edge bufs, then merges.
  * Runs Go-style implicit IMPLEMENTS as serial post-step. */
+/* Opaque module-def index — defined in pass_lsp_cross.c. Forward-declared
+ * here so we can include it in cbm_parallel_resolve's signature without
+ * pulling the pass header into every consumer of pipeline_internal.h. */
+struct CBMModuleDefIndex;
+
 int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count,
                          CBMFileResult **result_cache, _Atomic int64_t *shared_ids,
-                         int worker_count);
+                         int worker_count,
+                         /* Cross-file LSP inputs — pre-built once by the caller and
+                          * shared read-only across workers (typed non-const to match
+                          * the existing cbm_run_X_lsp_cross signatures the resolve
+                          * worker forwards them to). Pass NULL/0/NULL to skip. */
+                         CBMLSPDef *all_defs, int def_count,
+                         char *const *def_modules,
+                         /* Optional inverted index module_qn → defs[] — when
+                          * present, the fused worker filters the global all_defs
+                          * down to just the per-file relevant subset (gopls pattern).
+                          * Pass NULL to disable filtering (each file sees all_defs). */
+                         struct CBMModuleDefIndex *module_def_index);
 
 /* Post-merge: create Route nodes for HTTP_CALLS/ASYNC_CALLS edges that
  * have url_path in properties but point to library functions instead of routes.

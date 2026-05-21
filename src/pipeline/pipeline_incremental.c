@@ -403,8 +403,15 @@ static void run_extract_resolve(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *change
             cbm_log_info("pass.timing", "pass", "incr_registry", "elapsed_ms",
                          itoa_buf((int)elapsed_ms(t)));
 
+            /* Incremental skips cross-file LSP precondition build — it
+             * would need all_defs from the full project, not just the
+             * changed slice. Per-file LSP (run inside cbm_extract_file)
+             * still fires; cross-file resolution is deferred to the
+             * next full re-index. Pass NULL/0/NULL to make the fused
+             * step in resolve_worker a no-op. */
             cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-            cbm_parallel_resolve(ctx, changed_files, ci, cache, &shared_ids, worker_count);
+            cbm_parallel_resolve(ctx, changed_files, ci, cache, &shared_ids,
+                                 worker_count, NULL, 0, NULL, NULL);
             cbm_gbuf_set_next_id(ctx->gbuf, atomic_load(&shared_ids));
             cbm_log_info("pass.timing", "pass", "incr_resolve", "elapsed_ms",
                          itoa_buf((int)elapsed_ms(t)));

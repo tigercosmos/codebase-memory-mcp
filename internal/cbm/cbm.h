@@ -431,6 +431,15 @@ typedef struct {
     int imports_count;
     TSTree *cached_tree;     // retained parse tree (caller frees via cbm_free_tree)
     CBMLanguage cached_lang; // language of cached tree (for parser selection)
+
+    // Retained source bytes — copied into `arena` by the parallel
+    // extract pass so the fused cross-file LSP step in resolve_worker
+    // can run without re-reading the file from disk. NULL when the
+    // file exceeded the per-file (100 MB) or total (2 GB) retention
+    // cap; in that case the cross-file LSP step is skipped for this
+    // file (defs/calls already extracted are unaffected).
+    const char *source;
+    int source_len;
 } CBMFileResult;
 
 // --- Enclosing function cache ---

@@ -28,8 +28,19 @@ enum {
 #define PP_HALF_CONF 0.5
 #define PP_FIELD_HINT_CONF 0.85
 enum { PP_CSHARP_M_PREFIX_LEN = 2 };
+
+/* Source-retention caps for the parallel pipeline. The extract worker
+ * copies source bytes into result->arena so the fused cross-file LSP
+ * step in resolve_worker can run without re-reading from disk. Bound
+ * peak RSS with a per-file cap (skip retention for pathological huge
+ * generated files) and a total project-wide cap (skip when budget
+ * exhausted — cross-file LSP becomes a no-op for those late files,
+ * defs/calls already extracted are unaffected). */
+#define PP_RETAIN_PER_FILE_MAX_BYTES (100LL * 1024 * 1024)
+#define PP_RETAIN_TOTAL_BUDGET_BYTES (2LL * 1024 * 1024 * 1024)
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_internal.h"
+#include "pipeline/pass_lsp_cross.h" /* cbm_pxc_* helpers for fused cross-file LSP */
 #include "pipeline/lsp_resolve.h"
 #include "pipeline/worker_pool.h"
 #include "foundation/compat.h"
@@ -402,6 +413,7 @@ typedef struct {
     _Atomic int next_file_idx;
 
     cbm_pkg_entries_t *pkg_entries; /* per-worker manifest arrays (separate allocation) */
+    _Atomic int64_t retained_bytes; /* total source bytes copied into result arenas */
 } extract_ctx_t;
 
 /* Insert one definition node (and its route if present) into the local gbuf. */
@@ -516,7 +528,37 @@ static void extract_worker(int worker_id, void *ctx_ptr) {
                                  source_len, &ec->pkg_entries[worker_id]);
         }
 
-        /* Free source buffer — extraction captured everything needed. */
+        /* Retain source bytes in result->arena so the fused cross-file
+         * LSP step in resolve_worker can run without re-reading from
+         * disk. Capped per-file (PP_RETAIN_PER_FILE_MAX_BYTES) and
+         * globally (PP_RETAIN_TOTAL_BUDGET_BYTES) to bound peak RSS.
+         * Skipping retention just means cross-file LSP no-ops for this
+         * file — defs/calls already extracted are unaffected. */
+        if (source_len > 0 && (int64_t)source_len <= PP_RETAIN_PER_FILE_MAX_BYTES) {
+            int64_t prior = atomic_fetch_add_explicit(
+                &ec->retained_bytes, (int64_t)source_len, memory_order_relaxed);
+            if (prior + (int64_t)source_len <= PP_RETAIN_TOTAL_BUDGET_BYTES) {
+                char *copy = (char *)cbm_arena_alloc(&result->arena,
+                                                     (size_t)source_len + 1);
+                if (copy) {
+                    memcpy(copy, source, (size_t)source_len);
+                    copy[source_len] = '\0';
+                    result->source = copy;
+                    result->source_len = source_len;
+                } else {
+                    atomic_fetch_sub_explicit(&ec->retained_bytes,
+                                              (int64_t)source_len,
+                                              memory_order_relaxed);
+                }
+            } else {
+                atomic_fetch_sub_explicit(&ec->retained_bytes,
+                                          (int64_t)source_len,
+                                          memory_order_relaxed);
+            }
+        }
+
+        /* Free source buffer — extraction captured everything needed,
+         * and the retention copy (if any) lives in result->arena. */
         free_source(source);
 
         /* Cache result (arena + extracted data, no tree) for Phase 3B and Phase 4 */
@@ -635,6 +677,7 @@ int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
     };
     atomic_init(&ec.next_worker_id, 0);
     atomic_init(&ec.next_file_idx, 0);
+    atomic_init(&ec.retained_bytes, 0);
 
     /* Sub-phase: Dispatch workers (parse + extract per file, PARALLEL) */
     CBM_PROF_START(t_dispatch);
@@ -840,6 +883,23 @@ typedef struct {
     _Atomic int64_t *shared_ids;
     _Atomic int *cancelled;
     _Atomic int next_file_idx;
+
+    /* Cross-file LSP inputs — pre-built once by the caller in pipeline.c
+     * and shared read-only by usage across workers (typed non-const to
+     * match the existing cbm_run_X_lsp_cross callee signatures the
+     * worker forwards them to). NULL/0 → cross-LSP no-ops. */
+    CBMLSPDef *all_defs;
+    int def_count;
+    char *const *def_modules; /* per-file module QN; def_modules[i] for files[i] */
+    /* Optional inverted index for per-file def filtering (gopls pattern).
+     * When non-NULL, the fused worker calls cbm_pxc_filter_defs_for_file
+     * to shrink the def array passed to the LSP from O(all_defs) to
+     * O(relevant_defs). NULL → each file sees the full all_defs[]. */
+    struct CBMModuleDefIndex *module_def_index;
+
+    /* Counters for parallel.resolve.lsp_cross_done summary. */
+    _Atomic int lsp_cross_processed;
+    _Atomic int lsp_cross_skipped_no_source;
 } resolve_ctx_t;
 
 /* Minimum buffer space needed per arg JSON object */
@@ -1716,21 +1776,101 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
             continue;
         }
 
-        /* Skip files with nothing to resolve */
+        CBMLanguage lang = rc->files[file_idx].language;
+        bool cross_lsp_eligible =
+            (rc->all_defs && rc->def_count > 0 && cbm_pxc_has_cross_lsp(lang));
+
+        /* Skip files with nothing to resolve. Cross-file LSP can find
+         * CALLS that the per-file extract missed (the whole point of
+         * the LSP method), so do NOT skip an LSP-eligible file just
+         * because its initial extract found no calls/defs/etc. */
         if (result->calls.count == 0 && result->usages.count == 0 && result->throws.count == 0 &&
-            result->rw.count == 0 && result->defs.count == 0 && result->impl_traits.count == 0) {
+            result->rw.count == 0 && result->defs.count == 0 && result->impl_traits.count == 0 &&
+            !cross_lsp_eligible) {
             continue;
         }
 
         const char *rel = rc->files[file_idx].rel_path;
 
-        /* Build import map (read-only access to main_gbuf) */
+        /* Build import map ONCE (read-only access to main_gbuf). The
+         * same imp_keys/imp_vals feed both the fused cross-file LSP
+         * step below AND the resolve_file_* chain — no duplicate build. */
         const char **imp_keys = NULL;
         const char **imp_vals = NULL;
         int imp_count = 0;
         build_import_map(rc->main_gbuf, rc->project_name, rel, &imp_keys, &imp_vals, &imp_count);
 
         char *module_qn = cbm_pipeline_fqn_module(rc->project_name, rel);
+
+        /* ── Cross-file LSP (FUSED) ─────────────────────────────
+         * Runs BEFORE resolve_file_calls so its additions to
+         * result->resolved_calls are picked up by
+         * cbm_pipeline_find_lsp_resolution when calls become CALLS
+         * edges. Requires result->source to have been retained in
+         * result->arena during extract (PP_RETAIN_*); files over the
+         * cap or past the budget have result->source==NULL and are
+         * counted as skipped_no_source — defs/calls already in the
+         * extract are unaffected.
+         *
+         * Slab reclaim afterward: the LSP re-parses via tree-sitter,
+         * which allocates through this worker's TLS slab. Reclaiming
+         * here keeps the slab high-water bounded as the resolve phase
+         * walks across thousands of files in a single worker thread. */
+        if (cross_lsp_eligible) {
+            if (result->source && result->source_len > 0) {
+                const char *def_module = rc->def_modules
+                    ? rc->def_modules[file_idx]
+                    : module_qn;
+
+                /* gopls pattern: filter all_defs down to just the defs
+                 * this file actually needs (own_module + imp_vals
+                 * imported modules). For a typical file with ~10
+                 * imports, this slashes the per-file registry-build
+                 * cost from O(all_defs) to O(relevant_defs) — usually
+                 * 50-100× smaller. */
+                CBMLSPDef *file_defs = rc->all_defs;
+                int file_def_count = rc->def_count;
+                CBMLSPDef *filtered = NULL;
+                if (rc->module_def_index) {
+                    int filtered_count = 0;
+                    filtered = cbm_pxc_filter_defs_for_file(
+                        rc->module_def_index, rc->all_defs,
+                        def_module, imp_vals, imp_count,
+                        &filtered_count);
+                    if (filtered) {
+                        file_defs = filtered;
+                        file_def_count = filtered_count;
+                    }
+                }
+
+                uint64_t lsp_t0 = extract_now_ns();
+                if (lang == CBM_LANG_JAVASCRIPT || lang == CBM_LANG_TYPESCRIPT ||
+                    lang == CBM_LANG_TSX) {
+                    bool js, jsx, dts;
+                    cbm_pxc_ts_modes(lang, rel, &js, &jsx, &dts);
+                    cbm_pxc_run_one_ts(result, result->source, result->source_len,
+                                       def_module, file_defs, file_def_count,
+                                       imp_keys, imp_vals, imp_count, js, jsx, dts);
+                } else {
+                    cbm_pxc_run_one(lang, result, result->source, result->source_len,
+                                    def_module, file_defs, file_def_count,
+                                    imp_keys, imp_vals, imp_count);
+                }
+                free(filtered);
+                cbm_slab_reclaim();
+                uint64_t lsp_elapsed_ms = (extract_now_ns() - lsp_t0) / PP_USEC_PER_MS;
+                if (lsp_elapsed_ms > PP_TIMER_THRESH) {
+                    cbm_log_info("parallel.resolve.lsp_cross.slow",
+                                 "elapsed_ms", itoa_log((int)lsp_elapsed_ms),
+                                 "path", rel);
+                }
+                atomic_fetch_add_explicit(&rc->lsp_cross_processed, SKIP_ONE,
+                                          memory_order_relaxed);
+            } else {
+                atomic_fetch_add_explicit(&rc->lsp_cross_skipped_no_source, SKIP_ONE,
+                                          memory_order_relaxed);
+            }
+        }
 
         /* ── CALLS resolution ──────────────────────────────────── */
         resolve_file_calls(rc, ws, result, rel, module_qn, imp_keys, imp_vals, imp_count);
@@ -1754,7 +1894,9 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
 
 int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count,
                          CBMFileResult **result_cache, _Atomic int64_t *shared_ids,
-                         int worker_count) {
+                         int worker_count, CBMLSPDef *all_defs, int def_count,
+                         char *const *def_modules,
+                         struct CBMModuleDefIndex *module_def_index) {
     if (file_count == 0) {
         return 0;
     }
@@ -1781,8 +1923,14 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
         .registry = ctx->registry,
         .shared_ids = shared_ids,
         .cancelled = ctx->cancelled,
+        .all_defs = all_defs,
+        .def_count = def_count,
+        .def_modules = def_modules,
+        .module_def_index = module_def_index,
     };
     atomic_init(&rc.next_file_idx, 0);
+    atomic_init(&rc.lsp_cross_processed, 0);
+    atomic_init(&rc.lsp_cross_skipped_no_source, 0);
 
     /* Sub-phase: Dispatch resolve workers (per-file call/usage resolution, PARALLEL) */
     CBM_PROF_START(t_resolve_dispatch);
@@ -1818,6 +1966,18 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
     if (atomic_load(ctx->cancelled)) {
         return CBM_NOT_FOUND;
     }
+
+    /* Summary metric that replaces the removed `pass.timing pass=lsp_cross`
+     * log line — surfaces how many files the fused cross-file LSP step
+     * actually processed vs skipped (e.g. because their source bytes
+     * were not retained at extract time due to the per-file/total cap). */
+    cbm_log_info("parallel.resolve.lsp_cross_done",
+                 "files_processed",
+                 itoa_log(atomic_load_explicit(&rc.lsp_cross_processed, memory_order_relaxed)),
+                 "files_skipped_no_source",
+                 itoa_log(atomic_load_explicit(&rc.lsp_cross_skipped_no_source,
+                                                memory_order_relaxed)),
+                 "defs_total", itoa_log(def_count));
 
     cbm_log_info("parallel.resolve.done", "calls", itoa_log(total_calls), "usages",
                  itoa_log(total_usages), "semantic", itoa_log(total_semantic + go_impl),

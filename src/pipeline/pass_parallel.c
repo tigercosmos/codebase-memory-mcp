@@ -2052,9 +2052,18 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                             result->cached_tree, &result->resolved_calls);
                         used_prebuilt = true;
                         break;
-                    /* C/C++/CUDA, TS/JS/TSX, PHP, C# fall through to the
-                     * per-file build path below until their _with_registry
-                     * variants are added in follow-up commits. */
+                    case CBM_LANG_C:
+                    case CBM_LANG_CPP:
+                    case CBM_LANG_CUDA:
+                        cbm_run_c_lsp_cross_with_registry(
+                            &result->arena, result->source, result->source_len,
+                            def_module, (lang != CBM_LANG_C), prebuilt,
+                            imp_keys, imp_vals, imp_count,
+                            result->cached_tree, &result->resolved_calls);
+                        used_prebuilt = true;
+                        break;
+                    /* TS/JS/TSX, PHP fall through to the per-file build
+                     * path below until their _with_registry variants land. */
                     default:
                         break;
                     }

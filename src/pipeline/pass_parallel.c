@@ -2062,6 +2062,14 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                             result->cached_tree, &result->resolved_calls);
                         used_prebuilt = true;
                         break;
+                    case CBM_LANG_CSHARP:
+                        cbm_run_cs_lsp_cross_with_registry(
+                            &result->arena, result->source, result->source_len,
+                            def_module, prebuilt,
+                            imp_vals, imp_count,
+                            result->cached_tree, &result->resolved_calls);
+                        used_prebuilt = true;
+                        break;
                     /* TS/JS/TSX, PHP fall through to the per-file build
                      * path below until their _with_registry variants land. */
                     default:

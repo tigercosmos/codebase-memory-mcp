@@ -2844,17 +2844,11 @@ void cbm_run_cs_lsp(CBMArena *arena, CBMFileResult *result, const char *source, 
 
 /* ── cross-file entry ───────────────────────────────────────────── */
 
-void cbm_run_cs_lsp_cross(CBMArena *arena, const char *source, int source_len,
-                           const char *module_qn, CBMLSPDef *defs, int def_count,
-                           const char **using_targets, int using_count,
-                           TSTree *cached_tree, CBMResolvedCallArray *out) {
-    if (!source || !arena) return;
-
-    CBMTypeRegistry reg;
-    cbm_registry_init(&reg, arena);
-    cbm_csharp_stdlib_register(&reg, arena);
-
-    /* Register cross-file defs. */
+/* Register one batch of CBMLSPDef[] into a registry. Shared by the
+ * per-file cross-LSP path and the Tier 2 pre-built registry builder.
+ * Def-driven (no per-file AST mutation) so deterministic per def set. */
+static void cs_register_lsp_defs(CBMArena *arena, CBMTypeRegistry *reg,
+                                 CBMLSPDef *defs, int def_count) {
     for (int i = 0; i < def_count; i++) {
         CBMLSPDef *d = &defs[i];
         if (!d->qualified_name || !d->short_name || !d->label) continue;
@@ -2889,7 +2883,7 @@ void cbm_run_cs_lsp_cross(CBMArena *arena, const char *source, int source_len,
                     rt.embedded_types = arr;
                 }
             }
-            cbm_registry_add_type(&reg, rt);
+            cbm_registry_add_type(reg, rt);
         }
         if (strcmp(d->label, "Function") == 0 || strcmp(d->label, "Method") == 0) {
             CBMRegisteredFunc rf;
@@ -2907,9 +2901,70 @@ void cbm_run_cs_lsp_cross(CBMArena *arena, const char *source, int source_len,
                 rets[1] = NULL;
             }
             rf.signature = cbm_type_func(arena, NULL, NULL, rets);
-            cbm_registry_add_func(&reg, rf);
+            cbm_registry_add_func(reg, rf);
         }
     }
+}
+
+/* Tier 2: build a project-wide C# registry ONCE from all defs (filters
+ * by lang). Shared READ-ONLY across resolve workers. Def-driven →
+ * identical entries to the per-file build, zero quality loss. */
+CBMTypeRegistry *cbm_cs_build_cross_registry(CBMArena *arena, CBMLSPDef *defs, int def_count) {
+    if (!arena) return NULL;
+    CBMTypeRegistry *reg = (CBMTypeRegistry *)cbm_arena_alloc(arena, sizeof(*reg));
+    if (!reg) return NULL;
+    cbm_registry_init(reg, arena);
+    cbm_csharp_stdlib_register(reg, arena);
+    for (int i = 0; i < def_count; i++) {
+        if (defs[i].lang != CBM_LANG_CSHARP) continue;
+        cs_register_lsp_defs(arena, reg, &defs[i], 1);
+    }
+    cbm_registry_finalize(reg);
+    return reg;
+}
+
+void cbm_run_cs_lsp_cross_with_registry(CBMArena *arena, const char *source, int source_len,
+                                        const char *module_qn, CBMTypeRegistry *reg,
+                                        const char **using_targets, int using_count,
+                                        TSTree *cached_tree, CBMResolvedCallArray *out) {
+    if (!source || !arena || !out || !reg) return;
+
+    TSTree *tree = cached_tree;
+    bool owns = false;
+    if (!tree) {
+        TSParser *parser = ts_parser_new();
+        if (!parser) return;
+        ts_parser_set_language(parser, tree_sitter_c_sharp());
+        tree = ts_parser_parse_string(parser, NULL, source,
+                                       source_len > 0 ? (uint32_t)source_len : (uint32_t)strlen(source));
+        ts_parser_delete(parser);
+        owns = true;
+    }
+    if (!tree) return;
+    TSNode root = ts_tree_root_node(tree);
+
+    CSLSPContext ctx;
+    cs_lsp_init(&ctx, arena, source, source_len, reg, module_qn, out);
+    for (int i = 0; i < using_count; i++) {
+        if (using_targets[i]) {
+            cs_lsp_add_using(&ctx, CBM_CS_USING_NAMESPACE, "", using_targets[i], false);
+        }
+    }
+    cs_lsp_process_file(&ctx, root);
+
+    if (owns) ts_tree_delete(tree);
+}
+
+void cbm_run_cs_lsp_cross(CBMArena *arena, const char *source, int source_len,
+                           const char *module_qn, CBMLSPDef *defs, int def_count,
+                           const char **using_targets, int using_count,
+                           TSTree *cached_tree, CBMResolvedCallArray *out) {
+    if (!source || !arena) return;
+
+    CBMTypeRegistry reg;
+    cbm_registry_init(&reg, arena);
+    cbm_csharp_stdlib_register(&reg, arena);
+    cs_register_lsp_defs(arena, &reg, defs, def_count);
 
     /* Parse if needed. */
     TSTree *tree = cached_tree;

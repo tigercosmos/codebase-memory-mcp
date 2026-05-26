@@ -631,6 +631,8 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
             cbm_py_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
         cross_registries.c =
             cbm_c_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
+        cross_registries.cs =
+            cbm_cs_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
     }
     cbm_log_info("pass.timing", "pass", "lsp_cross_prepare", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(*t)));

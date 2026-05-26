@@ -148,6 +148,16 @@ void cbm_run_cs_lsp_cross(CBMArena *arena, const char *source, int source_len,
                            const char **using_targets, int using_count,
                            TSTree *cached_tree, CBMResolvedCallArray *out);
 
+/* Tier 2: build a project-wide C# registry ONCE from all defs (filters
+ * by lang), shared READ-ONLY across resolve workers. Def-driven. */
+CBMTypeRegistry *cbm_cs_build_cross_registry(CBMArena *arena, CBMLSPDef *defs, int def_count);
+
+/* Cross-file resolve using a pre-built shared registry (Tier 2). */
+void cbm_run_cs_lsp_cross_with_registry(CBMArena *arena, const char *source, int source_len,
+                                        const char *module_qn, CBMTypeRegistry *reg,
+                                        const char **using_targets, int using_count,
+                                        TSTree *cached_tree, CBMResolvedCallArray *out);
+
 /* Batch cross-file entry for one CGo call from the parallel pipeline. */
 typedef struct {
     const char *source;

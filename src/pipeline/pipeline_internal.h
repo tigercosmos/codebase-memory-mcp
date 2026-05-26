@@ -57,7 +57,7 @@ typedef struct {
     cbm_gbuf_t *gbuf;         /* owned by pipeline */
     cbm_registry_t *registry; /* owned by pipeline */
     atomic_int *cancelled;    /* pointer to pipeline's cancelled flag */
-    int mode;                 /* cbm_index_mode_t (0=full, 1=moderate, 2=fast) */
+    int mode;                 /* cbm_index_mode_t (0=full, 1=moderate, 2=fast, 3=advanced) */
 
     /* Extraction result cache (sequential pipeline optimization).
      * When non-NULL, pass_definitions stores results here instead of freeing,

@@ -379,6 +379,16 @@ static void registry_visitor(const cbm_gbuf_node_t *node, void *userdata) {
 static void run_extract_resolve(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *changed_files, int ci) {
     struct timespec t;
 
+    /* Per-file LSP gate (same as the full pipeline): advanced mode only.
+     * Without this, the global toggle would carry over from whatever
+     * index ran last in this process. Cross-file LSP stays disabled in
+     * incremental regardless (cbm_parallel_resolve is called with NULL
+     * cross_registries below). Save and restore so this run does not
+     * pollute g_lsp_enabled for subsequent callers (e.g. LSP unit tests
+     * sharing the same process). */
+    bool saved_lsp = cbm_get_lsp_enabled();
+    cbm_set_lsp_enabled(ctx->mode == CBM_MODE_ADVANCED);
+
 #define MIN_FILES_FOR_PARALLEL_INCR 50
     int worker_count = cbm_default_worker_count(true);
     bool use_parallel = (worker_count > SKIP_ONE && ci > MIN_FILES_FOR_PARALLEL_INCR);
@@ -432,6 +442,7 @@ static void run_extract_resolve(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *change
         cbm_pipeline_pass_usages(ctx, changed_files, ci);
         cbm_pipeline_pass_semantic(ctx, changed_files, ci);
     }
+    cbm_set_lsp_enabled(saved_lsp); /* restore: incremental must not pollute g_lsp_enabled */
 }
 
 /* Run post-extraction passes (tests, decorator tags, configlink). */

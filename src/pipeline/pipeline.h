@@ -34,6 +34,10 @@ typedef enum {
     CBM_MODE_FULL = 0,     /* Full: everything including SIMILAR_TO + SEMANTICALLY_RELATED */
     CBM_MODE_MODERATE = 1, /* Moderate: fast discovery + SIMILAR_TO + SEMANTICALLY_RELATED */
     CBM_MODE_FAST = 2,     /* Fast: skip non-essential files, no similarity/semantic edges */
+    CBM_MODE_ADVANCED = 3, /* Advanced: everything in FULL + the cross-file LSP pass
+                            * (type-aware call/usage resolution across files). The
+                            * cross-LSP pass is the most expensive phase, so it is
+                            * opt-in: FULL no longer runs it, ADVANCED does. */
 } cbm_index_mode_t;
 #endif
 

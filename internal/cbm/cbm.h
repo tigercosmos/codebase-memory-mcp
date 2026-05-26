@@ -529,6 +529,13 @@ uint64_t cbm_get_preprocess_ns(void);
 uint64_t cbm_get_files_preprocessed(void);
 void cbm_reset_profile(void);
 
+/* Per-file LSP toggle. The pipeline sets this before extraction based
+ * on index mode (only CBM_MODE_ADVANCED enables LSP). Defaults to true
+ * so ad-hoc extraction and tests keep historical behaviour. Set once
+ * before parallel extraction; read concurrently by extract workers. */
+void cbm_set_lsp_enabled(bool enabled);
+bool cbm_get_lsp_enabled(void);
+
 // --- Internal helpers used by extractors ---
 
 // Growable array push functions (arena-allocated, no individual free needed).

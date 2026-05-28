@@ -298,11 +298,21 @@ static void c_resolve_pending_template_calls(CLSPContext* ctx,
     int tpn_count = 0;
     while (tpn_count < 8 && tpn[tpn_count]) tpn_count++;
 
-    // Match call arg types against function param types to deduce type params
+    // Match call arg types against function param types to deduce type params.
+    // param_types is NULL-terminated (see type_rep.h); count it and bound by
+    // min(formal_count, call_arg_count). Without this bound, call sites that
+    // pass MORE arguments than the function declares (variadic templates,
+    // default-arg calls, perfect-forward, mis-parsed args) walk past the NULL
+    // terminator and dereference garbage on `formal->kind`. The earlier
+    // null-guard at function entry doesn't cover this OOB read.
     if (callee->signature && callee->signature->kind == CBM_TYPE_FUNC &&
         callee->signature->data.func.param_types) {
-        for (int i = 0; i < call_arg_count; i++) {
-            const CBMType* formal = callee->signature->data.func.param_types[i];
+        const CBMType* const* pt = callee->signature->data.func.param_types;
+        int formal_count = 0;
+        while (pt[formal_count]) formal_count++;
+        int n = call_arg_count < formal_count ? call_arg_count : formal_count;
+        for (int i = 0; i < n; i++) {
+            const CBMType* formal = pt[i];
             if (!formal || !call_arg_types[i]) continue;
             // Unwrap references/pointers
             while (formal && (formal->kind == CBM_TYPE_REFERENCE ||

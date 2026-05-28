@@ -1,4 +1,5 @@
 #include "go_lsp.h"
+#include "lsp_node_iter.h"
 #include "../helpers.h"
 #include <string.h>
 #include <stdio.h>
@@ -1453,10 +1454,16 @@ recurse:;
         return;
     }
 
-    // Recurse into children
-    uint32_t nc = ts_node_child_count(node);
-    for (uint32_t i = 0; i < nc; i++) {
-        resolve_calls_in_node(ctx, ts_node_child(node, i));
+    // Recurse into children via a cursor (O(n)); ts_node_child(node,i) is O(i)
+    // → O(n²) on a wide node.
+    {
+        TSTreeCursor cursor = ts_tree_cursor_new(node);
+        if (ts_tree_cursor_goto_first_child(&cursor)) {
+            do {
+                resolve_calls_in_node(ctx, ts_tree_cursor_current_node(&cursor));
+            } while (ts_tree_cursor_goto_next_sibling(&cursor));
+        }
+        ts_tree_cursor_delete(&cursor);
     }
 
     if (push_scope) {
@@ -1590,13 +1597,14 @@ static void process_function(GoLSPContext* ctx, TSNode func_node) {
 void go_lsp_process_file(GoLSPContext* ctx, TSNode root) {
     if (ts_node_is_null(root)) return;
 
-    uint32_t nc = ts_node_child_count(root);
+    // Collect top-level children once (O(n)); ts_node_child(root,i) is O(i) → O(n²).
+    uint32_t kn = 0;
+    TSNode* kids = cbm_lsp_collect_children(ctx->arena, root, &kn);
 
     // Pass 1: Bind package-level var/const declarations into root scope.
     // Must happen before processing functions so all globals are visible.
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode child = ts_node_child(root, i);
-        if (ts_node_is_null(child)) continue;
+    for (uint32_t i = 0; i < kn; i++) {
+        TSNode child = kids[i];
         const char* kind = ts_node_type(child);
 
         if (strcmp(kind, "var_declaration") == 0 || strcmp(kind, "const_declaration") == 0) {
@@ -1610,9 +1618,8 @@ void go_lsp_process_file(GoLSPContext* ctx, TSNode root) {
     }
 
     // Pass 2: Process function/method bodies
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode child = ts_node_child(root, i);
-        if (ts_node_is_null(child)) continue;
+    for (uint32_t i = 0; i < kn; i++) {
+        TSNode child = kids[i];
         const char* kind = ts_node_type(child);
 
         if (strcmp(kind, "function_declaration") == 0 ||
@@ -1778,10 +1785,11 @@ void cbm_run_go_lsp(CBMArena* arena, CBMFileResult* result,
 
     // Phase 1b: Scan AST for struct definitions to populate embedded_types
     {
-        uint32_t root_nc = ts_node_child_count(root);
-        for (uint32_t i = 0; i < root_nc; i++) {
-            TSNode top = ts_node_child(root, i);
-            if (ts_node_is_null(top)) continue;
+        // Collect top-level children once (O(n)); ts_node_child(root,i) is O(i) → O(n²).
+        uint32_t rkn = 0;
+        TSNode* rkids = cbm_lsp_collect_children(arena, root, &rkn);
+        for (uint32_t i = 0; i < rkn; i++) {
+            TSNode top = rkids[i];
             const char* tk = ts_node_type(top);
             // type_declaration contains type_spec children
             if (strcmp(tk, "type_declaration") != 0) continue;
@@ -2284,10 +2292,11 @@ static const CBMType* parse_type_node_with_params(CBMArena* arena, TSNode node,
 static void extract_type_params_from_ast(CBMArena* arena, CBMTypeRegistry* reg,
     TSNode root, const char* source, const char* module_qn) {
 
-    uint32_t root_nc = ts_node_child_count(root);
-    for (uint32_t i = 0; i < root_nc; i++) {
-        TSNode top = ts_node_child(root, i);
-        if (ts_node_is_null(top)) continue;
+    // Collect top-level children once (O(n)); ts_node_child(root,i) is O(i) → O(n²).
+    uint32_t rkn = 0;
+    TSNode* rkids = cbm_lsp_collect_children(arena, root, &rkn);
+    for (uint32_t i = 0; i < rkn; i++) {
+        TSNode top = rkids[i];
         if (strcmp(ts_node_type(top), "function_declaration") != 0) continue;
 
         // Check for type_parameter_list (field name: "type_parameters", 15 chars)
@@ -2544,10 +2553,11 @@ void cbm_run_go_lsp_cross(
 
     // 3. Phase 1b: Scan AST for struct definitions to populate embedded_types
     {
-        uint32_t root_nc = ts_node_child_count(root);
-        for (uint32_t i = 0; i < root_nc; i++) {
-            TSNode top = ts_node_child(root, i);
-            if (ts_node_is_null(top)) continue;
+        // Collect top-level children once (O(n)); ts_node_child(root,i) is O(i) → O(n²).
+        uint32_t rkn = 0;
+        TSNode* rkids = cbm_lsp_collect_children(arena, root, &rkn);
+        for (uint32_t i = 0; i < rkn; i++) {
+            TSNode top = rkids[i];
             if (strcmp(ts_node_type(top), "type_declaration") != 0) continue;
             uint32_t td_nc = ts_node_child_count(top);
             for (uint32_t j = 0; j < td_nc; j++) {

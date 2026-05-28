@@ -40,6 +40,7 @@
  */
 
 #include "cs_lsp.h"
+#include "lsp_node_iter.h"
 #include "../helpers.h"
 #include <ctype.h>
 #include <stdio.h>
@@ -1611,11 +1612,14 @@ static void cs_resolve_calls_in_node(CSLSPContext *ctx, TSNode node) {
     if (strcmp(kind, "block") == 0) {
         CBMScope *prev = ctx->current_scope;
         ctx->current_scope = cbm_scope_push(ctx->arena, prev);
-        uint32_t nc = ts_node_child_count(node);
-        for (uint32_t i = 0; i < nc; i++) {
-            TSNode c = ts_node_child(node, i);
-            if (!ts_node_is_null(c)) cs_resolve_calls_in_node(ctx, c);
+        // Cursor walk (O(n)); ts_node_child(node,i) is O(i) → O(n²) on a wide block.
+        TSTreeCursor cursor = ts_tree_cursor_new(node);
+        if (ts_tree_cursor_goto_first_child(&cursor)) {
+            do {
+                cs_resolve_calls_in_node(ctx, ts_tree_cursor_current_node(&cursor));
+            } while (ts_tree_cursor_goto_next_sibling(&cursor));
         }
+        ts_tree_cursor_delete(&cursor);
         ctx->current_scope = prev;
         return;
     }
@@ -1637,10 +1641,14 @@ static void cs_resolve_calls_in_node(CSLSPContext *ctx, TSNode node) {
     /* Recurse into children. We do NOT pre-bind anything that would only be
      * available after the child is processed — left-to-right walk is fine for
      * most C# constructs at a Light-Semantic-Pass level. */
-    uint32_t nc = ts_node_child_count(node);
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode c = ts_node_child(node, i);
-        if (ts_node_is_null(c)) continue;
+    // Cursor walk (O(n)); ts_node_child(node,i) is O(i) → O(n²) on a wide node.
+    TSTreeCursor cursor = ts_tree_cursor_new(node);
+    if (!ts_tree_cursor_goto_first_child(&cursor)) {
+        ts_tree_cursor_delete(&cursor);
+        return;
+    }
+    do {
+        TSNode c = ts_tree_cursor_current_node(&cursor);
         const char *ck = ts_node_type(c);
         /* Don't recurse into nested type/method bodies — they're processed by
          * the pass-2 walker which rebuilds enclosing context. */
@@ -1659,7 +1667,8 @@ static void cs_resolve_calls_in_node(CSLSPContext *ctx, TSNode node) {
             continue;
         }
         cs_resolve_calls_in_node(ctx, c);
-    }
+    } while (ts_tree_cursor_goto_next_sibling(&cursor));
+    ts_tree_cursor_delete(&cursor);
 }
 
 /* ── method/constructor processing ──────────────────────────────── */
@@ -2163,11 +2172,13 @@ void cs_lsp_process_file(CSLSPContext *ctx, TSNode root) {
 
     /* Pass 2: walk top-level. file-scoped namespaces apply to ALL siblings,
      * so we keep the namespace pushed for the rest of the walk. */
-    uint32_t nc = ts_node_child_count(root);
+    // Collect top-level children once (O(n)); ts_node_child(root,i) is O(i) → O(n²).
+    uint32_t kn = 0;
+    TSNode *kids = cbm_lsp_collect_children(ctx->arena, root, &kn);
     bool file_scoped_active = false;
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode c = ts_node_child(root, i);
-        if (ts_node_is_null(c) || !ts_node_is_named(c)) continue;
+    for (uint32_t i = 0; i < kn; i++) {
+        TSNode c = kids[i];
+        if (!ts_node_is_named(c)) continue;
         const char *k = ts_node_type(c);
         if (strcmp(k, "using_directive") == 0) continue;
         if (strcmp(k, "file_scoped_namespace_declaration") == 0) {

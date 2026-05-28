@@ -18,6 +18,7 @@
  */
 
 #include "php_lsp.h"
+#include "lsp_node_iter.h"
 #include "../helpers.h"
 #include <ctype.h>
 #include <stdio.h>
@@ -2066,11 +2067,15 @@ static void php_resolve_calls_in_node(PHPLSPContext *ctx, TSNode node) {
         }
     }
 
-    /* Recurse. */
-    uint32_t nc = ts_node_child_count(node);
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode c = ts_node_child(node, i);
-        if (!ts_node_is_null(c)) php_resolve_calls_in_node(ctx, c);
+    /* Recurse via a cursor (O(n)); ts_node_child(node,i) is O(i) → O(n²) on a wide node. */
+    {
+        TSTreeCursor cursor = ts_tree_cursor_new(node);
+        if (ts_tree_cursor_goto_first_child(&cursor)) {
+            do {
+                php_resolve_calls_in_node(ctx, ts_tree_cursor_current_node(&cursor));
+            } while (ts_tree_cursor_goto_next_sibling(&cursor));
+        }
+        ts_tree_cursor_delete(&cursor);
     }
 }
 
@@ -2373,10 +2378,11 @@ void php_lsp_process_file(PHPLSPContext *ctx, TSNode root) {
     if (ts_node_is_null(root)) return;
 
     /* Pass 1: namespace + use declarations. */
-    uint32_t nc = ts_node_child_count(root);
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode c = ts_node_child(root, i);
-        if (ts_node_is_null(c)) continue;
+    // Collect top-level children once (O(n)); ts_node_child(root,i) is O(i) → O(n²).
+    uint32_t kn = 0;
+    TSNode *kids = cbm_lsp_collect_children(ctx->arena, root, &kn);
+    for (uint32_t i = 0; i < kn; i++) {
+        TSNode c = kids[i];
         const char *k = ts_node_type(c);
         if (strcmp(k, "namespace_definition") == 0) {
             set_namespace_from_decl(ctx, c);
@@ -2386,9 +2392,8 @@ void php_lsp_process_file(PHPLSPContext *ctx, TSNode root) {
     }
 
     /* Pass 2: process classes and top-level functions. */
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode c = ts_node_child(root, i);
-        if (ts_node_is_null(c)) continue;
+    for (uint32_t i = 0; i < kn; i++) {
+        TSNode c = kids[i];
         const char *k = ts_node_type(c);
         if (strcmp(k, "class_declaration") == 0 || strcmp(k, "trait_declaration") == 0 ||
             strcmp(k, "interface_declaration") == 0 || strcmp(k, "enum_declaration") == 0) {
@@ -3670,10 +3675,11 @@ void cbm_run_php_lsp(CBMArena *arena, CBMFileResult *result, const char *source,
         php_class_field_table_t tab = {0};
         /* First pass to populate the use map (so type names in property
          * declarations resolve correctly). */
-        uint32_t nc = ts_node_child_count(root);
-        for (uint32_t i = 0; i < nc; i++) {
-            TSNode c = ts_node_child(root, i);
-            if (ts_node_is_null(c)) continue;
+        /* Collect top-level children once (O(n)); ts_node_child(root,i) is O(i) → O(n²). */
+        uint32_t pkn = 0;
+        TSNode *pkids = cbm_lsp_collect_children(ctx.arena, root, &pkn);
+        for (uint32_t i = 0; i < pkn; i++) {
+            TSNode c = pkids[i];
             const char *k = ts_node_type(c);
             if (strcmp(k, "namespace_definition") == 0) {
                 set_namespace_from_decl(&ctx, c);
@@ -3873,10 +3879,11 @@ void cbm_run_php_lsp_cross(
      * resolve to the right type during the call walk. */
     {
         php_class_field_table_t tab = {0};
-        uint32_t nc = ts_node_child_count(root);
-        for (uint32_t i = 0; i < nc; i++) {
-            TSNode c = ts_node_child(root, i);
-            if (ts_node_is_null(c)) continue;
+        /* Collect top-level children once (O(n)); ts_node_child(root,i) is O(i) → O(n²). */
+        uint32_t pkn = 0;
+        TSNode *pkids = cbm_lsp_collect_children(ctx.arena, root, &pkn);
+        for (uint32_t i = 0; i < pkn; i++) {
+            TSNode c = pkids[i];
             const char *k = ts_node_type(c);
             if (strcmp(k, "namespace_definition") == 0) {
                 set_namespace_from_decl(&ctx, c);

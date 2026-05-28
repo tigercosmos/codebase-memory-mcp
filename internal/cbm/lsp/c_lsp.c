@@ -1,4 +1,5 @@
 #include "c_lsp.h"
+#include "lsp_node_iter.h"
 #include "../helpers.h"
 #include <string.h>
 #include <stdio.h>
@@ -3647,10 +3648,16 @@ recurse:;
         }
     }
 
-    // Recurse into children
-    uint32_t nc = ts_node_child_count(node);
-    for (uint32_t i = 0; i < nc; i++) {
-        c_resolve_calls_in_node(ctx, ts_node_child(node, i));
+    // Recurse into children via a cursor (O(n)); ts_node_child(node,i) is O(i)
+    // in tree-sitter → O(n²) on a wide node.
+    {
+        TSTreeCursor cursor = ts_tree_cursor_new(node);
+        if (ts_tree_cursor_goto_first_child(&cursor)) {
+            do {
+                c_resolve_calls_in_node(ctx, ts_tree_cursor_current_node(&cursor));
+            } while (ts_tree_cursor_goto_next_sibling(&cursor));
+        }
+        ts_tree_cursor_delete(&cursor);
     }
 
     if (push_scope) {
@@ -3959,10 +3966,14 @@ static void c_process_namespace(CLSPContext* ctx, TSNode ns_node) {
 
     TSNode body = ts_node_child_by_field_name(ns_node, "body", 4);
     if (!ts_node_is_null(body)) {
-        uint32_t nc = ts_node_child_count(body);
-        for (uint32_t i = 0; i < nc; i++) {
-            c_process_body_child(ctx, ts_node_child(body, i));
+        // Cursor walk (O(n)); namespace bodies can be very wide.
+        TSTreeCursor cursor = ts_tree_cursor_new(body);
+        if (ts_tree_cursor_goto_first_child(&cursor)) {
+            do {
+                c_process_body_child(ctx, ts_tree_cursor_current_node(&cursor));
+            } while (ts_tree_cursor_goto_next_sibling(&cursor));
         }
+        ts_tree_cursor_delete(&cursor);
     }
 
     ctx->current_namespace = saved_ns;
@@ -4094,10 +4105,11 @@ static void c_process_class(CLSPContext* ctx, TSNode class_node) {
         // Pre-pass: register method declarations (no body) as methods in registry.
         // This allows template return type substitution for methods like T& value();
         if (ctx->enclosing_class_qn) {
-            uint32_t nc = ts_node_child_count(body);
-            for (uint32_t i = 0; i < nc; i++) {
-                TSNode child = ts_node_child(body, i);
-                if (ts_node_is_null(child) || !ts_node_is_named(child)) continue;
+            uint32_t bkn = 0;
+            TSNode* bkids = cbm_lsp_collect_children(ctx->arena, body, &bkn);
+            for (uint32_t i = 0; i < bkn; i++) {
+                TSNode child = bkids[i];
+                if (!ts_node_is_named(child)) continue;
                 const char* ck = ts_node_type(child);
                 // field_declaration, declaration, or function_definition = method
                 if (strcmp(ck, "field_declaration") != 0 && strcmp(ck, "declaration") != 0 &&
@@ -4200,10 +4212,11 @@ static void c_process_class(CLSPContext* ctx, TSNode class_node) {
             }
         }
 
-        uint32_t nc = ts_node_child_count(body);
-        for (uint32_t i = 0; i < nc; i++) {
-            TSNode child = ts_node_child(body, i);
-            if (ts_node_is_null(child) || !ts_node_is_named(child)) continue;
+        uint32_t bkn = 0;
+        TSNode* bkids = cbm_lsp_collect_children(ctx->arena, body, &bkn);
+        for (uint32_t i = 0; i < bkn; i++) {
+            TSNode child = bkids[i];
+            if (!ts_node_is_named(child)) continue;
             c_process_body_child(ctx, child);
         }
     }
@@ -4225,14 +4238,16 @@ __attribute__((no_sanitize("address")))
 void c_lsp_process_file(CLSPContext* ctx, TSNode root) {
     if (ts_node_is_null(root)) return;
 
-    uint32_t nc = ts_node_child_count(root);
+    // Collect top-level children once (O(n)); both passes reuse the array.
+    // Indexing ts_node_child(root,i) per iteration is O(i) → O(n²) on a wide root.
+    uint32_t kn = 0;
+    TSNode* kids = cbm_lsp_collect_children(ctx->arena, root, &kn);
     TSNode child;   // Hoisted: prevents ASan stack-use-after-scope between passes
     TSNode inner;
 
     // Pass 1: process using declarations and global variables
-    for (uint32_t i = 0; i < nc; i++) {
-        child = ts_node_child(root, i);
-        if (ts_node_is_null(child)) continue;
+    for (uint32_t i = 0; i < kn; i++) {
+        child = kids[i];
         const char* ck = ts_node_type(child);
 
         if (strcmp(ck, "using_declaration") == 0 ||
@@ -4258,9 +4273,8 @@ void c_lsp_process_file(CLSPContext* ctx, TSNode root) {
     }
 
     // Pass 2: process functions, namespaces, classes, templates
-    for (uint32_t i = 0; i < nc; i++) {
-        child = ts_node_child(root, i);
-        if (ts_node_is_null(child)) continue;
+    for (uint32_t i = 0; i < kn; i++) {
+        child = kids[i];
         c_process_body_child(ctx, child);
     }
 }

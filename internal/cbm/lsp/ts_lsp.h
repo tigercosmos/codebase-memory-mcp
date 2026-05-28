@@ -103,6 +103,26 @@ void cbm_run_ts_lsp_cross(CBMArena* arena,
                           TSTree* cached_tree,
                           CBMResolvedCallArray* out);
 
+// Tier 2: build a project-wide TS/JS/TSX registry ONCE from all defs
+// (filters by lang). Shared READ-ONLY base; per-file overlays chain to
+// it via the registry fallback pointer.
+CBMTypeRegistry* cbm_ts_build_cross_registry(CBMArena* arena, CBMLSPDef* defs, int def_count);
+
+// Tier 2 per-file resolve. Builds a small per-file overlay (the file's
+// own-module defs, AST-refined) that chains to the shared base `reg`.
+// `defs`/`def_count` are the file's relevant defs (own + imports); only
+// own-module ones are registered into the overlay.
+void cbm_run_ts_lsp_cross_with_registry(CBMArena* arena,
+                                        const char* source, int source_len,
+                                        const char* module_qn,
+                                        bool js_mode, bool jsx_mode, bool dts_mode,
+                                        CBMTypeRegistry* reg,
+                                        CBMLSPDef* defs, int def_count,
+                                        const char** import_names, const char** import_qns,
+                                        int import_count,
+                                        TSTree* cached_tree,
+                                        CBMResolvedCallArray* out);
+
 // Register the TypeScript / JavaScript stdlib subset (Promise, Array<T>, Map<K,V>, Set<T>,
 // Object, Function, console, JSON) into a registry. v1 is hand-curated; a generator script
 // will replace this in v1.3.

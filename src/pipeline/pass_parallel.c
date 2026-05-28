@@ -2070,8 +2070,39 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                             result->cached_tree, &result->resolved_calls);
                         used_prebuilt = true;
                         break;
-                    /* TS/JS/TSX, PHP fall through to the per-file build
-                     * path below until their _with_registry variants land. */
+                    case CBM_LANG_JAVASCRIPT:
+                    case CBM_LANG_TYPESCRIPT:
+                    case CBM_LANG_TSX: {
+                        /* TS uses a per-file OVERLAY chained to the shared
+                         * base (prebuilt): the file's own-module defs are
+                         * registered into the overlay so the AST refinement
+                         * passes can mutate them; imports/stdlib resolve via
+                         * the shared base. Filter to own+imports so the
+                         * overlay builder can pick out own-module defs. */
+                        bool js, jsx, dts;
+                        cbm_pxc_ts_modes(lang, rel, &js, &jsx, &dts);
+                        CBMLSPDef *ts_defs = rc->all_defs;
+                        int ts_def_count = rc->def_count;
+                        CBMLSPDef *ts_filtered = NULL;
+                        if (rc->module_def_index) {
+                            int fc = 0;
+                            ts_filtered = cbm_pxc_filter_defs_for_file(
+                                rc->module_def_index, rc->all_defs,
+                                def_module, imp_vals, imp_count, &fc);
+                            if (ts_filtered) { ts_defs = ts_filtered; ts_def_count = fc; }
+                        }
+                        cbm_run_ts_lsp_cross_with_registry(
+                            &result->arena, result->source, result->source_len,
+                            def_module, js, jsx, dts, prebuilt,
+                            ts_defs, ts_def_count,
+                            imp_keys, imp_vals, imp_count,
+                            result->cached_tree, &result->resolved_calls);
+                        free(ts_filtered);
+                        used_prebuilt = true;
+                        break;
+                    }
+                    /* PHP falls through to the per-file build path below
+                     * until its overlay variant lands. */
                     default:
                         break;
                     }

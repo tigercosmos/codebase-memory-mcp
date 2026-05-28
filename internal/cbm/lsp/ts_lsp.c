@@ -50,6 +50,31 @@ static const CBMType* lookup_member_type(TSLSPContext* ctx, const CBMType* recv,
 static const CBMRegisteredFunc* lookup_method(TSLSPContext* ctx, const CBMType* recv,
                                               const char* method_name);
 static char* node_text(TSLSPContext* ctx, TSNode node);
+
+// Collect a node's children into an arena array via a single O(n) cursor pass.
+// Returns NULL (and sets *out_n=0) for a childless node or on OOM. Use this in
+// place of the `for (i=0; i<count; i++) ts_node_child(node, i)` idiom: in
+// tree-sitter ts_node_child(node, i) is O(i), so that loop is O(n²) on a wide
+// node — e.g. a program root holding hundreds of thousands of top-level nodes
+// (the reallyLargeFile.ts fixture is 583K lines of comment markup → 583K
+// children, which made the per-file LSP passes run for ~133 minutes).
+static TSNode* collect_children(CBMArena* arena, TSNode node, uint32_t* out_n) {
+    uint32_t nc = ts_node_child_count(node);
+    *out_n = 0;
+    if (nc == 0) return NULL;
+    TSNode* kids = (TSNode*)cbm_arena_alloc(arena, (size_t)nc * sizeof(TSNode));
+    if (!kids) return NULL;
+    uint32_t kn = 0;
+    TSTreeCursor cur = ts_tree_cursor_new(node);
+    if (ts_tree_cursor_goto_first_child(&cur)) {
+        do {
+            kids[kn++] = ts_tree_cursor_current_node(&cur);
+        } while (kn < nc && ts_tree_cursor_goto_next_sibling(&cur));
+    }
+    ts_tree_cursor_delete(&cur);
+    *out_n = kn;
+    return kids;
+}
 static const CBMType* simplify_type(TSLSPContext* ctx, const CBMType* t);
 static const CBMType* unwrap_passthrough_template(const CBMType* t);
 
@@ -1318,13 +1343,17 @@ static const CBMRegisteredFunc* lookup_method(TSLSPContext* ctx, const CBMType* 
 
 // Pull the underlying return type out of a FUNC signature, collapsing single-element
 // return arrays to that element.
-static const CBMType* return_type_of(const CBMType* sig) {
+static const CBMType* return_type_of(CBMArena* arena, const CBMType* sig) {
     if (!sig || sig->kind != CBM_TYPE_FUNC) return cbm_type_unknown();
     if (!sig->data.func.return_types || !sig->data.func.return_types[0]) return cbm_type_unknown();
     if (!sig->data.func.return_types[1]) return sig->data.func.return_types[0];
     int count = 0;
     while (sig->data.func.return_types[count]) count++;
-    return cbm_type_tuple(NULL, sig->data.func.return_types, count);
+    // Multi-return → build a tuple. Needs a real arena: passing NULL here
+    // crashed in cbm_arena_alloc when the cross-resolve path evaluated a
+    // multi-return signature (only reachable once the per-file LSP O(n²) was
+    // fixed and the resolve phase actually ran).
+    return cbm_type_tuple(arena, sig->data.func.return_types, count);
 }
 
 const CBMType* ts_eval_expr_type(TSLSPContext* ctx, TSNode node) {
@@ -1409,7 +1438,7 @@ const CBMType* ts_eval_expr_type(TSLSPContext* ctx, TSNode node) {
                         ts_node_type(fn), fn_type ? (int)fn_type->kind : -1);
             }
             if (fn_type && fn_type->kind == CBM_TYPE_FUNC) {
-                result = return_type_of(fn_type);
+                result = return_type_of(ctx->arena, fn_type);
 
                 // Polymorphic `this` return type: when the registered signature uses
                 // `this` (TYPE_PARAM "this"), substitute the actual receiver type
@@ -2111,8 +2140,13 @@ static void process_callback_arrow(TSLSPContext* ctx, TSNode arrow, const CBMTyp
     TSNode body = ts_node_child_by_field_name(arrow, "body", TS_LSP_FIELD_LEN("body"));
     if (!ts_node_is_null(body)) {
         if (strcmp(ts_node_type(body), "statement_block") == 0) {
-            uint32_t bc = ts_node_child_count(body);
-            for (uint32_t i = 0; i < bc; i++) process_node(ctx, ts_node_child(body, i));
+            TSTreeCursor cursor = ts_tree_cursor_new(body);
+            if (ts_tree_cursor_goto_first_child(&cursor)) {
+                do {
+                    process_node(ctx, ts_tree_cursor_current_node(&cursor));
+                } while (ts_tree_cursor_goto_next_sibling(&cursor));
+            }
+            ts_tree_cursor_delete(&cursor);
         } else {
             process_node(ctx, body);
         }
@@ -2354,12 +2388,22 @@ static void process_node(TSLSPContext* ctx, TSNode node) {
             // Process the function child for nested call resolution.
             process_node(ctx, fn_node);
 
+            // param_types is NULL-terminated (no count field). Measure its
+            // length so we never index past the terminator: a call may pass
+            // more args than the function declares params (e.g. excess/variadic
+            // args), and the extra args simply have no expected type. Indexing
+            // param_types[i] by the raw arg count read out of bounds → garbage
+            // CBMType* → crash on expected->kind.
+            uint32_t param_count = 0;
+            while (fn_type->data.func.param_types[param_count]) param_count++;
+
             uint32_t argc = ts_node_named_child_count(args);
             for (uint32_t i = 0; i < argc; i++) {
                 TSNode arg = ts_node_named_child(args, i);
                 if (ts_node_is_null(arg)) continue;
                 const char* ak = ts_node_type(arg);
-                const CBMType* expected = fn_type->data.func.param_types[i];
+                const CBMType* expected =
+                    (i < param_count) ? fn_type->data.func.param_types[i] : NULL;
                 if ((strcmp(ak, "arrow_function") == 0 ||
                      strcmp(ak, "function_expression") == 0) &&
                     expected && expected->kind == CBM_TYPE_FUNC) {
@@ -2611,9 +2655,17 @@ static void process_node(TSLSPContext* ctx, TSNode node) {
         return;
     }
 
-    // Default: recurse into children.
-    uint32_t nc = ts_node_child_count(node);
-    for (uint32_t i = 0; i < nc; i++) process_node(ctx, ts_node_child(node, i));
+    // Default: recurse into children via a cursor (O(n)). ts_node_child(node,i)
+    // is O(i) in tree-sitter → O(n²) when `node` is a wide block/root.
+    {
+        TSTreeCursor cursor = ts_tree_cursor_new(node);
+        if (ts_tree_cursor_goto_first_child(&cursor)) {
+            do {
+                process_node(ctx, ts_tree_cursor_current_node(&cursor));
+            } while (ts_tree_cursor_goto_next_sibling(&cursor));
+        }
+        ts_tree_cursor_delete(&cursor);
+    }
 }
 
 static void process_function_body(TSLSPContext* ctx, TSNode func_node, const char* func_qn,
@@ -2665,8 +2717,13 @@ static void process_function_body(TSLSPContext* ctx, TSNode func_node, const cha
         // arrow): walk the expression directly — process_node on that handles
         // call_expression resolution.
         if (strcmp(ts_node_type(body), "statement_block") == 0) {
-            uint32_t nc = ts_node_child_count(body);
-            for (uint32_t i = 0; i < nc; i++) process_node(ctx, ts_node_child(body, i));
+            TSTreeCursor cursor = ts_tree_cursor_new(body);
+            if (ts_tree_cursor_goto_first_child(&cursor)) {
+                do {
+                    process_node(ctx, ts_tree_cursor_current_node(&cursor));
+                } while (ts_tree_cursor_goto_next_sibling(&cursor));
+            }
+            ts_tree_cursor_delete(&cursor);
         } else {
             process_node(ctx, body);
         }
@@ -2681,12 +2738,14 @@ void ts_lsp_process_file(TSLSPContext* ctx, TSNode root) {
     if (!ctx || ts_node_is_null(root)) return;
     if (ctx->dts_mode) return;
 
-    uint32_t nc = ts_node_child_count(root);
+    // Collect top-level children once (O(n)); both passes reuse the array.
+    // See collect_children: indexing ts_node_child(root,i) here would be O(n²).
+    uint32_t kn = 0;
+    TSNode* kids = collect_children(ctx->arena, root, &kn);
 
     // Pass 1: bind module-level declarations into root scope.
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode child = ts_node_child(root, i);
-        if (ts_node_is_null(child)) continue;
+    for (uint32_t i = 0; i < kn; i++) {
+        TSNode child = kids[i];
         const char* kind = ts_node_type(child);
         if (strcmp(kind, "lexical_declaration") == 0 ||
             strcmp(kind, "variable_declaration") == 0) {
@@ -2695,9 +2754,8 @@ void ts_lsp_process_file(TSLSPContext* ctx, TSNode root) {
     }
 
     // Pass 2: process functions, methods, and class bodies.
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode child = ts_node_child(root, i);
-        if (ts_node_is_null(child)) continue;
+    for (uint32_t i = 0; i < kn; i++) {
+        TSNode child = kids[i];
         const char* kind = ts_node_type(child);
 
         if (strcmp(kind, "function_declaration") == 0) {
@@ -3852,10 +3910,10 @@ static void parse_jsdoc_block(TSLSPContext* ctx, const char* text, size_t len,
 static void apply_jsdoc_signatures(TSLSPContext* ctx, TSNode root, CBMTypeRegistry* reg) {
     if (!ctx->js_mode || ts_node_is_null(root) || !reg || !ctx->module_qn) return;
 
-    uint32_t nc = ts_node_child_count(root);
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode n = ts_node_child(root, i);
-        if (ts_node_is_null(n)) continue;
+    uint32_t kn = 0;
+    TSNode* kids = collect_children(ctx->arena, root, &kn);
+    for (uint32_t i = 0; i < kn; i++) {
+        TSNode n = kids[i];
         if (strcmp(ts_node_type(n), "function_declaration") != 0) continue;
 
         // Find the immediate preceding comment sibling (skip whitespace nodes which
@@ -3863,8 +3921,7 @@ static void apply_jsdoc_signatures(TSLSPContext* ctx, TSNode root, CBMTypeRegist
         // comment nodes).
         TSNode prev = {0};
         for (int j = (int)i - 1; j >= 0; j--) {
-            TSNode candidate = ts_node_child(root, (uint32_t)j);
-            if (ts_node_is_null(candidate)) continue;
+            TSNode candidate = kids[j];
             const char* ck = ts_node_type(candidate);
             if (strcmp(ck, "comment") == 0) { prev = candidate; break; }
             // Anything else: stop — JSDoc must be immediately preceding.
@@ -3932,11 +3989,11 @@ static void apply_jsdoc_signatures(TSLSPContext* ctx, TSNode root, CBMTypeRegist
 // implicit return-type inference at a coarse level (single-return common case).
 static void infer_implicit_returns(TSLSPContext* ctx, TSNode root, CBMTypeRegistry* reg) {
     if (ts_node_is_null(root) || !reg || !ctx->module_qn) return;
-    uint32_t nc = ts_node_child_count(root);
+    uint32_t kn = 0;
+    TSNode* kids = collect_children(ctx->arena, root, &kn);
 
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode n = ts_node_child(root, i);
-        if (ts_node_is_null(n)) continue;
+    for (uint32_t i = 0; i < kn; i++) {
+        TSNode n = kids[i];
         const char* k = ts_node_type(n);
 
         TSNode decl = n;
@@ -3998,11 +4055,11 @@ static void infer_implicit_returns(TSLSPContext* ctx, TSNode root, CBMTypeRegist
 // embedded_types / type_param_names.
 static void ast_sweep_shapes(TSLSPContext* ctx, TSNode root, CBMTypeRegistry* reg) {
     if (ts_node_is_null(root) || !reg) return;
-    uint32_t nc = ts_node_child_count(root);
+    uint32_t kn = 0;
+    TSNode* kids = collect_children(ctx->arena, root, &kn);
 
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode n = ts_node_child(root, i);
-        if (ts_node_is_null(n)) continue;
+    for (uint32_t i = 0; i < kn; i++) {
+        TSNode n = kids[i];
         const char* k = ts_node_type(n);
         TSNode decl = n;
         if (strcmp(k, "export_statement") == 0) {
@@ -4232,6 +4289,234 @@ void cbm_run_ts_lsp(CBMArena* arena, CBMFileResult* result,
 }
 
 // ── Cross-file entry point (Phase 3) ──────────────────────────────────────────
+
+/* Register a batch of CBMLSPDef[] into a registry. Mirrors the inline
+ * loop in cbm_run_ts_lsp_cross — KEEP IN SYNC. Shared by the Tier 2
+ * pre-built registry builder + per-file overlay builder. Def-driven
+ * (return/field/embedded/method info from def strings). */
+static void ts_register_lsp_defs(CBMArena* arena, CBMTypeRegistry* reg,
+                                 CBMLSPDef* defs, int def_count) {
+    for (int i = 0; i < def_count; i++) {
+        const CBMLSPDef* d = &defs[i];
+        if (!d->qualified_name || !d->short_name || !d->label) continue;
+
+        if (strcmp(d->label, "Class") == 0 || strcmp(d->label, "Interface") == 0) {
+            CBMRegisteredType rt;
+            memset(&rt, 0, sizeof(rt));
+            rt.qualified_name = d->qualified_name;
+            rt.short_name = d->short_name;
+            rt.is_interface = (strcmp(d->label, "Interface") == 0);
+            if (d->embedded_types && d->embedded_types[0]) {
+                int n = 1;
+                for (const char* s = d->embedded_types; *s; s++) if (*s == '|') n++;
+                const char** arr = (const char**)cbm_arena_alloc(arena,
+                                                                 (size_t)(n + 1) * sizeof(const char*));
+                if (arr) {
+                    int idx = 0;
+                    const char* start = d->embedded_types;
+                    for (const char* s = d->embedded_types;; s++) {
+                        if (*s == '|' || *s == '\0') {
+                            arr[idx++] = cbm_arena_strndup(arena, start, (size_t)(s - start));
+                            if (*s == '\0') break;
+                            start = s + 1;
+                        }
+                    }
+                    arr[idx] = NULL;
+                    rt.embedded_types = arr;
+                }
+            }
+            if (d->field_defs && d->field_defs[0]) {
+                int n = 1;
+                for (const char* s = d->field_defs; *s; s++) if (*s == '|') n++;
+                const char** fn_arr = (const char**)cbm_arena_alloc(arena,
+                                                                    (size_t)(n + 1) * sizeof(const char*));
+                const CBMType** ft_arr = (const CBMType**)cbm_arena_alloc(arena,
+                                                                          (size_t)(n + 1) * sizeof(const CBMType*));
+                if (fn_arr && ft_arr) {
+                    int idx = 0;
+                    const char* start = d->field_defs;
+                    for (const char* s = d->field_defs;; s++) {
+                        if (*s == '|' || *s == '\0') {
+                            char* pair = cbm_arena_strndup(arena, start, (size_t)(s - start));
+                            char* colon = pair ? strchr(pair, ':') : NULL;
+                            if (pair && colon) {
+                                *colon = '\0';
+                                fn_arr[idx] = pair;
+                                ft_arr[idx] = parse_ts_type_text(arena, colon + 1,
+                                                                 d->def_module_qn);
+                                idx++;
+                            }
+                            if (*s == '\0') break;
+                            start = s + 1;
+                        }
+                    }
+                    fn_arr[idx] = NULL;
+                    ft_arr[idx] = NULL;
+                    rt.field_names = fn_arr;
+                    rt.field_types = ft_arr;
+                }
+            }
+            cbm_registry_add_type(reg, rt);
+            if (d->method_names_str && d->method_names_str[0]) {
+                int n = 1;
+                for (const char* s = d->method_names_str; *s; s++) if (*s == '|') n++;
+                const char** mn_arr = (const char**)cbm_arena_alloc(arena,
+                                                                    (size_t)(n + 1) * sizeof(const char*));
+                const char** mqn_arr = (const char**)cbm_arena_alloc(arena,
+                                                                     (size_t)(n + 1) * sizeof(const char*));
+                if (mn_arr && mqn_arr) {
+                    int idx = 0;
+                    const char* start = d->method_names_str;
+                    for (const char* s = d->method_names_str;; s++) {
+                        if (*s == '|' || *s == '\0') {
+                            char* m = cbm_arena_strndup(arena, start, (size_t)(s - start));
+                            mn_arr[idx] = m;
+                            mqn_arr[idx] = cbm_arena_sprintf(arena, "%s.%s", d->qualified_name, m);
+                            idx++;
+                            if (*s == '\0') break;
+                            start = s + 1;
+                        }
+                    }
+                    mn_arr[idx] = NULL;
+                    mqn_arr[idx] = NULL;
+                    if (reg->type_count > 0) {
+                        CBMRegisteredType* rt_just = &reg->types[reg->type_count - 1];
+                        rt_just->method_names = mn_arr;
+                        rt_just->method_qns = mqn_arr;
+                    }
+                }
+            }
+        } else if (strcmp(d->label, "Function") == 0 || strcmp(d->label, "Method") == 0) {
+            CBMRegisteredFunc rf;
+            memset(&rf, 0, sizeof(rf));
+            rf.qualified_name = d->qualified_name;
+            rf.short_name = d->short_name;
+            rf.min_params = -1;
+            if (d->return_types && d->return_types[0]) {
+                int n = 1;
+                for (const char* s = d->return_types; *s; s++) if (*s == '|') n++;
+                const CBMType** rets = (const CBMType**)cbm_arena_alloc(arena,
+                                                                       (size_t)(n + 1) * sizeof(const CBMType*));
+                if (rets) {
+                    int idx = 0;
+                    const char* start = d->return_types;
+                    for (const char* s = d->return_types;; s++) {
+                        if (*s == '|' || *s == '\0') {
+                            char* part = cbm_arena_strndup(arena, start, (size_t)(s - start));
+                            rets[idx++] = parse_ts_type_text(arena, part, d->def_module_qn);
+                            if (*s == '\0') break;
+                            start = s + 1;
+                        }
+                    }
+                    rets[idx] = NULL;
+                    rf.signature = cbm_type_func(arena, NULL, NULL, rets);
+                }
+            }
+            if (strcmp(d->label, "Method") == 0 && d->receiver_type) {
+                rf.receiver_type = d->receiver_type;
+            }
+            cbm_registry_add_func(reg, rf);
+        }
+    }
+}
+
+/* Tier 2: build a project-wide TS/JS/TSX registry ONCE from all defs
+ * (filters by lang). Shared READ-ONLY *base* across resolve workers.
+ * Per-file overlays (built by cbm_run_ts_lsp_cross_with_registry)
+ * chain to this via the registry fallback pointer. */
+CBMTypeRegistry* cbm_ts_build_cross_registry(CBMArena* arena, CBMLSPDef* defs, int def_count) {
+    if (!arena) return NULL;
+    CBMTypeRegistry* reg = (CBMTypeRegistry*)cbm_arena_alloc(arena, sizeof(*reg));
+    if (!reg) return NULL;
+    cbm_registry_init(reg, arena);
+    cbm_ts_stdlib_register(reg, arena);
+    for (int i = 0; i < def_count; i++) {
+        CBMLSPDef* d = &defs[i];
+        if (d->lang != CBM_LANG_JAVASCRIPT && d->lang != CBM_LANG_TYPESCRIPT &&
+            d->lang != CBM_LANG_TSX) {
+            continue;
+        }
+        ts_register_lsp_defs(arena, reg, d, 1);
+    }
+    cbm_registry_finalize(reg);
+    return reg;
+}
+
+/* Tier 2 per-file resolve. Builds a SMALL per-file overlay registry P
+ * containing only this file's own-module defs (so the AST refinement
+ * passes — which mutate type shapes/aliases of locally-declared types
+ * — operate on P, not the shared base). P chains to the shared base
+ * `reg` for cross-file + stdlib lookups. This preserves the per-file
+ * AST refinement quality while avoiding re-registering imported
+ * modules' defs in every file. */
+void cbm_run_ts_lsp_cross_with_registry(CBMArena* arena,
+                                        const char* source, int source_len,
+                                        const char* module_qn,
+                                        bool js_mode, bool jsx_mode, bool dts_mode,
+                                        CBMTypeRegistry* reg,
+                                        CBMLSPDef* defs, int def_count,
+                                        const char** import_names, const char** import_qns,
+                                        int import_count,
+                                        TSTree* cached_tree,
+                                        CBMResolvedCallArray* out) {
+    if (!arena || !out || !reg) return;
+
+    /* Per-file overlay: register only the file's own-module defs so the
+     * AST passes can refine them. Imports/stdlib resolve via fallback. */
+    CBMTypeRegistry overlay;
+    cbm_registry_init(&overlay, arena);
+    overlay.fallback = reg;
+    for (int i = 0; i < def_count; i++) {
+        CBMLSPDef* d = &defs[i];
+        const char* dm = d->def_module_qn ? d->def_module_qn : "";
+        if (module_qn && strcmp(dm, module_qn) == 0) {
+            ts_register_lsp_defs(arena, &overlay, d, 1);
+        }
+    }
+
+    TSTree* tree = cached_tree;
+    bool owns_tree = false;
+    if (!tree) {
+        if (!source || source_len <= 0) return;
+        TSParser* parser = ts_parser_new();
+        if (!parser) return;
+        const TSLanguage* lang = jsx_mode ? (js_mode ? tree_sitter_javascript()
+                                                     : tree_sitter_tsx())
+                                          : (js_mode ? tree_sitter_javascript()
+                                                     : tree_sitter_typescript());
+        ts_parser_set_language(parser, lang);
+        tree = ts_parser_parse_string(parser, NULL, source, source_len);
+        ts_parser_delete(parser);
+        if (!tree) return;
+        owns_tree = true;
+    }
+    TSNode root = ts_tree_root_node(tree);
+    if (ts_node_is_null(root)) {
+        if (owns_tree) ts_tree_delete(tree);
+        return;
+    }
+
+    cbm_registry_finalize(&overlay);
+
+    TSLSPContext ctx;
+    ts_lsp_init(&ctx, arena, source, source_len, &overlay, module_qn,
+                js_mode, jsx_mode, dts_mode, out);
+    for (int i = 0; i < import_count; i++) {
+        if (import_names && import_qns && import_names[i] && import_qns[i]) {
+            ts_lsp_add_import(&ctx, import_names[i], import_qns[i]);
+        }
+    }
+
+    ast_sweep_shapes(&ctx, root, &overlay);
+    rebuild_signatures_from_ast(&ctx, root, &overlay);
+    convert_signature_type_params(&ctx, root, &overlay);
+    apply_jsdoc_signatures(&ctx, root, &overlay);
+    infer_implicit_returns(&ctx, root, &overlay);
+
+    ts_lsp_process_file(&ctx, root);
+
+    if (owns_tree) ts_tree_delete(tree);
+}
 
 void cbm_run_ts_lsp_cross(CBMArena* arena,
                           const char* source, int source_len,

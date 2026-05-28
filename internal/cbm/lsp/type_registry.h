@@ -63,7 +63,7 @@ typedef struct {
 } CBMRegistryHashEntry;
 
 // Cross-file type/function registry.
-typedef struct {
+typedef struct CBMTypeRegistry {
     CBMRegisteredFunc* funcs;
     int func_count;
     int func_cap;
@@ -73,6 +73,13 @@ typedef struct {
     int type_cap;
 
     CBMArena* arena;  // owns all string data
+
+    /* Optional fallback registry (Tier 2 two-level lookup). When a
+     * lookup misses in this registry, it chains to `fallback`. Used by
+     * TS/PHP cross-LSP: a small per-file registry (the file's own
+     * AST-refined types) chains to a shared, immutable base registry
+     * (stdlib + all project defs) built once. NULL = no chaining. */
+    const struct CBMTypeRegistry* fallback;
 
     // Hash indexes (built lazily by cbm_registry_finalize, NULL until then).
     // Lookups fall back to linear scan when these are NULL.

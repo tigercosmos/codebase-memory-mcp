@@ -458,6 +458,52 @@ TEST(golsp_stdlib_fmt_sprintf) {
     PASS();
 }
 
+/* ── Golden regression tests (WS9) ─────────────────────────────── */
+
+/* Golden: a method call on a struct *value* parameter resolves to the
+ * struct's method. Mirrors golsp_param_type_simple / golsp_pointer_value_receivers
+ * but with a value (non-pointer) receiver. Robust: substring-asserts the call
+ * resolved at all, not a brittle exact QN. */
+TEST(golsp_golden_method_on_value) {
+    CBMFileResult *r = extract_go("package main\n\n"
+                                  "type Greeter struct{}\n\n"
+                                  "func (g Greeter) Hello() string { return \"hi\" }\n\n"
+                                  "func run(g Greeter) {\n\tg.Hello()\n}\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "run", "Hello"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* Golden: a package-qualified stdlib call (fmt.Println) resolves. Mirrors
+ * golsp_stdlib_fmt_sprintf exactly; fmt.Println is a stable stdlib symbol. */
+TEST(golsp_golden_fmt_println) {
+    CBMFileResult *r = extract_go("package main\n\n"
+                                  "import \"fmt\"\n\n"
+                                  "func emit(msg string) {\n"
+                                  "\tfmt.Println(msg)\n}\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "emit", "fmt.Println"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* Golden: a call to a same-file top-level function resolves with positive
+ * confidence. Mirrors golsp_direct_func_call and adds the confidence>0 check
+ * used by golsp_variadic_args. A direct same-package func call is the most
+ * basic resolution and is definitely supported. */
+TEST(golsp_golden_same_file_func) {
+    CBMFileResult *r = extract_go("package main\n\n"
+                                  "func add(a int, b int) int { return a + b }\n\n"
+                                  "func compute() int {\n\treturn add(1, 2)\n}\n");
+    ASSERT_NOT_NULL(r);
+    int idx = require_resolved(r, "compute", "add");
+    ASSERT_GTE(idx, 0);
+    ASSERT_TRUE(r->resolved_calls.items[idx].confidence > 0);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Select receive ────────────────────────────────────────────── */
 
 TEST(golsp_select_receive) {
@@ -1137,6 +1183,11 @@ SUITE(go_lsp) {
     /* Stdlib */
     RUN_TEST(golsp_stdlib_os_open);
     RUN_TEST(golsp_stdlib_fmt_sprintf);
+
+    /* Golden regression (WS9) */
+    RUN_TEST(golsp_golden_method_on_value);
+    RUN_TEST(golsp_golden_fmt_println);
+    RUN_TEST(golsp_golden_same_file_func);
 
     /* Select receive */
     RUN_TEST(golsp_select_receive);

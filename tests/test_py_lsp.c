@@ -1205,6 +1205,57 @@ TEST(pylsp_round6_property_access_chains) {
     PASS();
 }
 
+/* ── Golden regression tests (WS9) ─────────────────────────────── */
+
+/* Golden: a method call via self resolves to the sibling method. Mirrors
+ * pylsp_method_via_self exactly — known-passing pattern. Robust: only
+ * substring-asserts the call resolved at all. */
+TEST(pylsp_golden_self_method) {
+    CBMFileResult *r = extract_py(
+        "class A:\n"
+        "    def bar(self):\n"
+        "        return 1\n"
+        "    def foo(self):\n"
+        "        return self.bar()\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "foo", "bar"), 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* Golden: a top-level stdlib module call (logging.getLogger) resolves.
+ * Mirrors pylsp_stdlib_logging_getlogger structure exactly; getLogger is a
+ * stable stdlib symbol. Robust substring assertion only. */
+TEST(pylsp_golden_stdlib_logging_getlogger) {
+    CBMFileResult *r = extract_py(
+        "import logging\n"
+        "def setup():\n"
+        "    return logging.getLogger(\"x\")\n");
+    ASSERT_NOT_NULL(r);
+    int idx = find_resolved(r, "setup", "getLogger");
+    ASSERT_GTE(idx, 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* Golden: a call to a same-module top-level function resolves with positive
+ * confidence. Mirrors pylsp_direct_function_call plus the confidence>0 check
+ * used in Go's golsp_golden_same_file_func. Direct same-module func calls
+ * are the most basic resolution and definitely supported. */
+TEST(pylsp_golden_same_module_func) {
+    CBMFileResult *r = extract_py(
+        "def add(a, b):\n"
+        "    return a + b\n"
+        "def compute():\n"
+        "    return add(1, 2)\n");
+    ASSERT_NOT_NULL(r);
+    int idx = require_resolved(r, "compute", "add");
+    ASSERT_GTE(idx, 0);
+    ASSERT_TRUE(r->resolved_calls.items[idx].confidence > 0);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(py_lsp) {
@@ -1279,4 +1330,8 @@ SUITE(py_lsp) {
     RUN_TEST(pylsp_round6_generator_yields_iterable);
     RUN_TEST(pylsp_round6_dataclass_field_access);
     RUN_TEST(pylsp_round6_property_access_chains);
+    /* Golden regression tests (WS9) */
+    RUN_TEST(pylsp_golden_self_method);
+    RUN_TEST(pylsp_golden_stdlib_logging_getlogger);
+    RUN_TEST(pylsp_golden_same_module_func);
 }

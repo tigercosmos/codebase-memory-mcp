@@ -1698,18 +1698,17 @@ static void cbm_install_hook_gate_script(const char *home, const char *binary_pa
     if (!f) {
         return;
     }
-    (void)fprintf(
-        f,
-        "#!/bin/bash\n"
-        "# codebase-memory-mcp search augmenter (Claude Code PreToolUse).\n"
-        "# NOTE: the legacy filename is kept for zero-migration upgrades.\n"
-        "# Despite the name this NEVER blocks a tool call - it only adds\n"
-        "# graph context. Any failure is silent (exit 0, no output).\n"
-        "BIN=\"%s\"\n"
-        "[ -x \"$BIN\" ] || exit 0\n"
-        "\"$BIN\" hook-augment 2>/dev/null\n"
-        "exit 0\n",
-        binary_path);
+    (void)fprintf(f,
+                  "#!/bin/bash\n"
+                  "# codebase-memory-mcp search augmenter (Claude Code PreToolUse).\n"
+                  "# NOTE: the legacy filename is kept for zero-migration upgrades.\n"
+                  "# Despite the name this NEVER blocks a tool call - it only adds\n"
+                  "# graph context. Any failure is silent (exit 0, no output).\n"
+                  "BIN=\"%s\"\n"
+                  "[ -x \"$BIN\" ] || exit 0\n"
+                  "\"$BIN\" hook-augment 2>/dev/null\n"
+                  "exit 0\n",
+                  binary_path);
     /* fchmod before close to avoid TOCTOU race (CodeQL cpp/toctou-race-condition) */
 #ifndef _WIN32
     fchmod(fileno(f), CLI_OCTAL_PERM);

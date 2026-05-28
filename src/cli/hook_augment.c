@@ -38,9 +38,9 @@
 #define HA_MIN_TOKEN 4            /* skip short/noisy patterns before any work */
 #define HA_MAX_TOKEN 96
 #define HA_RESULT_LIMIT 5
-#define HA_MAX_WALKUP 8           /* cwd may be a subdir of the indexed root  */
-#define HA_DEADLINE_MS 300        /* hard in-process budget (see also: the    */
-                                  /* settings.json "timeout" backstop)        */
+#define HA_MAX_WALKUP 8    /* cwd may be a subdir of the indexed root  */
+#define HA_DEADLINE_MS 300 /* hard in-process budget (see also: the    */
+                           /* settings.json "timeout" backstop)        */
 
 /* ── Hard deadline ────────────────────────────────────────────────
  * A slow SQLite open or query must never stall the agent. When the timer
@@ -77,8 +77,7 @@ static char *ha_read_stdin(void) {
     }
     size_t total = 0;
     size_t n;
-    while (total < HA_STDIN_CAP &&
-           (n = fread(buf + total, 1, HA_STDIN_CAP - total, stdin)) > 0) {
+    while (total < HA_STDIN_CAP && (n = fread(buf + total, 1, HA_STDIN_CAP - total, stdin)) > 0) {
         total += n;
     }
     buf[total] = '\0';
@@ -101,8 +100,7 @@ static bool ha_extract_token(const char *pattern, char *out, size_t out_sz) {
     while (pattern[i]) {
         if (isalpha((unsigned char)pattern[i]) || pattern[i] == '_') {
             size_t start = i;
-            while (pattern[i] &&
-                   (isalnum((unsigned char)pattern[i]) || pattern[i] == '_')) {
+            while (pattern[i] && (isalnum((unsigned char)pattern[i]) || pattern[i] == '_')) {
                 i++;
             }
             size_t len = i - start;
@@ -160,8 +158,7 @@ static char *ha_build_args(const char *project, const char *token) {
  *
  * *is_error is set when the envelope is an MCP error (e.g. project not
  * indexed) so the caller can try a parent directory. */
-static char *ha_format_context(const char *envelope, const char *token,
-                               bool *is_error) {
+static char *ha_format_context(const char *envelope, const char *token, bool *is_error) {
     *is_error = false;
     yyjson_doc *edoc = yyjson_read(envelope, strlen(envelope), 0);
     if (!edoc) {
@@ -175,9 +172,7 @@ static char *ha_format_context(const char *envelope, const char *token,
         return NULL;
     }
     yyjson_val *content = yyjson_obj_get(eroot, "content");
-    yyjson_val *item0 = (content && yyjson_is_arr(content))
-                            ? yyjson_arr_get(content, 0)
-                            : NULL;
+    yyjson_val *item0 = (content && yyjson_is_arr(content)) ? yyjson_arr_get(content, 0) : NULL;
     const char *inner = ha_obj_str(item0, "text");
     if (!inner) {
         yyjson_doc_free(edoc);
@@ -221,8 +216,7 @@ static char *ha_format_context(const char *envelope, const char *token,
         const char *fp = ha_obj_str(r, "file_path");
         const char *lb = ha_obj_str(r, "label");
         const char *disp = (qn && qn[0]) ? qn : (nm ? nm : "");
-        off += snprintf(text + off, (size_t)(4096 - off), "\n- %s  %s%s%s",
-                        disp, fp ? fp : "",
+        off += snprintf(text + off, (size_t)(4096 - off), "\n- %s  %s%s%s", disp, fp ? fp : "",
                         (lb && lb[0]) ? "  " : "", (lb && lb[0]) ? lb : "");
     }
 
@@ -253,8 +247,7 @@ static void ha_emit(const char *text) {
  * search_graph until an indexed project is found (or the walk is exhausted).
  * Stops at the first non-error result: a valid project with zero hits is a
  * legitimate "no match" and must NOT cause a parent-directory probe. */
-static char *ha_resolve_and_query(cbm_mcp_server_t *srv, const char *start,
-                                  const char *token) {
+static char *ha_resolve_and_query(cbm_mcp_server_t *srv, const char *start, const char *token) {
     char dir[4096];
     snprintf(dir, sizeof(dir), "%s", start);
 

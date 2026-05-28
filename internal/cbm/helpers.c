@@ -760,8 +760,10 @@ static char *append_path_segments(char *out, const char *rel_path, size_t plen, 
 }
 
 char *cbm_fqn_compute(CBMArena *a, const char *project, const char *rel_path, const char *name) {
-    if (!project) project = "";
-    if (!rel_path) rel_path = "";
+    if (!project)
+        project = "";
+    if (!rel_path)
+        rel_path = "";
     size_t proj_len = strlen(project);
     size_t path_len = strlen(rel_path);
     size_t name_len = name ? strlen(name) : 0;

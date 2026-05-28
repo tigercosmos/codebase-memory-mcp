@@ -48,16 +48,13 @@ bool cbm_pxc_has_cross_lsp(CBMLanguage lang);
  * use. Returns the malloc'd array (free() it) and writes the entry
  * count to *out_count. Returns NULL on alloc failure or when no defs
  * exist. */
-CBMLSPDef *cbm_pxc_collect_all_defs(CBMFileResult **cache,
-                                    const cbm_file_info_t *files,
-                                    int file_count,
-                                    const char *project_name,
-                                    char **def_modules,
+CBMLSPDef *cbm_pxc_collect_all_defs(CBMFileResult **cache, const cbm_file_info_t *files,
+                                    int file_count, const char *project_name, char **def_modules,
                                     int *out_count);
 
 /* Detect TS dialect flags from a relative path. */
-void cbm_pxc_ts_modes(CBMLanguage lang, const char *rel_path,
-                      bool *out_js, bool *out_jsx, bool *out_dts);
+void cbm_pxc_ts_modes(CBMLanguage lang, const char *rel_path, bool *out_js, bool *out_jsx,
+                      bool *out_dts);
 
 /* ── Per-module def index (the gopls "package summary" pattern) ──
  *
@@ -79,8 +76,7 @@ void cbm_pxc_ts_modes(CBMLanguage lang, const char *rel_path,
  * 110k → ~50× per-file speedup on the dominant cost. */
 typedef struct CBMModuleDefIndex CBMModuleDefIndex;
 
-CBMModuleDefIndex *cbm_pxc_build_module_def_index(CBMLSPDef *all_defs,
-                                                  int def_count);
+CBMModuleDefIndex *cbm_pxc_build_module_def_index(CBMLSPDef *all_defs, int def_count);
 
 void cbm_pxc_free_module_def_index(CBMModuleDefIndex *idx);
 
@@ -90,12 +86,9 @@ void cbm_pxc_free_module_def_index(CBMModuleDefIndex *idx);
  * (caller keeps it alive). Caller frees the returned array with
  * free(). Writes the entry count to *out_count. Returns NULL if no
  * matches (with *out_count = 0). */
-CBMLSPDef *cbm_pxc_filter_defs_for_file(const CBMModuleDefIndex *idx,
-                                        CBMLSPDef *all_defs,
-                                        const char *own_module,
-                                        const char *const *imp_qns,
-                                        int imp_count,
-                                        int *out_count);
+CBMLSPDef *cbm_pxc_filter_defs_for_file(const CBMModuleDefIndex *idx, CBMLSPDef *all_defs,
+                                        const char *own_module, const char *const *imp_qns,
+                                        int imp_count, int *out_count);
 
 /* ── Tier 2 full: pre-built per-language cross-LSP registries ─────
  *
@@ -116,21 +109,29 @@ typedef struct {
 
 /* Return the appropriate pre-built registry for a language, or NULL
  * if none was built (or language has no cross-LSP entrypoint). */
-static inline CBMTypeRegistry *cbm_pxc_registry_for_lang(
-    const CBMCrossLspRegistries *r, CBMLanguage lang) {
-    if (!r) return NULL;
+static inline CBMTypeRegistry *cbm_pxc_registry_for_lang(const CBMCrossLspRegistries *r,
+                                                         CBMLanguage lang) {
+    if (!r)
+        return NULL;
     switch (lang) {
-    case CBM_LANG_GO:         return r->go;
-    case CBM_LANG_C:          /* fallthrough */
-    case CBM_LANG_CPP:        /* fallthrough */
-    case CBM_LANG_CUDA:       return r->c;
-    case CBM_LANG_PYTHON:     return r->python;
+    case CBM_LANG_GO:
+        return r->go;
+    case CBM_LANG_C:   /* fallthrough */
+    case CBM_LANG_CPP: /* fallthrough */
+    case CBM_LANG_CUDA:
+        return r->c;
+    case CBM_LANG_PYTHON:
+        return r->python;
     case CBM_LANG_JAVASCRIPT: /* fallthrough */
     case CBM_LANG_TYPESCRIPT: /* fallthrough */
-    case CBM_LANG_TSX:        return r->ts;
-    case CBM_LANG_PHP:        return r->php;
-    case CBM_LANG_CSHARP:     return r->cs;
-    default:                  return NULL;
+    case CBM_LANG_TSX:
+        return r->ts;
+    case CBM_LANG_PHP:
+        return r->php;
+    case CBM_LANG_CSHARP:
+        return r->cs;
+    default:
+        return NULL;
     }
 }
 
@@ -139,20 +140,14 @@ static inline CBMTypeRegistry *cbm_pxc_registry_for_lang(
  * owns source, module_qn, all_defs, imp_keys, imp_vals.
  * NOTE: all_defs is read-only in practice but typed non-const to match
  * the existing cbm_run_X_lsp_cross callee signatures. */
-void cbm_pxc_run_one(CBMLanguage lang, CBMFileResult *r,
-                     const char *source, int source_len,
-                     const char *module_qn,
-                     CBMLSPDef *all_defs, int def_count,
-                     const char **imp_keys, const char **imp_vals,
-                     int imp_count);
+void cbm_pxc_run_one(CBMLanguage lang, CBMFileResult *r, const char *source, int source_len,
+                     const char *module_qn, CBMLSPDef *all_defs, int def_count,
+                     const char **imp_keys, const char **imp_vals, int imp_count);
 
 /* TS / JS / JSX / TSX variant with explicit dialect flags. */
-void cbm_pxc_run_one_ts(CBMFileResult *r,
-                        const char *source, int source_len,
-                        const char *module_qn,
-                        CBMLSPDef *all_defs, int def_count,
-                        const char **imp_keys, const char **imp_vals,
-                        int imp_count,
-                        bool js_mode, bool jsx_mode, bool dts_mode);
+void cbm_pxc_run_one_ts(CBMFileResult *r, const char *source, int source_len, const char *module_qn,
+                        CBMLSPDef *all_defs, int def_count, const char **imp_keys,
+                        const char **imp_vals, int imp_count, bool js_mode, bool jsx_mode,
+                        bool dts_mode);
 
 #endif /* CBM_PIPELINE_PASS_LSP_CROSS_H */

@@ -34,7 +34,8 @@ static inline void ts_nstack_push(TSNodeStack *s, CBMArena *arena, TSNode node) 
     if (s->count >= s->cap) {
         int new_cap = s->cap ? s->cap * 2 : 512;
         TSNode *new_items = (TSNode *)cbm_arena_alloc(arena, (size_t)new_cap * sizeof(TSNode));
-        if (!new_items) return; /* OOM: best-effort, stop growing */
+        if (!new_items)
+            return; /* OOM: best-effort, stop growing */
         if (s->items && s->count > 0) {
             memcpy(new_items, s->items, (size_t)s->count * sizeof(TSNode));
         }

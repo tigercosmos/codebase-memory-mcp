@@ -88,9 +88,9 @@ static cbm_system_info_t detect_system_bsd(void) {
     info.perf_cores = info.total_cores;
 
 #if defined(__OpenBSD__)
-    int mib[2] = { CTL_HW, HW_PHYSMEM };
+    int mib[2] = {CTL_HW, HW_PHYSMEM};
 #else
-    int mib[2] = { CTL_HW, HW_PHYSMEM64 };
+    int mib[2] = {CTL_HW, HW_PHYSMEM64};
 #endif
     uint64_t physmem = 0;
     size_t len = sizeof(physmem);

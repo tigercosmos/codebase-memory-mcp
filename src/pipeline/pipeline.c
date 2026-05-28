@@ -483,9 +483,10 @@ static void run_predump_passes(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx) {
  * launching the dispatch loop). When the cache is unavailable (e.g. if the
  * pipeline opted out of caching), the pass becomes a no-op since there are
  * no extracted results to feed cross-file resolution. */
-static int seq_pass_lsp_cross_dispatch(cbm_pipeline_ctx_t *ctx,
-                                       const cbm_file_info_t *files, int file_count) {
-    if (!ctx || !ctx->result_cache) return 0;
+static int seq_pass_lsp_cross_dispatch(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
+                                       int file_count) {
+    if (!ctx || !ctx->result_cache)
+        return 0;
     /* Cross-file LSP runs in every mode. */
     return cbm_pipeline_pass_lsp_cross(ctx, files, file_count, ctx->result_cache);
 }
@@ -597,9 +598,9 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
     if (run_cross_lsp) {
         def_modules = (char **)calloc((size_t)file_count, sizeof(char *));
         all_defs = def_modules
-            ? cbm_pxc_collect_all_defs(cache, files, file_count, ctx->project_name,
-                                       def_modules, &def_count)
-            : NULL;
+                       ? cbm_pxc_collect_all_defs(cache, files, file_count, ctx->project_name,
+                                                  def_modules, &def_count)
+                       : NULL;
     }
     /* Build inverted index: module_qn → defs. The fused resolve_worker
      * uses this to filter the global all_defs[] down to just the defs
@@ -618,23 +619,18 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
     cbm_arena_init(&cross_lsp_arena);
     CBMCrossLspRegistries cross_registries = {0};
     if (all_defs) {
-        cross_registries.go =
-            cbm_go_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
+        cross_registries.go = cbm_go_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
         cross_registries.python =
             cbm_py_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
-        cross_registries.c =
-            cbm_c_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
-        cross_registries.cs =
-            cbm_cs_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
-        cross_registries.ts =
-            cbm_ts_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
+        cross_registries.c = cbm_c_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
+        cross_registries.cs = cbm_cs_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
+        cross_registries.ts = cbm_ts_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
     }
     cbm_log_info("pass.timing", "pass", "lsp_cross_prepare", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(*t)));
     cbm_clock_gettime(CLOCK_MONOTONIC, t);
-    rc = cbm_parallel_resolve(ctx, files, file_count, cache, &shared_ids,
-                              worker_count, all_defs, def_count, def_modules,
-                              module_def_index, &cross_registries);
+    rc = cbm_parallel_resolve(ctx, files, file_count, cache, &shared_ids, worker_count, all_defs,
+                              def_count, def_modules, module_def_index, &cross_registries);
     cbm_log_info("pass.timing", "pass", "parallel_resolve", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(*t)));
     cbm_pxc_free_module_def_index(module_def_index);

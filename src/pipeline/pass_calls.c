@@ -346,8 +346,8 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
             res.confidence = lsp->confidence;
             res.strategy = lsp->strategy;
             res.candidate_count = 1;
-            emit_classified_edge(ctx, call, source_node, target_node, &res, module_qn,
-                                 imp_keys, imp_vals, imp_count);
+            emit_classified_edge(ctx, call, source_node, target_node, &res, module_qn, imp_keys,
+                                 imp_vals, imp_count);
             return SKIP_ONE;
         }
     }
@@ -430,8 +430,8 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
                 continue;
             }
             total_calls++;
-            if (resolve_single_call(ctx, call, &result->resolved_calls, rel, module_qn,
-                                    imp_keys, imp_vals, imp_count)) {
+            if (resolve_single_call(ctx, call, &result->resolved_calls, rel, module_qn, imp_keys,
+                                    imp_vals, imp_count)) {
                 resolved++;
             } else {
                 unresolved++;

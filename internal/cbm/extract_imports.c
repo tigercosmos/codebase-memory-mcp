@@ -1,7 +1,7 @@
 #include "cbm.h"
 #include "arena.h" // CBMArena, cbm_arena_strdup/strndup/sprintf
 #include "helpers.h"
-#include "lang_specs.h" // CBMLangSpec, CBMEmbeddedLangSpec, cbm_lang_spec, cbm_ts_language
+#include "lang_specs.h"      // CBMLangSpec, CBMEmbeddedLangSpec, cbm_lang_spec, cbm_ts_language
 #include "tree_sitter/api.h" // TSNode, ts_node_*
 #include "foundation/constants.h"
 #include "extract_node_stack.h"

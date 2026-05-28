@@ -877,8 +877,7 @@ static bool is_project_db_file(const char *name, size_t len) {
     if (len < MCP_MIN_DB_NAME || strcmp(name + len - MCP_DB_EXT, ".db") != 0) {
         return false;
     }
-    if (strncmp(name, "_", SLEN("_")) == 0 ||
-        strncmp(name, ":memory:", SLEN(":memory:")) == 0) {
+    if (strncmp(name, "_", SLEN("_")) == 0 || strncmp(name, ":memory:", SLEN(":memory:")) == 0) {
         return false;
     }
     return true;
@@ -1252,11 +1251,11 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
     if (sqlite3_prepare_v2(db, sql, BM25_SQL_AUTO_LEN, &stmt, NULL) != SQLITE_OK) {
         return NULL;
     }
-    sqlite3_bind_text(stmt, BM25_BIND_QUERY,   fts_query, BM25_SQL_AUTO_LEN, MCP_SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, BM25_BIND_PROJECT, project,   BM25_SQL_AUTO_LEN, MCP_SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, BM25_BIND_LIMIT,  limit > 0 ? limit : BM25_DEFAULT_LIMIT);
+    sqlite3_bind_text(stmt, BM25_BIND_QUERY, fts_query, BM25_SQL_AUTO_LEN, MCP_SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, BM25_BIND_PROJECT, project, BM25_SQL_AUTO_LEN, MCP_SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, BM25_BIND_LIMIT, limit > 0 ? limit : BM25_DEFAULT_LIMIT);
     sqlite3_bind_int(stmt, BM25_BIND_OFFSET, offset > 0 ? offset : 0);
-    sqlite3_bind_int(stmt, BM25_BIND_INNER,  BM25_INNER_LIMIT);
+    sqlite3_bind_int(stmt, BM25_BIND_INNER, BM25_INNER_LIMIT);
 
     /* Count hits within the same inner-limit window — capped at BM25_INNER_LIMIT.
      * Uses the identical subquery structure so the FTS5 early-exit applies here too. */
@@ -1274,9 +1273,9 @@ static char *bm25_search(cbm_store_t *store, const char *project, const char *qu
             ")";
         sqlite3_stmt *cs = NULL;
         if (sqlite3_prepare_v2(db, count_sql, BM25_SQL_AUTO_LEN, &cs, NULL) == SQLITE_OK) {
-            sqlite3_bind_text(cs, BM25_BIND_QUERY,   fts_query, BM25_SQL_AUTO_LEN,
+            sqlite3_bind_text(cs, BM25_BIND_QUERY, fts_query, BM25_SQL_AUTO_LEN,
                               MCP_SQLITE_TRANSIENT);
-            sqlite3_bind_text(cs, BM25_BIND_PROJECT, project,   BM25_SQL_AUTO_LEN,
+            sqlite3_bind_text(cs, BM25_BIND_PROJECT, project, BM25_SQL_AUTO_LEN,
                               MCP_SQLITE_TRANSIENT);
             sqlite3_bind_int(cs, BM25_BIND_LIMIT, BM25_INNER_LIMIT);
             if (sqlite3_step(cs) == SQLITE_ROW) {
@@ -1336,8 +1335,7 @@ static void emit_search_results(yyjson_mut_doc *doc, yyjson_mut_val *root,
                                 const cbm_search_output_t *out, cbm_store_t *store,
                                 const char *relationship, bool include_connected, int offset,
                                 yyjson_doc ***out_pdocs, int *out_pdoc_count) {
-    yyjson_doc **pdocs =
-        out->count > 0 ? malloc((size_t)out->count * sizeof(yyjson_doc *)) : NULL;
+    yyjson_doc **pdocs = out->count > 0 ? malloc((size_t)out->count * sizeof(yyjson_doc *)) : NULL;
     int pdoc_count = 0;
     yyjson_mut_obj_add_int(doc, root, "total", out->total);
     yyjson_mut_val *results = yyjson_mut_arr(doc);
@@ -1847,8 +1845,7 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
     cbm_store_get_schema(store, project, &schema);
 
     cbm_architecture_info_t arch = {0};
-    cbm_store_get_architecture(store, project,
-                               aspects_strs_count > 0 ? aspects_strs : NULL,
+    cbm_store_get_architecture(store, project, aspects_strs_count > 0 ? aspects_strs : NULL,
                                aspects_strs_count, &arch);
 
     int node_count = cbm_store_count_nodes(store, project);
@@ -1932,10 +1929,9 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
             yyjson_mut_val *item = yyjson_mut_obj(doc);
             yyjson_mut_obj_add_str(doc, item, "name",
                                    arch.entry_points[i].name ? arch.entry_points[i].name : "");
-            yyjson_mut_obj_add_str(doc, item, "qualified_name",
-                                   arch.entry_points[i].qualified_name
-                                       ? arch.entry_points[i].qualified_name
-                                       : "");
+            yyjson_mut_obj_add_str(
+                doc, item, "qualified_name",
+                arch.entry_points[i].qualified_name ? arch.entry_points[i].qualified_name : "");
             yyjson_mut_obj_add_str(doc, item, "file",
                                    arch.entry_points[i].file ? arch.entry_points[i].file : "");
             yyjson_mut_arr_add_val(eps, item);
@@ -1967,9 +1963,8 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
             yyjson_mut_obj_add_str(doc, item, "name",
                                    arch.hotspots[i].name ? arch.hotspots[i].name : "");
             yyjson_mut_obj_add_str(doc, item, "qualified_name",
-                                   arch.hotspots[i].qualified_name
-                                       ? arch.hotspots[i].qualified_name
-                                       : "");
+                                   arch.hotspots[i].qualified_name ? arch.hotspots[i].qualified_name
+                                                                   : "");
             yyjson_mut_obj_add_int(doc, item, "fan_in", arch.hotspots[i].fan_in);
             yyjson_mut_arr_add_val(hotspots, item);
         }
@@ -1998,8 +1993,7 @@ static char *handle_get_architecture(cbm_mcp_server_t *srv, const char *args) {
             yyjson_mut_val *item = yyjson_mut_obj(doc);
             yyjson_mut_obj_add_str(doc, item, "from",
                                    arch.services[i].from ? arch.services[i].from : "");
-            yyjson_mut_obj_add_str(doc, item, "to",
-                                   arch.services[i].to ? arch.services[i].to : "");
+            yyjson_mut_obj_add_str(doc, item, "to", arch.services[i].to ? arch.services[i].to : "");
             yyjson_mut_obj_add_str(doc, item, "type",
                                    arch.services[i].type ? arch.services[i].type : "");
             yyjson_mut_obj_add_int(doc, item, "count", arch.services[i].count);
@@ -2983,29 +2977,37 @@ static void build_grep_cmd(char *cmd, size_t cmd_sz, bool use_regex, bool scoped
     const char *sm = use_regex ? "" : " -SimpleMatch";
     if (scoped) {
         if (file_pattern) {
-            snprintf(cmd, cmd_sz,
+            snprintf(
+                cmd, cmd_sz,
                 "powershell -Command \"$pat = Get-Content '%s'; "
-                "Get-Content '%s' | ForEach-Object { Select-String -LiteralPath $_ -Pattern $pat%s -ErrorAction SilentlyContinue }"
+                "Get-Content '%s' | ForEach-Object { Select-String -LiteralPath $_ -Pattern $pat%s "
+                "-ErrorAction SilentlyContinue }"
                 " | Where-Object { $_.Path -like '*%s' }"
                 " | ForEach-Object { $_.Path + [char]9 + $_.LineNumber + [char]9 + $_.Line }\"",
                 tmpfile, filelist, sm, file_pattern);
         } else {
-            snprintf(cmd, cmd_sz,
+            snprintf(
+                cmd, cmd_sz,
                 "powershell -Command \"$pat = Get-Content '%s'; "
-                "Get-Content '%s' | ForEach-Object { Select-String -LiteralPath $_ -Pattern $pat%s -ErrorAction SilentlyContinue }"
+                "Get-Content '%s' | ForEach-Object { Select-String -LiteralPath $_ -Pattern $pat%s "
+                "-ErrorAction SilentlyContinue }"
                 " | ForEach-Object { $_.Path + [char]9 + $_.LineNumber + [char]9 + $_.Line }\"",
                 tmpfile, filelist, sm);
         }
     } else {
         if (file_pattern) {
-            snprintf(cmd, cmd_sz,
-                "powershell -Command \"Get-ChildItem -Recurse -Path '%s\\*' -Include '%s' -File -ErrorAction SilentlyContinue"
+            snprintf(
+                cmd, cmd_sz,
+                "powershell -Command \"Get-ChildItem -Recurse -Path '%s\\*' -Include '%s' -File "
+                "-ErrorAction SilentlyContinue"
                 " | Select-String -Pattern (Get-Content '%s')%s -ErrorAction SilentlyContinue"
                 " | ForEach-Object { $_.Path + [char]9 + $_.LineNumber + [char]9 + $_.Line }\"",
                 root_path, file_pattern, tmpfile, sm);
         } else {
-            snprintf(cmd, cmd_sz,
-                "powershell -Command \"Get-ChildItem -Recurse -Path '%s\\*' -File -ErrorAction SilentlyContinue"
+            snprintf(
+                cmd, cmd_sz,
+                "powershell -Command \"Get-ChildItem -Recurse -Path '%s\\*' -File -ErrorAction "
+                "SilentlyContinue"
                 " | Select-String -Pattern (Get-Content '%s')%s -ErrorAction SilentlyContinue"
                 " | ForEach-Object { $_.Path + [char]9 + $_.LineNumber + [char]9 + $_.Line }\"",
                 root_path, tmpfile, sm);

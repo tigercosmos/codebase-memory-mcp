@@ -574,12 +574,14 @@ static void svc_cache_free_key(const char *key, void *val, void *ud) {
 }
 
 void cbm_service_pattern_cache_begin(void) {
-    if (_svc_cache) return; /* idempotent */
+    if (_svc_cache)
+        return; /* idempotent */
     _svc_cache = cbm_ht_create(8192);
 }
 
 void cbm_service_pattern_cache_end(void) {
-    if (!_svc_cache) return;
+    if (!_svc_cache)
+        return;
     cbm_ht_foreach(_svc_cache, svc_cache_free_key, NULL);
     cbm_ht_free(_svc_cache);
     _svc_cache = NULL;
@@ -606,17 +608,25 @@ cbm_svc_kind_t cbm_service_pattern_match(const char *resolved_qn) {
 
     /* Route registration checked first — prevents gin/echo from matching
      * as HTTP clients (both have .get/.post suffixes). */
-    if ((p = match_qn(resolved_qn, route_reg_libraries)))   result = p->kind;
-    else if ((p = match_qn(resolved_qn, http_libraries)))   result = p->kind;
-    else if ((p = match_qn(resolved_qn, async_libraries)))  result = p->kind;
-    else if ((p = match_qn(resolved_qn, config_libraries))) result = p->kind;
-    else if ((p = match_qn(resolved_qn, grpc_libraries)))   result = p->kind;
-    else if ((p = match_qn(resolved_qn, graphql_libraries))) result = p->kind;
-    else if ((p = match_qn(resolved_qn, trpc_libraries)))   result = p->kind;
+    if ((p = match_qn(resolved_qn, route_reg_libraries)))
+        result = p->kind;
+    else if ((p = match_qn(resolved_qn, http_libraries)))
+        result = p->kind;
+    else if ((p = match_qn(resolved_qn, async_libraries)))
+        result = p->kind;
+    else if ((p = match_qn(resolved_qn, config_libraries)))
+        result = p->kind;
+    else if ((p = match_qn(resolved_qn, grpc_libraries)))
+        result = p->kind;
+    else if ((p = match_qn(resolved_qn, graphql_libraries)))
+        result = p->kind;
+    else if ((p = match_qn(resolved_qn, trpc_libraries)))
+        result = p->kind;
 
     if (_svc_cache) {
         char *kdup = strdup(resolved_qn);
-        if (kdup) cbm_ht_set(_svc_cache, kdup, svc_enum_to_ptr(result));
+        if (kdup)
+            cbm_ht_set(_svc_cache, kdup, svc_enum_to_ptr(result));
     }
     return result;
 }

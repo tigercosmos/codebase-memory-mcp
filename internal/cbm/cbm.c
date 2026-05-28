@@ -376,13 +376,15 @@ CBMFileResult *cbm_extract_file(const char *source, int source_len, CBMLanguage 
             bool jsx_mode = (language == CBM_LANG_TSX);
             if (language == CBM_LANG_JAVASCRIPT && rel_path) {
                 size_t rl = strlen(rel_path);
-                if (rl >= 4 && strcmp(rel_path + rl - 4, ".jsx") == 0) jsx_mode = true;
+                if (rl >= 4 && strcmp(rel_path + rl - 4, ".jsx") == 0)
+                    jsx_mode = true;
             }
             // dts_mode: ".d.ts" suffix (TypeScript only).
             bool dts_mode = false;
             if (language == CBM_LANG_TYPESCRIPT && rel_path) {
                 size_t rl = strlen(rel_path);
-                if (rl >= 5 && strcmp(rel_path + rl - 5, ".d.ts") == 0) dts_mode = true;
+                if (rl >= 5 && strcmp(rel_path + rl - 5, ".d.ts") == 0)
+                    dts_mode = true;
             }
             cbm_run_ts_lsp(a, result, source, source_len, root, js_mode, jsx_mode, dts_mode);
         }

@@ -584,8 +584,8 @@ int cbm_pipeline_githistory_apply(cbm_pipeline_ctx_t *ctx, const cbm_githistory_
 
         char props[CBM_SZ_256];
         snprintf(props, sizeof(props),
-                 "{\"extension\":\"%s\",\"last_modified\":%lld,\"change_count\":%d}",
-                 ext_escaped, ft->last_modified, ft->change_count);
+                 "{\"extension\":\"%s\",\"last_modified\":%lld,\"change_count\":%d}", ext_escaped,
+                 ft->last_modified, ft->change_count);
 
         cbm_gbuf_upsert_node(ctx->gbuf, node->label, node->name, node->qualified_name,
                              node->file_path, node->start_line, node->end_line, props);

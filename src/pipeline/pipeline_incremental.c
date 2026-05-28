@@ -237,8 +237,7 @@ static int find_deleted_files(const char *repo_path, cbm_file_info_t *files, int
                 ms_cap *= PAIR_LEN;
                 cbm_file_hash_t *tmp = realloc(mode_skipped, (size_t)ms_cap * sizeof(*tmp));
                 if (!tmp) {
-                    cbm_log_error("incremental.err", "msg",
-                                  "find_deleted_files_realloc_oom_ms");
+                    cbm_log_error("incremental.err", "msg", "find_deleted_files_realloc_oom_ms");
                     break;
                 }
                 mode_skipped = tmp;
@@ -250,8 +249,8 @@ static int find_deleted_files(const char *repo_path, cbm_file_info_t *files, int
                  * row with a NULL rel_path that would silently fail the
                  * NOT NULL constraint in upsert and reintroduce the
                  * orphaned-node bug. */
-                cbm_log_error("incremental.err", "msg", "find_deleted_files_strdup_oom",
-                              "rel_path", stored[i].rel_path);
+                cbm_log_error("incremental.err", "msg", "find_deleted_files_strdup_oom", "rel_path",
+                              stored[i].rel_path);
                 free(rp);
                 free(sh);
                 break;
@@ -348,13 +347,13 @@ static void persist_hashes(cbm_store_t *store, const char *project, cbm_file_inf
      * with scope=mode_skipped so the warning is searchable. */
     if (mode_skipped) {
         for (int i = 0; i < mode_skipped_count; i++) {
-            int rc = cbm_store_upsert_file_hash(store, project, mode_skipped[i].rel_path,
-                                                mode_skipped[i].sha256 ? mode_skipped[i].sha256
-                                                                       : "",
-                                                mode_skipped[i].mtime_ns, mode_skipped[i].size);
+            int rc =
+                cbm_store_upsert_file_hash(store, project, mode_skipped[i].rel_path,
+                                           mode_skipped[i].sha256 ? mode_skipped[i].sha256 : "",
+                                           mode_skipped[i].mtime_ns, mode_skipped[i].size);
             if (rc != CBM_STORE_OK) {
-                cbm_log_warn("incremental.persist_hash_failed", "scope", "mode_skipped",
-                             "rel_path", mode_skipped[i].rel_path, "rc", itoa_buf(rc));
+                cbm_log_warn("incremental.persist_hash_failed", "scope", "mode_skipped", "rel_path",
+                             mode_skipped[i].rel_path, "rc", itoa_buf(rc));
                 ms_failed++;
             }
         }
@@ -414,9 +413,8 @@ static void run_extract_resolve(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *change
              * next full re-index. Pass NULL/0/NULL to make the fused
              * step in resolve_worker a no-op. */
             cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-            cbm_parallel_resolve(ctx, changed_files, ci, cache, &shared_ids,
-                                 worker_count, NULL, 0, NULL,
-                                 NULL /* module_def_index */,
+            cbm_parallel_resolve(ctx, changed_files, ci, cache, &shared_ids, worker_count, NULL, 0,
+                                 NULL, NULL /* module_def_index */,
                                  NULL /* cross_registries — incremental skips Tier 2 prebuild */);
             cbm_gbuf_set_next_id(ctx->gbuf, atomic_load(&shared_ids));
             cbm_log_info("pass.timing", "pass", "incr_resolve", "elapsed_ms",
@@ -633,8 +631,7 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
     cbm_log_info("incremental.registry_seed", "symbols", itoa_buf(cbm_registry_size(registry)),
                  "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
 
-    cbm_path_alias_collection_t *path_aliases =
-        cbm_load_path_aliases(cbm_pipeline_repo_path(p));
+    cbm_path_alias_collection_t *path_aliases = cbm_load_path_aliases(cbm_pipeline_repo_path(p));
 
     cbm_pipeline_ctx_t ctx = {
         .project_name = project,

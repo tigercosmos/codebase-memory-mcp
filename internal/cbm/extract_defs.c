@@ -1181,8 +1181,7 @@ static const char **extract_base_classes(CBMArena *a, TSNode node, const char *s
     for (const char **f = fields; *f; f++) {
         TSNode super = ts_node_child_by_field_name(node, *f, (uint32_t)strlen(*f));
         if (!ts_node_is_null(super)) {
-            base_count += collect_bases_from_field(a, super, source,
-                                                   bases + base_count,
+            base_count += collect_bases_from_field(a, super, source, bases + base_count,
                                                    MAX_BASES_MINUS_1 - base_count);
         }
     }
@@ -3284,7 +3283,8 @@ static void extract_variables(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec
                         extract_var_names(ctx, inner, spec);
                     }
                 }
-                // Also check if the wrapper itself is a variable type (e.g., PHP expression_statement)
+                // Also check if the wrapper itself is a variable type (e.g., PHP
+                // expression_statement)
                 if (cbm_kind_in_set(child, spec->variable_node_types)) {
                     extract_var_names(ctx, child, spec);
                 }
@@ -3373,7 +3373,8 @@ static void extract_class_fields(CBMExtractCtx *ctx, TSNode class_node, const ch
          * For the nested case, the child has no "type" field directly. Detect by
          * walking named children for a variable_declaration. */
         TSNode type_node = ts_node_child_by_field_name(child, TS_FIELD("type"));
-        TSNode name_node = ts_node_is_null(type_node) ? (TSNode){0} : resolve_field_name_node(child);
+        TSNode name_node =
+            ts_node_is_null(type_node) ? (TSNode){0} : resolve_field_name_node(child);
 
         if (ts_node_is_null(type_node)) {
             uint32_t cnc = ts_node_named_child_count(child);

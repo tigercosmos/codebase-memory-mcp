@@ -380,8 +380,7 @@ int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
                           * shared read-only across workers (typed non-const to match
                           * the existing cbm_run_X_lsp_cross signatures the resolve
                           * worker forwards them to). Pass NULL/0/NULL to skip. */
-                         CBMLSPDef *all_defs, int def_count,
-                         char *const *def_modules,
+                         CBMLSPDef *all_defs, int def_count, char *const *def_modules,
                          /* Optional inverted index module_qn → defs[] — fallback
                           * path when there's no pre-built registry for this lang. */
                          struct CBMModuleDefIndex *module_def_index,
@@ -411,10 +410,8 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
 /* Cross-file LSP type-aware call resolution pass. Augments per-file
  * resolved_calls with cross-file resolutions before call edges are emitted.
  * Implementation: src/pipeline/pass_lsp_cross.c. */
-int cbm_pipeline_pass_lsp_cross(cbm_pipeline_ctx_t *ctx,
-                                const cbm_file_info_t *files,
-                                int file_count,
-                                CBMFileResult **cache);
+int cbm_pipeline_pass_lsp_cross(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
+                                int file_count, CBMFileResult **cache);
 
 /* Sub-passes called from pass_calls: pattern-based edge extraction */
 void cbm_pipeline_pass_fastapi_depends(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,

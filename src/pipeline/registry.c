@@ -17,7 +17,7 @@ enum { REG_INIT_CAP = 16, REG_MIN_CANDIDATES = 3, REG_RESOLVED = 1, REG_SUFFIX_A
 
 #define DEFAULT_CONFIDENCE 0.5
 #include "pipeline/pipeline.h"
-#include "foundation/compat.h"      /* CBM_TLS */
+#include "foundation/compat.h" /* CBM_TLS */
 #include "foundation/hash_table.h"
 #include "foundation/dyn_array.h"
 #include "foundation/platform.h"
@@ -166,7 +166,7 @@ static CBM_TLS CBMHashTable *_reach_cache = NULL;
 
 /* Sentinels stored as values in the cache. NULL means "not cached".
  * We need two distinct non-NULL pointers to encode true/false. */
-#define REACH_CACHE_TRUE  ((void *)(uintptr_t)1)
+#define REACH_CACHE_TRUE ((void *)(uintptr_t)1)
 #define REACH_CACHE_FALSE ((void *)(uintptr_t)2)
 
 static void reach_cache_free_key(const char *key, void *val, void *ud) {
@@ -182,12 +182,14 @@ void cbm_registry_reach_cache_begin(int estimated_capacity) {
         cbm_ht_clear(_reach_cache);
         return;
     }
-    if (estimated_capacity < 16) estimated_capacity = 16;
+    if (estimated_capacity < 16)
+        estimated_capacity = 16;
     _reach_cache = cbm_ht_create((uint32_t)estimated_capacity);
 }
 
 void cbm_registry_reach_cache_end(void) {
-    if (!_reach_cache) return;
+    if (!_reach_cache)
+        return;
     cbm_ht_foreach(_reach_cache, reach_cache_free_key, NULL);
     cbm_ht_free(_reach_cache);
     _reach_cache = NULL;
@@ -210,9 +212,11 @@ void cbm_registry_import_map_cache_begin(const char **keys, const char **vals, i
         cbm_ht_free(_import_map_cache);
         _import_map_cache = NULL;
     }
-    if (!keys || !vals || count <= 0) return;
+    if (!keys || !vals || count <= 0)
+        return;
     _import_map_cache = cbm_ht_create((uint32_t)count * 2u + 8u);
-    if (!_import_map_cache) return;
+    if (!_import_map_cache)
+        return;
     for (int i = 0; i < count; i++) {
         if (keys[i] && vals[i]) {
             cbm_ht_set(_import_map_cache, keys[i], (void *)(uintptr_t)vals[i]);
@@ -221,7 +225,8 @@ void cbm_registry_import_map_cache_begin(const char **keys, const char **vals, i
 }
 
 void cbm_registry_import_map_cache_end(void) {
-    if (!_import_map_cache) return;
+    if (!_import_map_cache)
+        return;
     /* Keys/values borrowed from caller — no free callback needed. */
     cbm_ht_free(_import_map_cache);
     _import_map_cache = NULL;
@@ -260,12 +265,14 @@ void cbm_registry_resolve_cache_begin(int estimated_capacity) {
         cbm_ht_free(_resolve_cache);
         _resolve_cache = NULL;
     }
-    if (estimated_capacity < 32) estimated_capacity = 32;
+    if (estimated_capacity < 32)
+        estimated_capacity = 32;
     _resolve_cache = cbm_ht_create((uint32_t)estimated_capacity);
 }
 
 void cbm_registry_resolve_cache_end(void) {
-    if (!_resolve_cache) return;
+    if (!_resolve_cache)
+        return;
     cbm_ht_foreach(_resolve_cache, resolve_cache_free_entry, NULL);
     cbm_ht_free(_resolve_cache);
     _resolve_cache = NULL;
@@ -280,8 +287,10 @@ static bool is_import_reachable(const char *candidate_qn, const char **import_va
                                 int import_count) {
     if (_reach_cache) {
         void *cached = cbm_ht_get(_reach_cache, candidate_qn);
-        if (cached == REACH_CACHE_TRUE)  return true;
-        if (cached == REACH_CACHE_FALSE) return false;
+        if (cached == REACH_CACHE_TRUE)
+            return true;
+        if (cached == REACH_CACHE_FALSE)
+            return false;
     }
 
     char cand_mod[CBM_SZ_512];
@@ -307,8 +316,7 @@ static bool is_import_reachable(const char *candidate_qn, const char **import_va
     if (_reach_cache) {
         char *kdup = strdup(candidate_qn);
         if (kdup) {
-            cbm_ht_set(_reach_cache, kdup,
-                       reachable ? REACH_CACHE_TRUE : REACH_CACHE_FALSE);
+            cbm_ht_set(_reach_cache, kdup, reachable ? REACH_CACHE_TRUE : REACH_CACHE_FALSE);
         }
     }
     return reachable;

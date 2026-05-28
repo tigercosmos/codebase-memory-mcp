@@ -132,6 +132,24 @@ static bool has_any(const char *s, const char *const *needles) {
     return false;
 }
 
+/* True if `file_path` has a "vendored/" path segment (at start, or directly
+ * after a '/').  Used to skip third-party vendored code in the semantic-edges
+ * pass: there is no accuracy loss from not embedding/pairing vendored code,
+ * and skipping it is a speed win. */
+static bool pse_is_vendored(const char *file_path) {
+    if (!file_path) {
+        return false;
+    }
+    const char *p = file_path;
+    while ((p = strstr(p, "vendored/")) != NULL) {
+        if (p == file_path || p[-1] == '/') {
+            return true;
+        }
+        p += 1;
+    }
+    return false;
+}
+
 /* Inject tokens derived from body-text patterns (try/catch, raise, log). */
 static int inject_body_pattern_tokens(const char *bt, char **tokens, int count, int max_tokens) {
     if (!bt) {
@@ -875,6 +893,10 @@ static int phase1_scan_functions(cbm_gbuf_t *gbuf, cbm_sem_func_t **out_funcs,
             continue;
         }
         for (int i = 0; i < node_count; i++) {
+            /* Skip vendored third-party code: no accuracy loss, speed win. */
+            if (pse_is_vendored(nodes[i]->file_path)) {
+                continue;
+            }
             if (func_count >= func_cap) {
                 int new_cap = func_cap < MAX_FUNCS_INIT ? MAX_FUNCS_INIT : func_cap * GROW;
                 cbm_sem_func_t *grown = realloc(funcs, (size_t)new_cap * sizeof(cbm_sem_func_t));

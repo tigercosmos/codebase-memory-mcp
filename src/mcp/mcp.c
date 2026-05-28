@@ -345,7 +345,11 @@ static const tool_def_t TOOLS[] = {
      "\"},\"include_tests\":{\"type\":\"boolean\",\"default\":false,"
      "\"description\":\"Include test files in results. When false (default), test files are "
      "filtered out. When true, test nodes are included with is_test=true marker."
-     "\"}},\"required\":[\"function_name\",\"project\"]}"},
+     "\"},\"min_confidence\":{\"type\":\"number\",\"default\":0,"
+     "\"description\":\"Filter CALLS-edge results by min resolution confidence "
+     "(0..1). Default 0 returns all edges. Try 0.8 to keep precise-tier and same-module "
+     "resolutions while dropping fuzzy-tail noise. Response also includes caller_edges/"
+     "callee_edges arrays with {from,to,type,confidence}.\"}},\"required\":[\"function_name\",\"project\"]}"},
 
     {"get_code_snippet",
      "Read source code for a function/class/symbol. IMPORTANT: First call search_graph to find the "
@@ -564,6 +568,23 @@ int cbm_mcp_get_int_arg(const char *args_json, const char *key, int default_val)
     int result = default_val;
     if (val && yyjson_is_int(val)) {
         result = yyjson_get_int(val);
+    }
+    yyjson_doc_free(doc);
+    return result;
+}
+
+/* Parse a numeric (real or int) arg. Returns default_val when missing
+ * or non-numeric. Mirrors cbm_mcp_get_int_arg. */
+static double cbm_mcp_get_double_arg(const char *args_json, const char *key, double default_val) {
+    yyjson_doc *doc = yyjson_read(args_json, strlen(args_json), 0);
+    if (!doc) {
+        return default_val;
+    }
+    yyjson_val *root = yyjson_doc_get_root(doc);
+    yyjson_val *val = yyjson_obj_get(root, key);
+    double result = default_val;
+    if (val && yyjson_is_num(val)) {
+        result = yyjson_get_num(val);
     }
     yyjson_doc_free(doc);
     return result;
@@ -2142,14 +2163,46 @@ static bool is_test_file(const char *path) {
 }
 
 /* Convert BFS traversal results into a yyjson_mut array. */
+/* True if `node_name` is endpoint of any edge in tr->edges with
+ * confidence >= min_confidence. Linear scan; cheap for typical BFS sizes
+ * (capped by MCP_BFS_LIMIT). */
+static bool node_has_strong_edge(const cbm_traverse_result_t *tr, const char *node_name,
+                                 double min_confidence) {
+    if (!node_name) {
+        return false;
+    }
+    for (int e = 0; e < tr->edge_count; e++) {
+        if (tr->edges[e].confidence < min_confidence) {
+            continue;
+        }
+        const char *fn = tr->edges[e].from_name;
+        const char *tn = tr->edges[e].to_name;
+        if ((fn && strcmp(fn, node_name) == 0) || (tn && strcmp(tn, node_name) == 0)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 static yyjson_mut_val *bfs_to_json_array(yyjson_mut_doc *doc, cbm_traverse_result_t *tr,
-                                         bool risk_labels, bool include_tests) {
+                                         bool risk_labels, bool include_tests,
+                                         double min_confidence) {
     yyjson_mut_val *arr = yyjson_mut_arr(doc);
+    const char *root_name = tr->root.name;
     for (int i = 0; i < tr->visited_count; i++) {
         const char *fp = tr->visited[i].node.file_path;
         bool test = is_test_file(fp);
         if (!include_tests && test) {
             continue;
+        }
+        /* Confidence filter: keep the root always; otherwise require at
+         * least one connecting edge with confidence >= threshold. */
+        if (min_confidence > 0.0) {
+            const char *nname = tr->visited[i].node.name;
+            bool is_root = (root_name && nname && strcmp(nname, root_name) == 0);
+            if (!is_root && !node_has_strong_edge(tr, nname, min_confidence)) {
+                continue;
+            }
         }
         yyjson_mut_val *item = yyjson_mut_obj(doc);
         yyjson_mut_obj_add_str(doc, item, "name",
@@ -2170,6 +2223,28 @@ static yyjson_mut_val *bfs_to_json_array(yyjson_mut_doc *doc, cbm_traverse_resul
     return arr;
 }
 
+/* Serialize the edge list from a BFS traversal, optionally filtered by
+ * min_confidence. Surfacing edges (with type/confidence) lets agents reason
+ * about resolution quality, not just connectivity. */
+static yyjson_mut_val *bfs_edges_to_json_array(yyjson_mut_doc *doc,
+                                               const cbm_traverse_result_t *tr,
+                                               double min_confidence) {
+    yyjson_mut_val *arr = yyjson_mut_arr(doc);
+    for (int i = 0; i < tr->edge_count; i++) {
+        const cbm_edge_info_t *e = &tr->edges[i];
+        if (e->confidence < min_confidence) {
+            continue;
+        }
+        yyjson_mut_val *item = yyjson_mut_obj(doc);
+        yyjson_mut_obj_add_str(doc, item, "from", e->from_name ? e->from_name : "");
+        yyjson_mut_obj_add_str(doc, item, "to", e->to_name ? e->to_name : "");
+        yyjson_mut_obj_add_str(doc, item, "type", e->type ? e->type : "");
+        yyjson_mut_obj_add_real(doc, item, "confidence", e->confidence);
+        yyjson_mut_arr_add_val(arr, item);
+    }
+    return arr;
+}
+
 static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     char *func_name = cbm_mcp_get_string_arg(args, "function_name");
     char *project = cbm_mcp_get_string_arg(args, "project");
@@ -2180,6 +2255,9 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     int depth = cbm_mcp_get_int_arg(args, "depth", MCP_DEFAULT_DEPTH);
     bool risk_labels = cbm_mcp_get_bool_arg(args, "risk_labels");
     bool include_tests = cbm_mcp_get_bool_arg(args, "include_tests");
+    /* Filter results to edges with CALLS-edge confidence >= threshold. 0
+     * (default) preserves prior behavior; ~0.8 cuts most fuzzy-tail noise. */
+    double min_confidence = cbm_mcp_get_double_arg(args, "min_confidence", 0.0);
 
     if (!func_name) {
         free(project);
@@ -2281,15 +2359,21 @@ static char *handle_trace_call_path(cbm_mcp_server_t *srv, const char *args) {
     if (do_outbound) {
         cbm_store_bfs(store, nodes[0].id, "outbound", edge_types, edge_type_count, depth,
                       MCP_BFS_LIMIT, &tr_out);
-        yyjson_mut_obj_add_val(doc, root, "callees",
-                               bfs_to_json_array(doc, &tr_out, risk_labels, include_tests));
+        yyjson_mut_obj_add_val(
+            doc, root, "callees",
+            bfs_to_json_array(doc, &tr_out, risk_labels, include_tests, min_confidence));
+        yyjson_mut_obj_add_val(doc, root, "callee_edges",
+                               bfs_edges_to_json_array(doc, &tr_out, min_confidence));
     }
 
     if (do_inbound) {
         cbm_store_bfs(store, nodes[0].id, "inbound", edge_types, edge_type_count, depth,
                       MCP_BFS_LIMIT, &tr_in);
-        yyjson_mut_obj_add_val(doc, root, "callers",
-                               bfs_to_json_array(doc, &tr_in, risk_labels, include_tests));
+        yyjson_mut_obj_add_val(
+            doc, root, "callers",
+            bfs_to_json_array(doc, &tr_in, risk_labels, include_tests, min_confidence));
+        yyjson_mut_obj_add_val(doc, root, "caller_edges",
+                               bfs_edges_to_json_array(doc, &tr_in, min_confidence));
     }
 
     /* Serialize BEFORE freeing traversal results (yyjson borrows strings) */

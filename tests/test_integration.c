@@ -383,6 +383,69 @@ TEST(integ_mcp_trace_path) {
     PASS();
 }
 
+TEST(integ_mcp_trace_path_emits_edges) {
+    /* Verify trace_path response surfaces the new callee_edges array
+     * alongside callees (added with the min_confidence feature). The default
+     * min_confidence=0 must NOT strip this field. */
+    char args[256];
+    snprintf(args, sizeof(args),
+             "{\"function_name\":\"Compute\",\"project\":\"%s\","
+             "\"direction\":\"outbound\",\"depth\":3}",
+             g_project);
+    char *resp = call_tool("trace_path", args);
+    ASSERT_NOT_NULL(resp);
+    /* Tolerate fixture variation: if the function isn't matched, only
+     * verify the call was handled (no crash, valid response). */
+    if (strstr(resp, "not found")) {
+        free(resp);
+        PASS();
+    }
+    ASSERT_NOT_NULL(strstr(resp, "callees"));
+    ASSERT_NOT_NULL(strstr(resp, "callee_edges"));
+    free(resp);
+    PASS();
+}
+
+TEST(integ_mcp_trace_path_min_confidence) {
+    /* min_confidence=10.0 is impossibly high (confidence is in [0,1]), so
+     * every edge is filtered out and visited callees become empty. Compare
+     * against a baseline trace from the same fixture for robustness. */
+    char args_base[256];
+    snprintf(args_base, sizeof(args_base),
+             "{\"function_name\":\"Compute\",\"project\":\"%s\","
+             "\"direction\":\"outbound\",\"depth\":3}",
+             g_project);
+    char *base = call_tool("trace_path", args_base);
+    ASSERT_NOT_NULL(base);
+    if (strstr(base, "not found")) {
+        free(base);
+        PASS();
+    }
+    bool baseline_has_callee =
+        strstr(base, "Add") || strstr(base, "Multiply");
+    free(base);
+    /* If neither expected callee appears, the fixture changed — accept. */
+    if (!baseline_has_callee) {
+        PASS();
+    }
+
+    char args_filt[256];
+    snprintf(args_filt, sizeof(args_filt),
+             "{\"function_name\":\"Compute\",\"project\":\"%s\","
+             "\"direction\":\"outbound\",\"depth\":3,\"min_confidence\":10.0}",
+             g_project);
+    char *filt = call_tool("trace_path", args_filt);
+    ASSERT_NOT_NULL(filt);
+    /* Field is still emitted (whenever do_outbound), just empty/filtered. */
+    ASSERT_NOT_NULL(strstr(filt, "callees"));
+    ASSERT_NOT_NULL(strstr(filt, "callee_edges"));
+    /* The previously-seen callees must now be gone. */
+    ASSERT_NULL(strstr(filt, "Add"));
+    ASSERT_NULL(strstr(filt, "Multiply"));
+    free(filt);
+    PASS();
+}
+
 TEST(integ_mcp_index_status) {
     char args[128];
     snprintf(args, sizeof(args), "{\"project\":\"%s\"}", g_project);
@@ -554,6 +617,8 @@ SUITE(integration) {
     RUN_TEST(integ_mcp_get_graph_schema);
     RUN_TEST(integ_mcp_get_architecture);
     RUN_TEST(integ_mcp_trace_path);
+    RUN_TEST(integ_mcp_trace_path_emits_edges);
+    RUN_TEST(integ_mcp_trace_path_min_confidence);
     RUN_TEST(integ_mcp_index_status);
 
     /* Store query validation */

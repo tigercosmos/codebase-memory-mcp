@@ -15111,9 +15111,97 @@ TEST(clsp_easy_win_sfinaeconditional_return) {
     PASS();
 }
 
+/* ── Golden regression tests (WS9) ─────────────────────────────── */
+
+/* Golden: a direct call to a same-file top-level C function resolves.
+ * Mirrors clsp_direct_call exactly; the most basic same-file resolution
+ * and one of the oldest passing tests in this file. Robust: substring
+ * assertion via find_resolved, not a brittle exact-QN compare. */
+TEST(clsp_golden_direct_same_file_func) {
+    CBMFileResult *r = extract_c("\n"
+                                 "int add(int a, int b) { return a + b; }\n"
+                                 "\n"
+                                 "int compute(void) {\n"
+                                 "    return add(1, 2);\n"
+                                 "}\n"
+                                 "");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(find_resolved(r, "compute", "add"), 0);
+    {
+        int idx = find_resolved(r, "compute", "add");
+        if (idx >= 0)
+            ASSERT_STR_NEQ(r->resolved_calls.items[idx].strategy, "lsp_unresolved");
+    }
+    cbm_free_result(r);
+    PASS();
+}
+
+/* Golden: chained calls to forward-declared C stdlib functions both resolve.
+ * Mirrors clsp_probe_c_chained_func_calls (strdup + strlen with explicit
+ * prototypes). The explicit forward decls make this a pure same-file
+ * resolution, not dependent on real libc headers. */
+TEST(clsp_golden_chained_stdlib_calls) {
+    CBMFileResult *r = extract_c("\n"
+                                 "char* strdup(const char* s);\n"
+                                 "int strlen(const char* s);\n"
+                                 "\n"
+                                 "void caller(void) {\n"
+                                 "    int n = strlen(strdup(\"hello\"));\n"
+                                 "    (void)n;\n"
+                                 "}\n"
+                                 "");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(find_resolved(r, "caller", "strdup"), 0);
+    ASSERT_GTE(find_resolved(r, "caller", "strlen"), 0);
+    {
+        int idx = find_resolved(r, "caller", "strdup");
+        if (idx >= 0)
+            ASSERT_STR_NEQ(r->resolved_calls.items[idx].strategy, "lsp_unresolved");
+    }
+    {
+        int idx = find_resolved(r, "caller", "strlen");
+        if (idx >= 0)
+            ASSERT_STR_NEQ(r->resolved_calls.items[idx].strategy, "lsp_unresolved");
+    }
+    cbm_free_result(r);
+    PASS();
+}
+
+/* Golden: a direct call to a dispatcher that takes a function-pointer
+ * parameter resolves. Mirrors clsp_c_func_ptr_param exactly. Asserts only
+ * the *direct* call (test -> dispatch), not the indirect fn() call inside
+ * dispatch — the direct call is the stable, definitely-resolved one. */
+TEST(clsp_golden_func_ptr_via_dispatch) {
+    CBMFileResult *r = extract_c("\n"
+                                 "void worker(void) {}\n"
+                                 "\n"
+                                 "void dispatch(void (*fn)(void)) {\n"
+                                 "    fn();\n"
+                                 "}\n"
+                                 "\n"
+                                 "void caller(void) {\n"
+                                 "    dispatch(worker);\n"
+                                 "}\n"
+                                 "");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(find_resolved(r, "caller", "dispatch"), 0);
+    {
+        int idx = find_resolved(r, "caller", "dispatch");
+        if (idx >= 0)
+            ASSERT_STR_NEQ(r->resolved_calls.items[idx].strategy, "lsp_unresolved");
+    }
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite ─────────────────────────────────────────────────────── */
 
 SUITE(c_lsp) {
+    /* Golden regression (WS9) */
+    RUN_TEST(clsp_golden_direct_same_file_func);
+    RUN_TEST(clsp_golden_chained_stdlib_calls);
+    RUN_TEST(clsp_golden_func_ptr_via_dispatch);
+
     RUN_TEST(clsp_simple_var_decl);
     RUN_TEST(clsp_pointer_arrow);
     RUN_TEST(clsp_dot_access);

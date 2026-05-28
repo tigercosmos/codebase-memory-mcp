@@ -72,7 +72,6 @@ typedef enum {
     CBM_MODE_FULL = 0,     /* parse everything supported */
     CBM_MODE_MODERATE = 1, /* aggressive filtering + similarity/semantic edges */
     CBM_MODE_FAST = 2,     /* aggressive filtering + no similarity/semantic edges */
-    CBM_MODE_ADVANCED = 3, /* FULL discovery + all LSP (per-file + cross-file) */
 } cbm_index_mode_t;
 #endif
 

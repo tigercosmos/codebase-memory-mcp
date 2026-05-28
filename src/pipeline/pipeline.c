@@ -486,9 +486,7 @@ static void run_predump_passes(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx) {
 static int seq_pass_lsp_cross_dispatch(cbm_pipeline_ctx_t *ctx,
                                        const cbm_file_info_t *files, int file_count) {
     if (!ctx || !ctx->result_cache) return 0;
-    /* Cross-file LSP is advanced-mode only (matches the parallel path
-     * and the per-file LSP gate). FULL and below skip it. */
-    if (ctx->mode != CBM_MODE_ADVANCED) return 0;
+    /* Cross-file LSP runs in every mode. */
     return cbm_pipeline_pass_lsp_cross(ctx, files, file_count, ctx->result_cache);
 }
 
@@ -590,14 +588,9 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
      * mean cross-file LSP no-ops; per-file LSP already ran during
      * extract. */
     cbm_clock_gettime(CLOCK_MONOTONIC, t);
-    /* Cross-file LSP is the most expensive phase of the pipeline
-     * (type-aware call/usage resolution across files). As of the
-     * mode rework it is OPT-IN via CBM_MODE_ADVANCED — FULL and below
-     * skip it entirely. When skipped, all_defs stays NULL, which makes
-     * cross_lsp_eligible false for every file in the resolve worker, so
-     * the per-file cross-LSP step no-ops. Per-file LSP (run during
-     * extract) is unaffected; only the cross-FILE refinement is gated. */
-    const bool run_cross_lsp = (p->mode == CBM_MODE_ADVANCED);
+    /* Cross-file LSP (type-aware call/usage resolution across files) — the
+     * most expensive phase — runs in every mode. */
+    const bool run_cross_lsp = true;
     char **def_modules = NULL;
     int def_count = 0;
     CBMLSPDef *all_defs = NULL;
@@ -895,18 +888,10 @@ static int run_extraction_phase(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
 
     int worker_count = cbm_default_worker_count(true);
     CBM_PROF_START(t_extract_total);
-    /* Gate ALL LSP (per-file type-aware resolution during extract +
-     * the cross-file LSP pass during resolve) behind ADVANCED mode.
-     * Set once here before any extraction worker starts; extract
-     * workers read it concurrently. FULL and below get tree-sitter
-     * extraction + registry textual resolution only. */
-    bool saved_lsp = cbm_get_lsp_enabled();
-    cbm_set_lsp_enabled(p->mode == CBM_MODE_ADVANCED);
     int rc = (worker_count > SKIP_ONE && file_count > MIN_FILES_FOR_PARALLEL)
                  ? run_parallel_pipeline(p, ctx, files, file_count, worker_count, &t)
                  : run_sequential_pipeline(p, ctx, files, file_count, &t);
     CBM_PROF_END_N("pipeline", "2_extraction_total", t_extract_total, file_count);
-    cbm_set_lsp_enabled(saved_lsp); /* restore: pipeline must not pollute g_lsp_enabled for callers */
     if (check_cancel(p)) {
         return CBM_NOT_FOUND;
     }

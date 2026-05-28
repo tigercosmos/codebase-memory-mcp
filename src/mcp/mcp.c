@@ -268,11 +268,11 @@ static const tool_def_t TOOLS[] = {
      "{\"type\":\"object\",\"properties\":{\"repo_path\":{\"type\":\"string\",\"description\":"
      "\"Path to the repository\"},"
      "\"mode\":{\"type\":\"string\","
-     "\"enum\":[\"full\",\"advanced\",\"moderate\",\"fast\",\"cross-repo-intelligence\"],"
-     "\"default\":\"full\",\"description\":\"full: all passes EXCEPT cross-file LSP. "
-     "advanced: full + cross-file type-aware call/usage resolution (slowest, most precise). "
-     "moderate: fast + semantic. fast: structure only. "
-     "cross-repo-intelligence: match Routes/Channels across projects.\"},"
+     "\"enum\":[\"full\",\"moderate\",\"fast\",\"cross-repo-intelligence\"],"
+     "\"default\":\"full\",\"description\":\"All modes run type-aware LSP call/usage "
+     "resolution (per-file + cross-file). full: all files + similarity/semantic edges. "
+     "moderate: filtered files + similarity/semantic. fast: filtered files, no "
+     "similarity/semantic. cross-repo-intelligence: match Routes/Channels across projects.\"},"
      "\"target_projects\":{\"type\":\"array\",\"items\":{\"type\":\"string\"},"
      "\"description\":\"Projects to search for cross-repo links (cross-repo-intelligence mode). "
      "Use [\\\"*\\\"] for all indexed projects. Run list_projects to see available projects.\"},"
@@ -2525,9 +2525,6 @@ static char *handle_index_repository(cbm_mcp_server_t *srv, const char *args) {
         mode = CBM_MODE_FAST;
     } else if (mode_str && strcmp(mode_str, "moderate") == 0) {
         mode = CBM_MODE_MODERATE;
-    } else if (mode_str && strcmp(mode_str, "advanced") == 0) {
-        /* Advanced = full + the cross-file LSP pass (opt-in, slowest). */
-        mode = CBM_MODE_ADVANCED;
     }
     free(mode_str);
 

@@ -28,17 +28,6 @@ static _Atomic uint64_t total_preprocess_ns = 0;
 static _Atomic uint64_t total_files_preprocessed = 0;
 static _Atomic uint64_t total_files = 0;
 
-/* Per-file LSP toggle. The pipeline sets this ONCE before extraction
- * based on index mode: only CBM_MODE_ADVANCED enables the per-file
- * type-aware LSP resolution (the slowest part of extraction). Default
- * true so callers that don't set it (tests, ad-hoc extraction) keep
- * the historical behaviour. Set-once-before-parallel-extract +
- * read-concurrently makes the atomic sufficient (no per-file variance). */
-static _Atomic bool g_lsp_enabled = true;
-
-void cbm_set_lsp_enabled(bool enabled) { atomic_store(&g_lsp_enabled, enabled); }
-bool cbm_get_lsp_enabled(void) { return atomic_load(&g_lsp_enabled); }
-
 #define NSEC_PER_SEC 1000000000ULL
 #define USEC_TO_NSEC 1000ULL
 /* Use compat.h's cbm_clock_gettime which accepts CLOCK_MONOTONIC (value
@@ -364,12 +353,10 @@ CBMFileResult *cbm_extract_file(const char *source, int source_len, CBMLanguage 
         cbm_extract_k8s(&ctx);
     }
 
-    // LSP type-aware call resolution — gated behind advanced mode.
-    // When disabled (FULL and below), tree-sitter extraction +
-    // registry-based textual resolution still produce the graph; only
-    // the type-aware LSP refinement is skipped.
+    // LSP type-aware call/usage resolution (per-file). Runs in every mode;
+    // refines the tree-sitter + textual-resolution graph with type info.
     uint64_t lsp_start = now_ns();
-    if (atomic_load(&g_lsp_enabled)) {
+    {
         if (language == CBM_LANG_GO) {
             cbm_run_go_lsp(a, result, source, source_len, root);
         }
@@ -450,15 +437,11 @@ CBMFileResult *cbm_extract_file(const char *source, int source_len, CBMLanguage 
                     // harmless (pipeline deduplicates by caller+callee).
                     cbm_extract_unified(&pp_ctx);
 
-                    // Also run LSP on expanded source for additional type-resolved calls
-                    // (language is already C/C++/CUDA — checked in enclosing block).
-                    // Gated behind advanced mode like the first-pass LSP above;
-                    // the macro-expanded call extraction (cbm_extract_unified) is
-                    // base extraction and always runs.
-                    if (atomic_load(&g_lsp_enabled)) {
-                        cbm_run_c_lsp(a, result, expanded, expanded_len, pp_root,
-                                      language != CBM_LANG_C);
-                    }
+                    // Also run LSP on expanded source for additional type-resolved
+                    // calls (language is already C/C++/CUDA — checked in enclosing
+                    // block). Runs in every mode.
+                    cbm_run_c_lsp(a, result, expanded, expanded_len, pp_root,
+                                  language != CBM_LANG_C);
 
                     ts_tree_delete(pp_tree);
                 }

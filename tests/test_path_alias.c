@@ -8,6 +8,7 @@
  */
 #include "test_framework.h"
 #include "../src/pipeline/path_alias.h"
+#include "../src/foundation/compat.h"
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -33,7 +34,7 @@ static cbm_path_alias_map_t *make_map(const char *base_url, int count, ...) {
         if (star) {
             map->entries[i].has_wildcard = true;
             map->entries[i].alias_prefix =
-                strndup(alias_pattern, (size_t)(star - alias_pattern));
+                cbm_strndup(alias_pattern, (size_t)(star - alias_pattern));
             map->entries[i].alias_suffix = strdup(star + 1);
         } else {
             map->entries[i].has_wildcard = false;
@@ -43,7 +44,7 @@ static cbm_path_alias_map_t *make_map(const char *base_url, int count, ...) {
         const char *tstar = strchr(target_pattern, '*');
         if (tstar) {
             map->entries[i].target_prefix =
-                strndup(target_pattern, (size_t)(tstar - target_pattern));
+                cbm_strndup(target_pattern, (size_t)(tstar - target_pattern));
             map->entries[i].target_suffix = strdup(tstar + 1);
         } else {
             map->entries[i].target_prefix = strdup(target_pattern);
@@ -234,9 +235,9 @@ TEST(path_alias_loader_monorepo) {
 
     char sub[512];
     snprintf(sub, sizeof(sub), "%s/apps", root);
-    mkdir(sub, 0755);
+    cbm_mkdir(sub);
     snprintf(sub, sizeof(sub), "%s/apps/manager", root);
-    mkdir(sub, 0755);
+    cbm_mkdir(sub);
 
     char path[512];
     snprintf(path, sizeof(path), "%s/tsconfig.json", root);

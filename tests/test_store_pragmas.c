@@ -17,7 +17,7 @@
 #include <unistd.h>
 
 static void clear_mmap_env(void) {
-    unsetenv("CBM_SQLITE_MMAP_SIZE");
+    cbm_unsetenv("CBM_SQLITE_MMAP_SIZE");
 }
 
 TEST(mmap_size_default_when_unset) {
@@ -27,35 +27,35 @@ TEST(mmap_size_default_when_unset) {
 }
 
 TEST(mmap_size_zero_disables_mmap) {
-    setenv("CBM_SQLITE_MMAP_SIZE", "0", 1);
+    cbm_setenv("CBM_SQLITE_MMAP_SIZE", "0", 1);
     ASSERT_EQ(cbm_store_resolve_mmap_size(), 0LL);
     clear_mmap_env();
     PASS();
 }
 
 TEST(mmap_size_explicit_value) {
-    setenv("CBM_SQLITE_MMAP_SIZE", "1048576", 1);
+    cbm_setenv("CBM_SQLITE_MMAP_SIZE", "1048576", 1);
     ASSERT_EQ(cbm_store_resolve_mmap_size(), 1048576LL);
     clear_mmap_env();
     PASS();
 }
 
 TEST(mmap_size_negative_clamped_to_zero) {
-    setenv("CBM_SQLITE_MMAP_SIZE", "-1", 1);
+    cbm_setenv("CBM_SQLITE_MMAP_SIZE", "-1", 1);
     ASSERT_EQ(cbm_store_resolve_mmap_size(), 0LL);
     clear_mmap_env();
     PASS();
 }
 
 TEST(mmap_size_garbage_falls_back_to_default) {
-    setenv("CBM_SQLITE_MMAP_SIZE", "not-a-number", 1);
+    cbm_setenv("CBM_SQLITE_MMAP_SIZE", "not-a-number", 1);
     ASSERT_EQ(cbm_store_resolve_mmap_size(), 67108864LL);
     clear_mmap_env();
     PASS();
 }
 
 TEST(mmap_size_partial_garbage_falls_back_to_default) {
-    setenv("CBM_SQLITE_MMAP_SIZE", "123abc", 1);
+    cbm_setenv("CBM_SQLITE_MMAP_SIZE", "123abc", 1);
     ASSERT_EQ(cbm_store_resolve_mmap_size(), 67108864LL);
     clear_mmap_env();
     PASS();
@@ -64,7 +64,7 @@ TEST(mmap_size_partial_garbage_falls_back_to_default) {
 /* Integration smoke: opening a file-backed store with mmap_size=0 must
  * succeed. Proves the resolver is wired through configure_pragmas(). */
 TEST(store_open_with_mmap_disabled) {
-    setenv("CBM_SQLITE_MMAP_SIZE", "0", 1);
+    cbm_setenv("CBM_SQLITE_MMAP_SIZE", "0", 1);
     char tmp_path[256];
     snprintf(tmp_path, sizeof(tmp_path), "/tmp/cbm_test_pragmas_%d.db", (int)getpid());
     unlink(tmp_path);

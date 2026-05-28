@@ -191,11 +191,7 @@ static void walk_type_assigns(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec
     while (stack.count > 0) {
         TSNode node = ts_nstack_pop(&stack);
         process_type_assign_node(ctx, node, spec, cbm_enclosing_func_qn_cached(ctx, node));
-        enum { LAST_IDX = 1 };
-        uint32_t count = ts_node_child_count(node);
-        for (int i = (int)count - LAST_IDX; i >= 0; i--) {
-            ts_nstack_push(&stack, ctx->arena, ts_node_child(node, (uint32_t)i));
-        }
+        ts_nstack_push_children(&stack, ctx->arena, node);
     }
 }
 

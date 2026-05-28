@@ -659,8 +659,15 @@ static const char **get_module_parents(CBMLanguage lang) {
     }
 }
 
-bool cbm_is_module_level(TSNode node, CBMLanguage lang) {
-    TSNode parent = ts_node_parent(node);
+/* Variant that takes the node's parent DIRECTLY. The callers in
+ * extract_defs.c iterate a known parent's children, so they already
+ * have the parent — passing it here avoids ts_node_parent(node), which
+ * is O(n) per call (tree-sitter nodes carry no parent pointer; the
+ * parent is found by rescanning from the root). On a pathologically
+ * large file (e.g. a 583k-line generated/fixture file with tens of
+ * thousands of top-level statements) the old per-child ts_node_parent
+ * made extraction O(n²) and effectively hung. */
+bool cbm_is_module_level_p(TSNode parent, CBMLanguage lang) {
     if (ts_node_is_null(parent)) {
         return false;
     }
@@ -691,6 +698,13 @@ bool cbm_is_module_level(TSNode node, CBMLanguage lang) {
         }
     }
     return false;
+}
+
+/* Back-compat wrapper: computes the parent via ts_node_parent (O(n)).
+ * Prefer cbm_is_module_level_p at call sites that already know the
+ * parent (the common case — iterating a parent's children). */
+bool cbm_is_module_level(TSNode node, CBMLanguage lang) {
+    return cbm_is_module_level_p(ts_node_parent(node), lang);
 }
 
 // --- FQN computation ---

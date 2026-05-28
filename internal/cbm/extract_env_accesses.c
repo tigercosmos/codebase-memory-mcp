@@ -163,11 +163,7 @@ static void walk_env_accesses(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec
             continue; // don't push children (avoid double-counting)
         }
 
-        uint32_t count = ts_node_child_count(node);
-        enum { LAST_IDX = 1 };
-        for (int i = (int)count - LAST_IDX; i >= 0; i--) {
-            ts_nstack_push(&stack, ctx->arena, ts_node_child(node, (uint32_t)i));
-        }
+        ts_nstack_push_children(&stack, ctx->arena, node);
     }
 }
 

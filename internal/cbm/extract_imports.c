@@ -436,10 +436,7 @@ static void walk_es_imports(CBMExtractCtx *ctx, TSNode root) {
         }
 
         if (push_children) {
-            uint32_t count = ts_node_child_count(node);
-            for (int i = (int)count - SKIP_ONE; i >= 0; i--) {
-                ts_nstack_push(&stack, ctx->arena, ts_node_child(node, (uint32_t)i));
-            }
+            ts_nstack_push_children(&stack, ctx->arena, node);
         }
     }
 }
@@ -836,10 +833,7 @@ static void walk_wolfram_imports(CBMExtractCtx *ctx, TSNode root) {
             process_wolfram_needs(ctx, node);
         }
 
-        uint32_t count = ts_node_child_count(node);
-        for (int i = (int)count - SKIP_ONE; i >= 0; i--) {
-            ts_nstack_push(&stack, ctx->arena, ts_node_child(node, (uint32_t)i));
-        }
+        ts_nstack_push_children(&stack, ctx->arena, node);
     }
 }
 

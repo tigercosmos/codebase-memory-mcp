@@ -490,8 +490,8 @@ int cbm_pipeline_githistory_compute(const char *repo_path, cbm_githistory_result
      * we don't re-scan history. NULL on OOM is fine — the caller still
      * gets the couplings. */
     cbm_file_temporal_t *ft_arr = malloc(MAX_FILE_TEMPORAL * sizeof(cbm_file_temporal_t));
-    int ft_count = 0;
     if (ft_arr) {
+        int ft_count = 0;
         CBMHashTable *file_idx = cbm_ht_create(CBM_SZ_1K);
         for (int c = 0; c < commit_count; c++) {
             if (cf[c].count > GH_MAX_FILES) {

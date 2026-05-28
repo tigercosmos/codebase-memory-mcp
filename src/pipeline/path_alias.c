@@ -272,10 +272,10 @@ char *cbm_path_alias_resolve(const cbm_path_alias_map_t *map, const char *module
 
     for (int i = 0; i < map->count; i++) {
         const cbm_path_alias_t *e = &map->entries[i];
-        size_t prefix_len = strlen(e->alias_prefix);
-        size_t suffix_len = strlen(e->alias_suffix);
 
         if (e->has_wildcard) {
+            size_t prefix_len = strlen(e->alias_prefix);
+            size_t suffix_len = strlen(e->alias_suffix);
             if (mod_len < prefix_len + suffix_len) {
                 continue;
             }

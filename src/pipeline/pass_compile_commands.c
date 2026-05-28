@@ -16,6 +16,7 @@ enum { CC_FLAG_IDX = 1, CC_FLAG_SKIP = 2 };
 #include <string.h>
 #include <stdio.h>
 #include "yyjson/yyjson.h"
+#include "foundation/hash_table.h"
 
 /* Emit the current token if non-empty. Returns updated count. */
 static int emit_token(char *current, int *clen, char **out, int count, int max_out) {
@@ -122,8 +123,14 @@ cbm_compile_flags_t *cbm_extract_flags(const char **args, int argc, const char *
     if (!f) {
         return NULL;
     }
-    f->include_paths = calloc(argc, sizeof(char *));
-    f->defines = calloc(argc, sizeof(char *));
+    /* +1 slot guarantees a trailing NULL sentinel: include/define counts can
+     * each reach argc, and cbm_preprocess iterates these arrays until NULL. */
+    f->include_paths = calloc((size_t)argc + 1, sizeof(char *));
+    f->defines = calloc((size_t)argc + 1, sizeof(char *));
+    if (!f->include_paths || !f->defines) {
+        cbm_compile_flags_free(f);
+        return NULL;
+    }
 
     for (int i = 0; i < argc; i++) {
         if (try_include_flag(f, args, argc, &i, directory)) {
@@ -180,6 +187,72 @@ static int extract_flag_args(yyjson_val *args_val, yyjson_val *cmd_val, const ch
     return 0;
 }
 
+/* Lexically normalize a path: collapse "//", "." and ".." segments (no
+ * filesystem access). Preserves a leading '/'. Lets non-CMake compile_commands
+ * entries like "dir/./foo.c" match the clean repo-relative lookup paths. */
+static void normalize_path(const char *in, char *out, size_t outsz) {
+    if (!in || !out || outsz == 0) {
+        if (out && outsz) {
+            out[0] = '\0';
+        }
+        return;
+    }
+    enum { CC_MAX_SEGS = 256 };
+    const char *segs[CC_MAX_SEGS];
+    int seglen[CC_MAX_SEGS];
+    int n = 0;
+    int absolute = (in[0] == '/');
+    const char *p = in;
+    while (*p) {
+        while (*p == '/') {
+            p++;
+        }
+        if (!*p) {
+            break;
+        }
+        const char *start = p;
+        while (*p && *p != '/') {
+            p++;
+        }
+        int len = (int)(p - start);
+        if (len == 1 && start[0] == '.') {
+            continue;
+        }
+        if (len == 2 && start[0] == '.' && start[1] == '.') {
+            if (n > 0 && !(seglen[n - 1] == 2 && segs[n - 1][0] == '.' && segs[n - 1][1] == '.')) {
+                n--;
+                continue;
+            }
+            if (absolute) {
+                continue;
+            }
+        }
+        if (n < CC_MAX_SEGS) {
+            segs[n] = start;
+            seglen[n] = len;
+            n++;
+        }
+    }
+    size_t pos = 0;
+    if (absolute && pos + 1 < outsz) {
+        out[pos++] = '/';
+    }
+    for (int i = 0; i < n; i++) {
+        if (i > 0 && pos + 1 < outsz) {
+            out[pos++] = '/';
+        }
+        int copy = seglen[i];
+        if ((size_t)copy > outsz - pos - 1) {
+            copy = (int)(outsz - pos - 1);
+        }
+        if (copy > 0) {
+            memcpy(out + pos, segs[i], (size_t)copy);
+            pos += (size_t)copy;
+        }
+    }
+    out[pos] = '\0';
+}
+
 /* Process a single compile_commands.json entry. Returns 1 if added, 0 otherwise. */
 static int process_compile_entry(yyjson_val *entry, const char *repo_path, char **out_path,
                                  cbm_compile_flags_t **out_flag) {
@@ -224,13 +297,16 @@ static int process_compile_entry(yyjson_val *entry, const char *repo_path, char 
         snprintf(abs_path, sizeof(abs_path), "%s", file_path);
     }
 
+    char norm[CBM_SZ_4K];
+    normalize_path(abs_path, norm, sizeof(norm));
+
     size_t repo_len = strlen(repo_path);
-    if (strncmp(abs_path, repo_path, repo_len) != 0 || abs_path[repo_len] != '/') {
+    if (strncmp(norm, repo_path, repo_len) != 0 || norm[repo_len] != '/') {
         cbm_compile_flags_free(f);
         return 0;
     }
 
-    *out_path = strdup(abs_path + repo_len + SKIP_ONE);
+    *out_path = strdup(norm + repo_len + SKIP_ONE);
     *out_flag = f;
     return SKIP_ONE;
 }
@@ -282,4 +358,117 @@ int cbm_parse_compile_commands(const char *json_data, const char *repo_path, cha
     *out_paths = paths;
     *out_flags = flags;
     return count;
+}
+
+/* ── compile_commands.json flag index ────────────────────────────────
+ * Built once per index, looked up per file. Hash keys are repo-relative
+ * paths (borrowed from idx->paths[]); values are cbm_compile_flags_t*
+ * (borrowed from idx->flags[]). */
+
+struct cbm_cc_index {
+    CBMHashTable *by_path;
+    char **paths;
+    cbm_compile_flags_t **flags;
+    int count;
+};
+
+enum {
+    CC_INDEX_MAX_BYTES = 64 * CBM_SZ_1K * CBM_SZ_1K, /* 64 MiB cap */
+    CC_INDEX_HT_LOAD = 2,                            /* hash slots per entry */
+};
+
+/* Free the parallel paths[]/flags[] arrays from cbm_parse_compile_commands. */
+static void cc_free_parsed(char **paths, cbm_compile_flags_t **flags, int count) {
+    for (int i = 0; i < count; i++) {
+        free(paths[i]);
+        cbm_compile_flags_free(flags[i]);
+    }
+    free(paths);
+    free(flags);
+}
+
+cbm_cc_index_t *cbm_cc_index_build(const char *repo_path) {
+    if (!repo_path || !repo_path[0]) {
+        return NULL;
+    }
+
+    char cc_path[CBM_SZ_4K];
+    snprintf(cc_path, sizeof(cc_path), "%s/compile_commands.json", repo_path);
+
+    FILE *fp = fopen(cc_path, "rb");
+    if (!fp) {
+        return NULL;
+    }
+    (void)fseek(fp, 0, SEEK_END);
+    long size = ftell(fp);
+    (void)fseek(fp, 0, SEEK_SET);
+    if (size <= 0 || size > (long)CC_INDEX_MAX_BYTES) {
+        (void)fclose(fp);
+        return NULL;
+    }
+    char *json = (char *)malloc((size_t)size + 1);
+    if (!json) {
+        (void)fclose(fp);
+        return NULL;
+    }
+    size_t nread = fread(json, 1, (size_t)size, fp);
+    (void)fclose(fp);
+    json[nread] = '\0';
+
+    char **paths = NULL;
+    cbm_compile_flags_t **flags = NULL;
+    int count = cbm_parse_compile_commands(json, repo_path, &paths, &flags);
+    free(json);
+    if (count <= 0) {
+        free(paths);
+        free(flags);
+        return NULL;
+    }
+
+    cbm_cc_index_t *idx = calloc(CBM_ALLOC_ONE, sizeof(*idx));
+    if (!idx) {
+        cc_free_parsed(paths, flags, count);
+        return NULL;
+    }
+    idx->paths = paths;
+    idx->flags = flags;
+    idx->count = count;
+    idx->by_path = cbm_ht_create((uint32_t)count * CC_INDEX_HT_LOAD + CBM_SZ_32);
+    for (int i = 0; i < count; i++) {
+        if (paths[i] && flags[i]) {
+            cbm_ht_set(idx->by_path, paths[i], flags[i]);
+        }
+    }
+    return idx;
+}
+
+const cbm_compile_flags_t *cbm_cc_index_lookup(const cbm_cc_index_t *idx, const char *rel_path) {
+    if (!idx || !idx->by_path || !rel_path) {
+        return NULL;
+    }
+    return (const cbm_compile_flags_t *)cbm_ht_get(idx->by_path, rel_path);
+}
+
+void cbm_cc_index_free(cbm_cc_index_t *idx) {
+    if (!idx) {
+        return;
+    }
+    if (idx->by_path) {
+        cbm_ht_free(idx->by_path);
+    }
+    cc_free_parsed(idx->paths, idx->flags, idx->count);
+    free(idx);
+}
+
+/* Convenience accessors: NULL-terminated define / include-path arrays for a
+ * repo-relative file, or NULL when it has no compile_commands entry. Centralizes
+ * the lookup + const-cast used at every extraction call site. */
+const char **cbm_cc_index_defines(const cbm_cc_index_t *idx, const char *rel_path) {
+    const cbm_compile_flags_t *f = cbm_cc_index_lookup(idx, rel_path);
+    return f ? (const char **)f->defines : NULL;
+}
+
+const char **cbm_cc_index_includes(const cbm_cc_index_t *idx, const char *rel_path) {
+    const cbm_compile_flags_t *f = cbm_cc_index_lookup(idx, rel_path);
+    return f ? (const char **)f->include_paths : NULL;
 }

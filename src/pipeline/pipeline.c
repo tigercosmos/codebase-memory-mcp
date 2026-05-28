@@ -844,6 +844,7 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
     struct timespec t0;
     cbm_clock_gettime(CLOCK_MONOTONIC, &t0);
     cbm_path_alias_collection_t *path_aliases = NULL;
+    cbm_cc_index_t *cc_index = NULL;
 
     /* Load user-defined extension overrides (fail-open: NULL on error) */
     CBM_PROF_START(t_userconfig);
@@ -888,6 +889,10 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
      * when no usable configs are found — non-TS projects pay nothing. */
     path_aliases = cbm_load_path_aliases(p->repo_path);
 
+    /* Phase 2c: Parse compile_commands.json (C/C++ defines + include paths fed
+     * to the preprocessor). NULL when absent — non-C/C++ projects pay nothing. */
+    cc_index = cbm_cc_index_build(p->repo_path);
+
     /* Build shared context for pass functions */
     cbm_pipeline_ctx_t ctx = {
         .project_name = p->project_name,
@@ -897,6 +902,7 @@ int cbm_pipeline_run(cbm_pipeline_t *p) {
         .cancelled = &p->cancelled,
         .mode = (int)p->mode,
         .path_aliases = path_aliases,
+        .cc_index = cc_index,
     };
 
     rc = run_extraction_phase(p, &ctx, files, file_count);
@@ -923,6 +929,7 @@ cleanup:
     cbm_registry_free(p->registry);
     p->registry = NULL;
     cbm_path_alias_collection_free(path_aliases);
+    cbm_cc_index_free(cc_index);
     /* Clear and free user extension config */
     cbm_set_user_lang_config(NULL);
     cbm_userconfig_free(p->userconfig);

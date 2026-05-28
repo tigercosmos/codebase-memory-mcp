@@ -50,6 +50,9 @@ void cbm_pkg_entries_free(cbm_pkg_entries_t *e);
 
 /* Shared context passed to each pass function.
  * Derived from cbm_pipeline_t fields during run. */
+/* compile_commands.json flag index (opaque) — pass_compile_commands.c. */
+typedef struct cbm_cc_index cbm_cc_index_t;
+
 typedef struct {
     const char *project_name; /* borrowed from pipeline */
     const char *repo_path;    /* borrowed from pipeline */
@@ -68,6 +71,10 @@ typedef struct {
      * configs are an easy follow-on). NULL when no usable configs were found.
      * Owned by pipeline.c / pipeline_incremental.c. */
     const cbm_path_alias_collection_t *path_aliases;
+
+    /* compile_commands.json flag index (C/C++ defines + include paths).
+     * NULL when absent. Owned by pipeline.c. */
+    const cbm_cc_index_t *cc_index;
 } cbm_pipeline_ctx_t;
 
 /* Get the current pipeline's package map (NULL if none). */
@@ -226,6 +233,21 @@ void cbm_compile_flags_free(cbm_compile_flags_t *f);
  * Returns count. Caller must free out_paths[i] and cbm_compile_flags_free(out_flags[i]). */
 int cbm_parse_compile_commands(const char *json_data, const char *repo_path, char ***out_paths,
                                cbm_compile_flags_t ***out_flags);
+
+/* Build a compile_commands.json flag index for repo_path (reads
+ * <repo>/compile_commands.json). Returns NULL when absent/empty/unparseable. */
+cbm_cc_index_t *cbm_cc_index_build(const char *repo_path);
+
+/* Look up flags for a repo-relative path. Returns NULL when not found. */
+const cbm_compile_flags_t *cbm_cc_index_lookup(const cbm_cc_index_t *idx, const char *rel_path);
+
+/* Free a cc index and all owned flags. */
+void cbm_cc_index_free(cbm_cc_index_t *idx);
+
+/* NULL-terminated define / include-path arrays for a repo-relative file
+ * (NULL when the file has no compile_commands entry). */
+const char **cbm_cc_index_defines(const cbm_cc_index_t *idx, const char *rel_path);
+const char **cbm_cc_index_includes(const cbm_cc_index_t *idx, const char *rel_path);
 
 /* ── Infrascan helpers (pass_infrascan.c) ─────────────────────────── */
 

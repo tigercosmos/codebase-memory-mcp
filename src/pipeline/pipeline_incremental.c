@@ -403,6 +403,13 @@ static void run_extract_resolve(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *change
             cbm_log_info("pass.timing", "pass", "incr_registry", "elapsed_ms",
                          itoa_buf((int)elapsed_ms(t)));
 
+            /* NOTE: cross-file LSP (cbm_pipeline_pass_lsp_cross) is intentionally
+             * NOT run here. Its project-wide def list is built from the per-file
+             * result cache, which on the incremental path holds only the changed
+             * files — so it cannot resolve calls into UNCHANGED files and would
+             * diverge from (and could mis-bind vs) a full index. Correct
+             * incremental cross-file resolution needs the full-project def set
+             * (see plan.md WS1B/WS1C); deferred. */
             cbm_clock_gettime(CLOCK_MONOTONIC, &t);
             cbm_parallel_resolve(ctx, changed_files, ci, cache, &shared_ids, worker_count);
             cbm_gbuf_set_next_id(ctx->gbuf, atomic_load(&shared_ids));
@@ -622,6 +629,7 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
 
     cbm_path_alias_collection_t *path_aliases =
         cbm_load_path_aliases(cbm_pipeline_repo_path(p));
+    cbm_cc_index_t *cc_index = cbm_cc_index_build(cbm_pipeline_repo_path(p));
 
     cbm_pipeline_ctx_t ctx = {
         .project_name = project,
@@ -631,6 +639,7 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
         .cancelled = cbm_pipeline_cancelled_ptr(p),
         .mode = cbm_pipeline_get_mode(p),
         .path_aliases = path_aliases,
+        .cc_index = cc_index,
     };
 
     for (int i = 0; i < ci; i++) {
@@ -649,6 +658,7 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
     free(changed_files);
     cbm_registry_free(registry);
     cbm_path_alias_collection_free(path_aliases);
+    cbm_cc_index_free(cc_index);
 
     /* Step 7: Dump to disk (preserves mode-skipped hash rows so the next
      * reindex can correctly classify those files instead of seeing them

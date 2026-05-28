@@ -3922,6 +3922,51 @@ TEST(tslsp_nested_class_resolution) {
     PASS();
 }
 
+/* ── Golden regression tests (WS9) ─────────────────────────────────────── */
+
+/* Golden: method call on a class-typed parameter resolves with positive
+ * confidence. Mirrors tslsp_class_method_dispatch and adds a confidence>0
+ * check (same robustness bar used in tslsp_param_simple style tests). */
+TEST(tslsp_golden_method_on_param_class) {
+    CBMFileResult *r = extract_ts(
+        "class Foo { bar(): void {} }\n"
+        "function go(f: Foo) { f.bar(); }\n");
+    ASSERT_NOT_NULL(r);
+    int idx = require_resolved(r, ".go", "bar");
+    ASSERT_GTE(idx, 0);
+    ASSERT_TRUE(r->resolved_calls.items[idx].confidence > 0);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* Golden: this.method() inside a class resolves. Mirrors tslsp_class_this_dispatch
+ * exactly; this-dispatch is one of the most stable TS resolver paths. */
+TEST(tslsp_golden_this_method_dispatch) {
+    CBMFileResult *r = extract_ts(
+        "class Counter {\n"
+        "    inc(): void {}\n"
+        "    bump(): void { this.inc(); }\n"
+        "}\n");
+    ASSERT_NOT_NULL(r);
+    ASSERT_GTE(require_resolved(r, "Counter.bump", "inc"), 0);
+    ASSERT(r->resolved_calls.count >= 1);
+    cbm_free_result(r);
+    PASS();
+}
+
+/* Golden: stdlib console.log resolves. Mirrors tslsp_stdlib_console_log; a
+ * stable stdlib symbol that the resolver already handles in passing tests. */
+TEST(tslsp_golden_stdlib_console_log) {
+    CBMFileResult *r = extract_ts(
+        "function go() { console.log(\"hi\"); }\n");
+    ASSERT_NOT_NULL(r);
+    int idx = require_resolved(r, ".go", "log");
+    ASSERT_GTE(idx, 0);
+    ASSERT_TRUE(r->resolved_calls.items[idx].confidence > 0);
+    cbm_free_result(r);
+    PASS();
+}
+
 /* ── Suite registration ────────────────────────────────────────────────────── */
 
 SUITE(ts_lsp) {
@@ -3931,6 +3976,11 @@ SUITE(ts_lsp) {
     RUN_TEST(tslsp_smoke_jsx_minimal);
     RUN_TEST(tslsp_smoke_js_minimal);
     RUN_TEST(tslsp_smoke_dts_minimal);
+
+    /* Golden regression (WS9) */
+    RUN_TEST(tslsp_golden_method_on_param_class);
+    RUN_TEST(tslsp_golden_this_method_dispatch);
+    RUN_TEST(tslsp_golden_stdlib_console_log);
 
     /* Category 1: param type inference */
     RUN_TEST(tslsp_param_simple);

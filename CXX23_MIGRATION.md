@@ -134,9 +134,10 @@ struct memory layout.
 
 ## Phase 1 closing tasks (still to do)
 
-1. Add CMake targets for the **production binary**
-   (`codebase-memory-mcp`) and `cbm-with-ui`. Only `test-runner` is
-   currently wired.
+1. ✅ **Done (partial):** the **production binary**
+   (`codebase-memory-mcp`) is now wired in CMake (stub-UI `cbm` variant)
+   and verified to build + run. The embedded-assets `cbm-with-ui` variant
+   is still not wired.
 2. Mirror `Makefile.cbm`'s `test-tsan`, `lint-tidy`, `lint-cppcheck`,
    `lint-format`, `lint-no-suppress`, `security` targets.
 3. Delete `Makefile.cbm` and update CI

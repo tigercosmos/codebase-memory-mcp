@@ -262,11 +262,12 @@ endif()
 # First-party libraries
 # ────────────────────────────────────────────────────────────────
 
-# ── Foundation: C++23 (this phase's pilot) ─────────────────────
-# 15 of 16 TUs are ported to C++23. hash_table.c stays C in this phase
-# because its hashmap is generated via verstable.h, a macro-heavy C99
-# header that uses _Generic (26 sites) — porting requires replacing
-# verstable, which is Phase 2 work, not Phase 1 compile-as-C++23.
+# ── Foundation: all 16 TUs C++23 ───────────────────────────────
+# hash_table.cpp instantiates verstable.h (a macro-heavy C99 header with
+# 26 _Generic sites), but the generic dispatch macros are never expanded
+# here — hash_table uses the NAME-prefixed cbm_vt_* functions directly and
+# defines its own HASH_FN/CMPR_FN, so the instantiation compiles cleanly as
+# C++23 with no perf change (verstable retained).
 set(CBM_FOUNDATION_CXX_SRCS
     src/foundation/arena.cpp
     src/foundation/str_intern.cpp
@@ -282,15 +283,10 @@ set(CBM_FOUNDATION_CXX_SRCS
     src/foundation/compat_regex.cpp
     src/foundation/mem.cpp
     src/foundation/diagnostics.cpp
-    src/foundation/profile.cpp)
-set(CBM_FOUNDATION_C_SRCS src/foundation/hash_table.c)
-
+    src/foundation/profile.cpp
+    src/foundation/hash_table.cpp)
 cbm_add_cxx_library(cbm_foundation_cxx
     SOURCES ${CBM_FOUNDATION_CXX_SRCS}
-    INCLUDES ${CMAKE_SOURCE_DIR}/vendored/mimalloc/include)
-
-cbm_add_c_library(cbm_foundation_c
-    SOURCES ${CBM_FOUNDATION_C_SRCS}
     INCLUDES ${CMAKE_SOURCE_DIR}/vendored/mimalloc/include)
 
 # ── Internal extraction (C++23) ────────────────────────────────
@@ -368,7 +364,7 @@ cbm_add_cxx_library(cbm_ui        SOURCES src/ui/config.cpp src/ui/http_server.c
                                           src/ui/layout3d.cpp src/ui/embedded_stub.cpp)
 
 set(CBM_FIRSTPARTY_TARGETS
-    cbm_foundation_cxx cbm_foundation_c
+    cbm_foundation_cxx
     cbm_extraction cbm_lang_specs cbm_lsp_tscs cbm_lsp_generated
     cbm_ac_lz4 cbm_zstd_store cbm_sqlite_writer
     cbm_store cbm_cypher cbm_mcp

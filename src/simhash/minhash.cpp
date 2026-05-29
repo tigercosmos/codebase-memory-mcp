@@ -16,6 +16,8 @@
 #include "tree_sitter/api.h"
 
 #include <stddef.h>
+
+#include <vector>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -398,21 +400,13 @@ void cbm_lsh_insert(cbm_lsh_index_t *idx, const cbm_lsh_entry_t *entry) {
 }
 
 /* O(1) seen-set: open-addressing hash table on node_id for dedup. */
-typedef struct {
-    int64_t *slots;
-    int cap;
-} seen_set_t;
-
-static void seen_set_init(seen_set_t *s) {
-    s->slots = (__typeof__(s->slots))calloc(SEEN_SET_SIZE, sizeof(int64_t));
-    s->cap = SEEN_SET_SIZE;
-    /* 0 means empty — node_ids are always > 0 */
-}
+/* O(1) dedup scratch: open-addressing set on node_id. RAII — the slot
+ * storage is owned by the std::vector (0 = empty; node_ids are always > 0). */
+struct seen_set_t {
+    std::vector<int64_t> slots = std::vector<int64_t>(SEEN_SET_SIZE, 0);
+};
 
 static bool seen_set_insert(seen_set_t *s, int64_t node_id) {
-    if (!s->slots) {
-        return false;
-    }
     uint32_t idx = (uint32_t)(node_id * KNUTH_MULT) & SEEN_SET_MASK;
     for (int probe = 0; probe < SEEN_SET_SIZE; probe++) {
         uint32_t slot = (idx + (uint32_t)probe) & SEEN_SET_MASK;
@@ -427,10 +421,6 @@ static bool seen_set_insert(seen_set_t *s, int64_t node_id) {
     return false; /* table full */
 }
 
-static void seen_set_free(seen_set_t *s) {
-    free(s->slots);
-    s->slots = NULL;
-}
 
 /* Append a candidate to the result buffer, growing if needed. */
 static bool result_push(cbm_lsh_index_t *idx, const cbm_lsh_entry_t *candidate) {
@@ -462,7 +452,6 @@ void cbm_lsh_query(const cbm_lsh_index_t *idx, const cbm_minhash_t *fp,
 
     /* O(1) dedup via open-addressing hash set */
     seen_set_t seen;
-    seen_set_init(&seen);
 
     for (int b = 0; b < CBM_LSH_BANDS; b++) {
         uint32_t h = band_hash(fp, b);
@@ -482,7 +471,6 @@ void cbm_lsh_query(const cbm_lsh_index_t *idx, const cbm_minhash_t *fp,
         }
     }
 
-    seen_set_free(&seen);
     *out = mut_idx->result_buf;
     *count = mut_idx->result_count;
 }
@@ -495,7 +483,6 @@ int cbm_lsh_query_into(const cbm_lsh_index_t *idx, const cbm_minhash_t *fp,
 
     /* Thread-local dedup — no shared state touched. */
     seen_set_t seen;
-    seen_set_init(&seen);
 
     int count = 0;
     for (int b = 0; b < CBM_LSH_BANDS; b++) {
@@ -516,7 +503,6 @@ int cbm_lsh_query_into(const cbm_lsh_index_t *idx, const cbm_minhash_t *fp,
         }
     }
 
-    seen_set_free(&seen);
     return count;
 }
 

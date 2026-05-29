@@ -41,6 +41,8 @@ enum {
 #include "mcp/mcp.h"
 #include "store/store.h"
 #include <sqlite3.h>
+
+#include <algorithm>
 #include "cypher/cypher.h"
 #include "pipeline/pipeline.h"
 #include "pipeline/pass_cross_repo.h"
@@ -3045,10 +3047,8 @@ static int compute_search_score(const search_result_t *r) {
     return score;
 }
 
-static int search_result_cmp(const void *a, const void *b) {
-    const search_result_t *ra = (const search_result_t *)a;
-    const search_result_t *rb = (const search_result_t *)b;
-    return rb->score - ra->score; /* descending */
+static bool search_result_score_greater(const search_result_t &a, const search_result_t &b) {
+    return a.score > b.score; /* descending by score */
 }
 
 /* Build the grep/search command string based on scoped vs recursive mode.
@@ -3457,7 +3457,9 @@ static void free_file_nodes(cbm_node_t *nodes, int count) {
 static void classify_all_grep_hits(grep_match_t *gm, int gm_count, cbm_store_t *store,
                                    const char *project, search_result_t **sr, int *sr_count,
                                    int *sr_cap, grep_match_t **raw, int *raw_count, int *raw_cap) {
-    qsort(gm, gm_count, sizeof(grep_match_t), (int (*)(const void *, const void *))strcmp);
+    std::sort(gm, gm + gm_count, [](const grep_match_t &a, const grep_match_t &b) {
+        return strcmp(a.file, b.file) < 0;
+    });
     int i = 0;
     while (i < gm_count) {
         const char *cur_file = gm[i].file;
@@ -3714,7 +3716,9 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
     grep_match_t *raw = (grep_match_t *)malloc(raw_cap * sizeof(grep_match_t));
 
     /* Sort matches by file path for contiguous per-file processing */
-    qsort(gm, gm_count, sizeof(grep_match_t), (int (*)(const void *, const void *))strcmp);
+    std::sort(gm, gm + gm_count, [](const grep_match_t &a, const grep_match_t &b) {
+        return strcmp(a.file, b.file) < 0;
+    });
 
     classify_all_grep_hits(gm, gm_count, store, project, &sr, &sr_count, &sr_cap, &raw, &raw_count,
                            &raw_cap);
@@ -3744,7 +3748,7 @@ static char *handle_search_code(cbm_mcp_server_t *srv, const char *args) {
         sr[j].score = compute_search_score(&sr[j]);
     }
     if (sr_count > SKIP_ONE) {
-        qsort(sr, sr_count, sizeof(search_result_t), search_result_cmp);
+        std::sort(sr, sr + sr_count, search_result_score_greater);
     }
 
     /* ── Phase 4: Context assembly (extracted helper) ─────────── */

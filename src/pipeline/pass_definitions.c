@@ -45,7 +45,12 @@ static char *read_file(const char *path, int *out_len) {
         return NULL;
     }
 
-    char *buf = malloc(size + SKIP_ONE);
+    /* +16 padding: tree-sitter's lexer peeks a few bytes past the final UTF-8
+     * character when computing lookahead, reading beyond the logical end.
+     * Over-allocate and zero the tail so that read stays in-bounds (ASan
+     * flags it as a heap-buffer-overflow otherwise; harmless but real UB). */
+    enum { CBM_TS_LOOKAHEAD_PAD = 16 };
+    char *buf = malloc((size_t)size + CBM_TS_LOOKAHEAD_PAD);
     if (!buf) {
         (void)fclose(f);
         return NULL;
@@ -57,7 +62,7 @@ static char *read_file(const char *path, int *out_len) {
     if (nread > (size_t)size) {
         nread = (size_t)size;
     }
-    buf[nread] = '\0';
+    memset(buf + nread, 0, CBM_TS_LOOKAHEAD_PAD);
     *out_len = (int)nread;
     return buf;
 }

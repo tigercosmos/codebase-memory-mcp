@@ -2,6 +2,20 @@
 
 #include "../type_rep.h"
 #include "../type_registry.h"
+#include "../c_lsp.h"   // cbm_c_stdlib_register (extern "C")
+#include <initializer_list>
+// C++ has no C99 compound literals; materialize a CBMType* argument array in
+// the arena instead of taking the address of a temporary.
+static const CBMType **cbm_type_args(CBMArena *arena,
+                                     std::initializer_list<const CBMType *> xs) {
+    const CBMType **p =
+        (const CBMType **)cbm_arena_alloc(arena, xs.size() * sizeof(const CBMType *));
+    size_t i = 0;
+    for (const CBMType *x : xs) {
+        p[i++] = x;
+    }
+    return p;
+}
 #include <string.h>
 
 // Helper macros for concise registration
@@ -10,7 +24,7 @@
     rf.min_params = -1; \
     rf.qualified_name = (qn); \
     rf.short_name = (short); \
-    rf.signature = cbm_type_func(arena, NULL, NULL, (const CBMType*[]){(ret_type), NULL}); \
+    rf.signature = cbm_type_func(arena, NULL, NULL, cbm_type_args(arena, {(ret_type), NULL})); \
     cbm_registry_add_func(reg, rf); \
 } while(0)
 

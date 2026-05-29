@@ -12,6 +12,7 @@
 
 #include "../type_rep.h"
 #include "../type_registry.h"
+#include "../py_lsp.h"  // cbm_python_stdlib_register (extern "C")
 #include <string.h>
 
 #define CBM_PYTHON_STDLIB_GENERATED 1

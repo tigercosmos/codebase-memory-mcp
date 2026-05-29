@@ -211,13 +211,16 @@ target_compile_definitions(cbm_lsp_all PRIVATE
 target_include_directories(cbm_lsp_all PRIVATE
     ${CBM_INTERNAL} ${CBM_TS_INCLUDE} ${CBM_TS_SRC})
 
-# LSP stdlib data tables (generated/*.c) — still C: auto-generated tables
-# full of C99 compound literals; revisit when the emitter is regenerated.
+# LSP stdlib data tables (generated/*.cpp) — ported to C++23. Auto-generated
+# but first-party; the (const CBMType*[]){...} compound literals are now
+# arena-allocated via cbm_type_args. Built with relaxed warnings (large
+# generated bodies, not warning-clean as C++); still sanitized.
 file(GLOB CBM_LSP_GENERATED_SRCS CONFIGURE_DEPENDS
-    ${CBM_INTERNAL}/lsp/generated/*.c)
-cbm_add_vendored_library(cbm_lsp_generated
+    ${CBM_INTERNAL}/lsp/generated/*.cpp)
+cbm_add_cxx_library(cbm_lsp_generated
     SOURCES ${CBM_LSP_GENERATED_SRCS}
-    INCLUDES ${CBM_INTERNAL} ${CBM_TS_INCLUDE})
+    INCLUDES ${CBM_TS_SRC})
+target_compile_options(cbm_lsp_generated PRIVATE -w)
 
 # ts_lsp / cs_lsp — ported to C++23 (the (const CBMType*[]){...} compound
 # literals are now arena-allocated via cbm_type_args). Large legacy resolver
@@ -249,7 +252,7 @@ set_source_files_properties(${CMAKE_SOURCE_DIR}/vendored/nomic/code_vectors_blob
 set(CBM_VENDORED_TARGETS
     cbm_mimalloc cbm_sqlite3 cbm_mongoose cbm_yyjson
     cbm_lz4 cbm_zstd
-    cbm_ts_runtime cbm_grammars cbm_lsp_all cbm_lsp_generated
+    cbm_ts_runtime cbm_grammars cbm_lsp_all
     cbm_preprocessor cbm_unixcoder)
 if(WIN32)
     list(APPEND CBM_VENDORED_TARGETS cbm_tre)
@@ -366,7 +369,7 @@ cbm_add_cxx_library(cbm_ui        SOURCES src/ui/config.cpp src/ui/http_server.c
 
 set(CBM_FIRSTPARTY_TARGETS
     cbm_foundation_cxx cbm_foundation_c
-    cbm_extraction cbm_lang_specs cbm_lsp_tscs
+    cbm_extraction cbm_lang_specs cbm_lsp_tscs cbm_lsp_generated
     cbm_ac_lz4 cbm_zstd_store cbm_sqlite_writer
     cbm_store cbm_cypher cbm_mcp
     cbm_discover

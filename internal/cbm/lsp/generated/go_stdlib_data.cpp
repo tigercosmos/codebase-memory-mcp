@@ -3,6 +3,7 @@
 
 #include "../type_rep.h"
 #include "../type_registry.h"
+#include "../go_lsp.h"  // cbm_go_stdlib_register (extern "C")
 #include <string.h>
 
 // 2328 functions, 321 types from 34 packages

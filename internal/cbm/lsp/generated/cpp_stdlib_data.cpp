@@ -2,6 +2,20 @@
 
 #include "../type_rep.h"
 #include "../type_registry.h"
+#include "../c_lsp.h"   // cbm_cpp_stdlib_register (extern "C")
+#include <initializer_list>
+// C++ has no C99 compound literals; materialize a CBMType* argument array in
+// the arena instead of taking the address of a temporary.
+static const CBMType **cbm_type_args(CBMArena *arena,
+                                     std::initializer_list<const CBMType *> xs) {
+    const CBMType **p =
+        (const CBMType **)cbm_arena_alloc(arena, xs.size() * sizeof(const CBMType *));
+    size_t i = 0;
+    for (const CBMType *x : xs) {
+        p[i++] = x;
+    }
+    return p;
+}
 #include <string.h>
 
 // Helper: register a method on a type
@@ -24,7 +38,7 @@ static void reg_method(CBMTypeRegistry* reg, CBMArena* arena,
     rf.short_name = method_name;
     rf.receiver_type = recv_qn;
     rf.signature = cbm_type_func(arena, NULL, NULL,
-        ret_type ? (const CBMType*[]){ret_type, NULL} : NULL);
+        ret_type ? cbm_type_args(arena, {ret_type, NULL}) : NULL);
     cbm_registry_add_func(reg, rf);
 }
 
@@ -59,7 +73,7 @@ static void reg_func(CBMTypeRegistry* reg, CBMArena* arena,
     rf.qualified_name = qn;
     rf.short_name = short_name;
     rf.signature = cbm_type_func(arena, NULL, NULL,
-        ret_type ? (const CBMType*[]){ret_type, NULL} : NULL);
+        ret_type ? cbm_type_args(arena, {ret_type, NULL}) : NULL);
     cbm_registry_add_func(reg, rf);
 }
 

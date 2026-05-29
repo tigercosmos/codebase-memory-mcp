@@ -170,6 +170,18 @@ unit; perf-tuned structures (e.g. the minhash 2M-bucket LSH array) and public
 ABI/signatures are left untouched unless flagged.
 
 Done so far:
+- **RAII**: minhash's per-query dedup scratch (`seen_set_t`) now owns its
+  storage via `std::vector` (dropped a per-query calloc + two free()s).
+- **Warning hygiene → toward `-Werror`**: a clean rebuild exposed ~54
+  first-party C++ warnings latent since Phase 1. Triaged to **9 remaining**
+  (all `-Wunused-function` in ts_lsp/cs_lsp, left visible as real signals):
+  suppressed the benign C++20 anonymous-enum-arithmetic deprecations and
+  matched the C side's `-Wno-format-truncation`/`-unused-result`/
+  `-stringop-truncation` policy on the C++ flags; cast five enum-vs-size_t
+  ternaries; dropped the blanket `-w` on `cbm_lsp_tscs`/`cbm_lsp_generated`
+  (now warning-checked). The `cbm_lsp_all` unity blob keeps `-w` pending its
+  own burn-down. `-Werror` is now within reach: the only first-party C++
+  blockers are those 9 unused-function helpers and the unity blob.
 - **`qsort` → `std::sort` sweep** across the clean comparator sites:
   `traces.cpp` (p99), `path_alias.cpp`, `pass_enrichment.cpp`,
   `ui/layout3d.cpp`, `graph_buffer.cpp`, `pass_parallel.cpp`, and the three

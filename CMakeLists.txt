@@ -304,9 +304,7 @@ cbm_add_cxx_library(cbm_extraction
         ${CBM_INTERNAL}/helpers.cpp
         ${CBM_INTERNAL}/service_patterns.cpp)
 
-# lang_specs.c — kept as C because the table is built with C99 sparse
-# array designators (`[CBM_LANG_X] = "name"`) which C++ does not allow.
-cbm_add_c_library(cbm_lang_specs SOURCES ${CBM_INTERNAL}/lang_specs.c)
+cbm_add_cxx_library(cbm_lang_specs SOURCES ${CBM_INTERNAL}/lang_specs.cpp)
 
 cbm_add_cxx_library(cbm_ac_lz4
     SOURCES ${CBM_INTERNAL}/ac.cpp ${CBM_INTERNAL}/lz4_store.cpp)

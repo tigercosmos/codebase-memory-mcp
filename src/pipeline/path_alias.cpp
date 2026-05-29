@@ -10,9 +10,9 @@
  *     Webpack / Python loader means writing a new load_*_file() helper
  *     and registering it in find_alias_files. The resolver, the
  *     collection, and the pipeline integration do not change.
- *   - Sorting uses qsort (n log n). The bubble-sorts that the original
+ *   - Sorting uses std::sort (n log n). The bubble-sorts that the original
  *     Layer 1b draft used were O(n^2); with up to 256 alias entries
- *     and 256 scoped maps per repo, qsort is the right ceiling.
+ *     and 256 scoped maps per repo, std::sort is the right ceiling.
  *   - The repo walk caps recursion depth and total file count and emits
  *     a warning when either cap fires, so silent truncation on
  *     pathological monorepos shows up in the index log.

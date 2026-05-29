@@ -42,6 +42,20 @@
 #include "cs_lsp.h"
 #include "lsp_node_iter.h"
 #include "../helpers.h"
+
+#include <initializer_list>
+/* C++ has no C99 compound literals; materialize a CBMType* argument array in
+ * the arena instead of taking the address of a temporary. */
+static const CBMType **cbm_type_args(CBMArena *arena,
+                                     std::initializer_list<const CBMType *> xs) {
+    const CBMType **p =
+        (const CBMType **)cbm_arena_alloc(arena, xs.size() * sizeof(const CBMType *));
+    size_t i = 0;
+    for (const CBMType *x : xs) {
+        p[i++] = x;
+    }
+    return p;
+}
 #include <ctype.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -52,7 +66,13 @@
 #define CS_NAMESPACE_INITIAL_CAP 8
 #define CS_LSP_PARENT_WALK_MAX 32
 
+#ifdef __cplusplus
+extern "C" {
+#endif
 extern const TSLanguage *tree_sitter_c_sharp(void);
+#ifdef __cplusplus
+}
+#endif
 
 /* ── forward decls ──────────────────────────────────────────────── */
 
@@ -593,7 +613,7 @@ const CBMType *cs_parse_type_node(CSLSPContext *ctx, TSNode node) {
         if (ts_node_is_null(inner)) inner = cs_first_named_child(node);
         const CBMType *elem = cs_parse_type_node(ctx, inner);
         return cbm_type_template(ctx->arena, "System.Array",
-                                 (const CBMType *[]){elem, NULL}, 1);
+                                 cbm_type_args(ctx->arena, {elem, NULL}), 1);
     }
     if (strcmp(kind, "pointer_type") == 0) {
         TSNode inner = ts_node_child_by_field_name(node, "type", 4);
@@ -872,11 +892,11 @@ const CBMType *cs_eval_expr_type(CSLSPContext *ctx, TSNode node) {
         if (!ts_node_is_null(tnode)) {
             const CBMType *elem = cs_parse_type_node(ctx, tnode);
             result = cbm_type_template(ctx->arena, "System.Array",
-                                       (const CBMType *[]){elem, NULL}, 1);
+                                       cbm_type_args(ctx->arena, {elem, NULL}), 1);
         }
     } else if (strcmp(kind, "implicit_array_creation_expression") == 0) {
         result = cbm_type_template(ctx->arena, "System.Array",
-                                   (const CBMType *[]){cbm_type_unknown(), NULL}, 1);
+                                   cbm_type_args(ctx->arena, {cbm_type_unknown(), NULL}), 1);
     }
 
     ctx->eval_depth--;

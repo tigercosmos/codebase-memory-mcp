@@ -211,19 +211,23 @@ target_compile_definitions(cbm_lsp_all PRIVATE
 target_include_directories(cbm_lsp_all PRIVATE
     ${CBM_INTERNAL} ${CBM_TS_INCLUDE} ${CBM_TS_SRC})
 
-# LSP stdlib data tables + ts_lsp + cs_lsp — C files that use C99
-# compound literals which take address-of-temporary inside initializer
-# lists. These don't translate to C++23 mechanically (hoisting fails
-# inside aggregate inits). Compile separately as C and link; revisit
-# in Phase 2 (replace the compound-literal idiom with arena allocs).
+# LSP stdlib data tables (generated/*.c) — still C: auto-generated tables
+# full of C99 compound literals; revisit when the emitter is regenerated.
 file(GLOB CBM_LSP_GENERATED_SRCS CONFIGURE_DEPENDS
     ${CBM_INTERNAL}/lsp/generated/*.c)
-list(APPEND CBM_LSP_GENERATED_SRCS
-    ${CBM_INTERNAL}/lsp/ts_lsp.c
-    ${CBM_INTERNAL}/lsp/cs_lsp.c)
 cbm_add_vendored_library(cbm_lsp_generated
     SOURCES ${CBM_LSP_GENERATED_SRCS}
     INCLUDES ${CBM_INTERNAL} ${CBM_TS_INCLUDE})
+
+# ts_lsp / cs_lsp — ported to C++23 (the (const CBMType*[]){...} compound
+# literals are now arena-allocated via cbm_type_args). Large legacy resolver
+# bodies, not yet warning-clean as C++, so built with relaxed warnings like
+# the lsp_all unity blob; still sanitized as first-party code.
+cbm_add_cxx_library(cbm_lsp_tscs
+    SOURCES ${CBM_INTERNAL}/lsp/ts_lsp.cpp ${CBM_INTERNAL}/lsp/cs_lsp.cpp
+    DEFS _DEFAULT_SOURCE _GNU_SOURCE
+    INCLUDES ${CBM_TS_SRC})
+target_compile_options(cbm_lsp_tscs PRIVATE -w)
 
 # Preprocessor (already C++, kept at C++14 to match Makefile)
 add_library(cbm_preprocessor OBJECT ${CBM_INTERNAL}/preprocessor.cpp)
@@ -362,7 +366,7 @@ cbm_add_cxx_library(cbm_ui        SOURCES src/ui/config.cpp src/ui/http_server.c
 
 set(CBM_FIRSTPARTY_TARGETS
     cbm_foundation_cxx cbm_foundation_c
-    cbm_extraction cbm_lang_specs
+    cbm_extraction cbm_lang_specs cbm_lsp_tscs
     cbm_ac_lz4 cbm_zstd_store cbm_sqlite_writer
     cbm_store cbm_cypher cbm_mcp
     cbm_discover

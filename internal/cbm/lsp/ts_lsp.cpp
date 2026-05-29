@@ -32,13 +32,33 @@
 #include <string.h>
 #include "../helpers.h"   /* cbm_node_text and friends — prototypes required since ts_lsp.c is no longer unity-built via lsp_all */
 
+#include <initializer_list>
+/* C++ has no C99 compound literals; materialize a CBMType* argument array in
+ * the arena instead of taking the address of a temporary. */
+static const CBMType **cbm_type_args(CBMArena *arena,
+                                     std::initializer_list<const CBMType *> xs) {
+    const CBMType **p =
+        (const CBMType **)cbm_arena_alloc(arena, xs.size() * sizeof(const CBMType *));
+    size_t i = 0;
+    for (const CBMType *x : xs) {
+        p[i++] = x;
+    }
+    return p;
+}
+
 #define TS_LSP_MAX_EVAL_DEPTH 64
 #define TS_LSP_FIELD_LEN(s) ((uint32_t)(sizeof(s) - 1))
 
 // Tree-sitter grammar entry points for the three TS dialects (compiled into the binary).
+#ifdef __cplusplus
+extern "C" {
+#endif
 extern const TSLanguage *tree_sitter_typescript(void);
 extern const TSLanguage *tree_sitter_tsx(void);
 extern const TSLanguage *tree_sitter_javascript(void);
+#ifdef __cplusplus
+}
+#endif
 
 // ── Forward declarations ──────────────────────────────────────────────────────
 
@@ -2923,7 +2943,7 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
         returns[9] = t_boolean;      // includes
         returns[10] = t_void;        // forEach
         returns[11] = cbm_type_template(arena, "Array",
-            (const CBMType*[]){tparam_U, NULL}, 1); // map<U>
+            cbm_type_args(arena, {tparam_U, NULL}), 1); // map<U>
         returns[12] = t_arr_T;       // filter
         returns[13] = t_T;           // find
         returns[14] = t_number;      // findIndex
@@ -3006,7 +3026,7 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
         static const char* methods[] = {"get", "set", "has", "delete", "clear", "forEach", NULL};
         const CBMType* returns[7] = {
             tt_param(arena, "V"), cbm_type_template(arena, "Map",
-                (const CBMType*[]){tt_param(arena, "K"), tt_param(arena, "V"), NULL}, 2),
+                cbm_type_args(arena, {tt_param(arena, "K"), tt_param(arena, "V"), NULL}), 2),
             t_boolean, t_boolean, t_void, t_void, NULL,
         };
         reg_type_with_methods(reg, arena, "Map", "Map", tparams, methods, returns);
@@ -3019,7 +3039,7 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
         static const char* methods[] = {"add", "has", "delete", "clear", "forEach", NULL};
         const CBMType* returns[6] = {
             cbm_type_template(arena, "Set",
-                (const CBMType*[]){tt_param(arena, "T"), NULL}, 1),
+                cbm_type_args(arena, {tt_param(arena, "T"), NULL}), 1),
             t_boolean, t_boolean, t_void, t_void, NULL,
         };
         reg_type_with_methods(reg, arena, "Set", "Set", tparams, methods, returns);
@@ -3037,7 +3057,7 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
                               iter_methods, iter_returns);
 
         const CBMType* iter_t = cbm_type_template(arena, "Iterator",
-            (const CBMType*[]){tparam_T, NULL}, 1);
+            cbm_type_args(arena, {tparam_T, NULL}), 1);
         static const char* iterable_methods[] = {NULL};  // [Symbol.iterator] not modeled by name
         const CBMType* iterable_returns[1] = {NULL};
         (void)iter_t;
@@ -3051,7 +3071,7 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
         const char** tparams = (const char**)cbm_arena_alloc(arena, 2 * sizeof(const char*));
         tparams[0] = "T"; tparams[1] = NULL;
         const CBMType* prom_T = cbm_type_template(arena, "Promise",
-            (const CBMType*[]){tparam_T, NULL}, 1);
+            cbm_type_args(arena, {tparam_T, NULL}), 1);
         static const char* methods[] = {"next", "return", "throw", NULL};
         const CBMType* returns[4] = {prom_T, prom_T, prom_T, NULL};
         reg_type_with_methods(reg, arena, "AsyncIterator", "AsyncIterator", tparams,
@@ -3096,7 +3116,7 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
                 returns[i] = t_number;
             } else if (strcmp(m, "split") == 0) {
                 returns[i] = cbm_type_template(arena, "Array",
-                    (const CBMType*[]){t_string, NULL}, 1);
+                    cbm_type_args(arena, {t_string, NULL}), 1);
             } else {
                 returns[i] = t_string;
             }
@@ -3124,9 +3144,9 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
         static const char* methods[] = {"keys", "values", "entries", "assign", "freeze",
                                         "isFrozen", "create", "getPrototypeOf", NULL};
         const CBMType* returns[9] = {
-            cbm_type_template(arena, "Array", (const CBMType*[]){t_string, NULL}, 1),
-            cbm_type_template(arena, "Array", (const CBMType*[]){t_unknown, NULL}, 1),
-            cbm_type_template(arena, "Array", (const CBMType*[]){t_unknown, NULL}, 1),
+            cbm_type_template(arena, "Array", cbm_type_args(arena, {t_string, NULL}), 1),
+            cbm_type_template(arena, "Array", cbm_type_args(arena, {t_unknown, NULL}), 1),
+            cbm_type_template(arena, "Array", cbm_type_args(arena, {t_unknown, NULL}), 1),
             t_unknown, t_unknown, t_boolean, t_unknown, t_unknown, NULL,
         };
         reg_type_with_methods(reg, arena, "Object", "Object", NULL, methods, returns);
@@ -3214,11 +3234,11 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
         const CBMType* tparam_T = tt_param(arena, "T");
         const CBMType* t_T = tparam_T;
         const CBMType* prom_T = cbm_type_template(arena, "Promise",
-                                                  (const CBMType*[]){t_T, NULL}, 1);
+                                                  cbm_type_args(arena, {t_T, NULL}), 1);
         const CBMType* arr_T = cbm_type_template(arena, "Array",
-                                                 (const CBMType*[]){t_T, NULL}, 1);
+                                                 cbm_type_args(arena, {t_T, NULL}), 1);
         const CBMType* prom_arr_T = cbm_type_template(arena, "Promise",
-                                                      (const CBMType*[]){arr_T, NULL}, 1);
+                                                      cbm_type_args(arena, {arr_T, NULL}), 1);
         ts_reg_method(reg, arena, "Promise", "resolve", prom_T);
         ts_reg_method(reg, arena, "Promise", "all", prom_arr_T);
         ts_reg_method(reg, arena, "Promise", "reject", prom_T);
@@ -3267,7 +3287,7 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
         };
         const CBMType* el_t = cbm_type_named(arena, "Element");
         const CBMType* nodelist_t = cbm_type_template(arena, "NodeList",
-            (const CBMType*[]){el_t, NULL}, 1);
+            cbm_type_args(arena, {el_t, NULL}), 1);
         const CBMType* el_returns[21] = {
             t_string, t_void, t_void, t_boolean,
             el_t, nodelist_t, el_t, t_boolean,
@@ -3287,7 +3307,7 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
         const CBMType* html_t = cbm_type_named(arena, "HTMLElement");
         const CBMType* html_returns[12] = {
             t_string, t_void, html_t,
-            cbm_type_template(arena, "NodeList", (const CBMType*[]){html_t, NULL}, 1),
+            cbm_type_template(arena, "NodeList", cbm_type_args(arena, {html_t, NULL}), 1),
             html_t, t_void, t_void, t_void, t_void, t_void, t_void, NULL,
         };
         reg_type_with_methods(reg, arena, "HTMLElement", "HTMLElement", NULL,
@@ -3301,9 +3321,9 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
         };
         const CBMType* doc_returns[11] = {
             html_t, html_t,
-            cbm_type_template(arena, "NodeList", (const CBMType*[]){html_t, NULL}, 1),
-            cbm_type_template(arena, "HTMLCollection", (const CBMType*[]){html_t, NULL}, 1),
-            cbm_type_template(arena, "HTMLCollection", (const CBMType*[]){html_t, NULL}, 1),
+            cbm_type_template(arena, "NodeList", cbm_type_args(arena, {html_t, NULL}), 1),
+            cbm_type_template(arena, "HTMLCollection", cbm_type_args(arena, {html_t, NULL}), 1),
+            cbm_type_template(arena, "HTMLCollection", cbm_type_args(arena, {html_t, NULL}), 1),
             html_t, node_t, node_t,
             t_void, t_void, NULL,
         };
@@ -3317,7 +3337,7 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
         };
         const CBMType* event_returns[5] = {
             t_void, t_void, t_void,
-            cbm_type_template(arena, "Array", (const CBMType*[]){et_methods[0] ? cbm_type_named(arena, "EventTarget") : t_unknown, NULL}, 1),
+            cbm_type_template(arena, "Array", cbm_type_args(arena, {et_methods[0] ? cbm_type_named(arena, "EventTarget") : t_unknown, NULL}), 1),
             NULL,
         };
         reg_type_with_methods(reg, arena, "Event", "Event", NULL, event_methods,
@@ -3328,11 +3348,11 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
             "json", "text", "blob", "arrayBuffer", "formData", "clone", NULL,
         };
         const CBMType* resp_returns[7] = {
-            cbm_type_template(arena, "Promise", (const CBMType*[]){t_unknown, NULL}, 1),
-            cbm_type_template(arena, "Promise", (const CBMType*[]){t_string, NULL}, 1),
-            cbm_type_template(arena, "Promise", (const CBMType*[]){t_unknown, NULL}, 1),
-            cbm_type_template(arena, "Promise", (const CBMType*[]){t_unknown, NULL}, 1),
-            cbm_type_template(arena, "Promise", (const CBMType*[]){t_unknown, NULL}, 1),
+            cbm_type_template(arena, "Promise", cbm_type_args(arena, {t_unknown, NULL}), 1),
+            cbm_type_template(arena, "Promise", cbm_type_args(arena, {t_string, NULL}), 1),
+            cbm_type_template(arena, "Promise", cbm_type_args(arena, {t_unknown, NULL}), 1),
+            cbm_type_template(arena, "Promise", cbm_type_args(arena, {t_unknown, NULL}), 1),
+            cbm_type_template(arena, "Promise", cbm_type_args(arena, {t_unknown, NULL}), 1),
             cbm_type_named(arena, "Response"),
             NULL,
         };
@@ -3348,7 +3368,7 @@ void cbm_ts_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena) {
         const CBMType* win_returns[13] = {
             t_void, t_void, t_void, t_boolean, t_string,
             cbm_type_template(arena, "Promise",
-                (const CBMType*[]){cbm_type_named(arena, "Response"), NULL}, 1),
+                cbm_type_args(arena, {cbm_type_named(arena, "Response"), NULL}), 1),
             t_number, t_void, t_number, t_void, t_number, t_void, NULL,
         };
         reg_type_with_methods(reg, arena, "Window", "Window", NULL, win_methods,

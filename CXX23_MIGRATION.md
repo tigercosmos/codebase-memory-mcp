@@ -1,9 +1,29 @@
 # C → C++23 migration roadmap
 
 This is the staging plan for migrating `codebase-memory-mcp` from C11 to
-C++23. **Phase 1** (compile every first-party TU as C++23 with CMake)
-is **done** on branch `worktree-cxx23-migration`; **Phase 2** is the
-idiomatic-C++23 rewriting that turns ported-as-C++ TUs into modern code.
+C++23. **Phase 1** (compile every first-party TU as C++23 with CMake) is
+**done**, and the follow-on conversion of the files Phase 1 had left as C
+is now **also done**: as of 2026-05-29 **every first-party translation unit
+compiles as C++23** — `find src internal -name '*.c'` excluding vendored
+libraries, the tree-sitter `grammar_*.c` parsers, and `ts_runtime.c`
+returns nothing. **Phase 2** is the remaining idiomatic-C++23 rewriting
+that turns ported-as-C++ TUs into modern code (RAII, `std::expected`,
+ranges, etc.) — that is modernization, not migration, and has not started.
+
+The 5 remaining first-party C files were converted module-by-module, each
+behind its own commit, verified against the test baseline after each:
+`language.c` and `lang_specs.c` (sparse array designators → IIFE-built
+`std::array`), `ts_lsp.c` + `cs_lsp.c` and the three compound-literal-using
+`generated/*.c` tables (`(const CBMType*[]){...}` → arena-allocated
+`cbm_type_args` helper), and `hash_table.c` (verstable instantiation
+compiles as C++23 unchanged — the `_Generic` macros are never expanded —
+so verstable was retained with no perf change, *not* swapped for
+`std::unordered_map`).
+
+**Validation (clean from-scratch builds):** non-sanitizer **3630 pass / 0
+fail**; ASan+UBSan **3629 pass / 1 fail** — the same environment-sensitive
+`test_incremental` RSS-budget check that fails identically on the C
+baseline.
 
 ## Current state — Phase 1 complete
 
@@ -21,26 +41,29 @@ idiomatic-C++23 rewriting that turns ported-as-C++ TUs into modern code.
     failure, environment-sensitive, not a port regression).
   * Without sanitizers: **3630 passed, 0 failed.**
 
-### Files deliberately kept as C in Phase 1
+### Files Phase 1 left as C — now all ported (2026-05-29)
 
-Phase 1 doesn't try to force C++23 on every TU; some have idioms that
-need real rewrites (Phase 2 work) and are cheaper to keep as C while
-linked via `extern "C"`. They live in `cbm_lsp_generated`,
-`cbm_foundation_c`, `cbm_discover_language`, and `cbm_lang_specs`
-targets.
+Phase 1 left a handful of first-party TUs as C because of C99 idioms that
+don't translate mechanically. All of them have since been converted; the
+table records what each needed and how it was resolved.
 
-| File | Reason | Phase 2 fix |
+| File | Original blocker | Resolution |
 |---|---|---|
-| `src/foundation/hash_table.c` | Uses `verstable.h` (2069-line C99 macro lib, 26 `_Generic` sites) | Replace verstable with `std::unordered_map` |
-| `src/discover/language.c` (978 LOC) | C99 sparse array designator `LANG_NAMES[CBM_LANG_X] = "name"` (156 entries) — GCC C++ says "sorry, unimplemented" | Convert table to constexpr lookup or switch |
-| `internal/cbm/lang_specs.c` (2494 LOC) | Same C99 sparse-array idiom (156 entries) | Same |
-| `internal/cbm/lsp/ts_lsp.c` | 24 `(const CBMType*[]){...}` compound literals inside aggregate initializers — C++ takes-address-of-temporary error; mechanical hoisting collides with surrounding init lists | Replace compound literals with arena allocations |
-| `internal/cbm/lsp/cs_lsp.c` | 3 of the same compound-literal sites | Same |
-| `internal/cbm/lsp/generated/*.c` (6 files, ~55k LOC) | Auto-generated stdlib data tables full of C99 compound literals | Regenerate emitter to produce arena allocations |
-| `internal/cbm/grammar_*.c` (154 files) | `#include` vendored tree-sitter `parser.c` / `scanner.c` — generated C with idioms that don't translate | Stays C forever (vendored generated code) |
-| `internal/cbm/ts_runtime.c` | Vendored tree-sitter runtime wrapper | Stays C forever |
-| `vendored/` + `internal/cbm/vendored/` | Third-party C libraries (sqlite3, mongoose, mimalloc, etc.) | Stays C forever |
-| `tests/*.c` (62 files) | Test sources still C; they call into C++ libs via the `extern "C"` headers and that works cleanly | Phase 2 optional |
+| `src/discover/language.cpp` | C99 sparse array designator `LANG_NAMES[CBM_LANG_X] = "name"` (156 entries) — GCC C++ "sorry, unimplemented" | ✅ IIFE-built function-local `std::array`; gaps stay `nullptr` → "Unknown". Folded into `cbm_discover`. |
+| `internal/cbm/lang_specs.cpp` | Same sparse-array idiom (156 entries) + 3 compound literals + extern grammar decls | ✅ IIFE `std::array`; `extern "C"`-wrapped `tree_sitter_*` decls; compound literals hoisted; `(CBMLanguage)0` casts. |
+| `internal/cbm/lsp/ts_lsp.cpp` | 24 `(const CBMType*[]){...}` compound literals as `cbm_type_template` args | ✅ `cbm_type_args(arena, {...})` helper copies a `std::initializer_list` into the arena. New `cbm_lsp_tscs` C++ target. |
+| `internal/cbm/lsp/cs_lsp.cpp` | 3 of the same (using `ctx->arena`) | ✅ Same helper. |
+| `internal/cbm/lsp/generated/*.cpp` (6 files, ~55k LOC) | Auto-generated tables; 84 compound literals (cs 81, cpp 2, c 1) | ✅ Same `cbm_type_args` helper; register fns keep C linkage via the declaring `extern "C"` lsp header. `cbm_lsp_generated` is now a C++ target. Only `gen-py-stdlib.py` exists in-tree (emits the no-compound-literal python table); other generators aren't in the repo, so these `.cpp` are the source of truth. |
+| `src/foundation/hash_table.cpp` | Instantiates `verstable.h` (2069-line C99 macro lib, 26 `_Generic` sites) | ✅ Compiles as C++23 unchanged — the `_Generic` dispatch macros are never expanded (uses `cbm_vt_*` directly; overrides `HASH_FN`/`CMPR_FN`). **Verstable retained, no perf change** — *not* swapped for `std::unordered_map`. Folded into `cbm_foundation_cxx`. |
+
+#### Stays C permanently (genuinely third-party / generated)
+
+| File | Reason |
+|---|---|
+| `internal/cbm/grammar_*.c` (154 files) | `#include` vendored tree-sitter `parser.c` / `scanner.c` — generated C |
+| `internal/cbm/ts_runtime.c` | Vendored tree-sitter runtime wrapper |
+| `vendored/` + `internal/cbm/vendored/` (321 files) | Third-party C libraries (sqlite3, mongoose, mimalloc, verstable, etc.) |
+| `tests/*.c` (62 files) | Test sources; call into C++ libs via `extern "C"` headers and work as-is. Migrating them is Phase 2-optional. |
 
 ### Files now C++23
 

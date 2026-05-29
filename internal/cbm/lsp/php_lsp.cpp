@@ -444,7 +444,7 @@ static char *phpdoc_clean(CBMArena *a, const char *raw) {
     if (!out) return NULL;
     size_t w = 0;
     size_t i = 0;
-    /* Skip leading /* and ** */
+    /* Skip leading slash, star, and whitespace characters. */
     while (i < n && (raw[i] == '/' || raw[i] == '*' || raw[i] == ' ' || raw[i] == '\t')) i++;
     bool at_line_start = false;
     for (; i < n; i++) {

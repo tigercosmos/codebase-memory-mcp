@@ -68,7 +68,9 @@ set(CBM_FIRSTPARTY_CXX_FLAGS
     -Wall -Wextra
     -Wno-unused-parameter -Wno-sign-compare
     -Wno-missing-field-initializers
-    -Wno-deprecated-declarations)
+    -Wno-deprecated-declarations
+    -Wno-deprecated-enum-enum-conversion
+    -Wno-deprecated-enum-float-conversion)
 # -Wno-c99-designator is Clang-only; add conditionally
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     list(APPEND CBM_FIRSTPARTY_CXX_FLAGS -Wno-c99-designator)
@@ -203,9 +205,9 @@ cbm_add_vendored_library(cbm_grammars
     INCLUDES ${CBM_INTERNAL} ${CBM_TS_INCLUDE} ${CBM_TS_SRC})
 
 # LSP unity blob (internal/cbm/lsp_all.cpp — #includes every lsp/*.cpp).
-# Built as C++23 with relaxed warnings (mirrors the vendored helper's -w
-# flag) because the resolvers are large legacy C bodies, not yet
-# warning-clean as C++. Tightened in Phase 2.
+# Still -w: the unity blob aggregates the five largest legacy resolvers and
+# its full warning burn-down is its own Phase 2 pass. The split-out resolver
+# TUs (cbm_lsp_tscs) and the generated tables are already warning-checked.
 add_library(cbm_lsp_all OBJECT ${CBM_INTERNAL}/lsp_all.cpp)
 set_target_properties(cbm_lsp_all PROPERTIES CXX_STANDARD 23)
 target_compile_options(cbm_lsp_all PRIVATE -w)
@@ -226,7 +228,7 @@ file(GLOB CBM_LSP_GENERATED_SRCS CONFIGURE_DEPENDS
 cbm_add_cxx_library(cbm_lsp_generated
     SOURCES ${CBM_LSP_GENERATED_SRCS}
     INCLUDES ${CBM_TS_SRC})
-target_compile_options(cbm_lsp_generated PRIVATE -w)
+target_compile_options(cbm_lsp_generated PRIVATE -Wno-comment)
 
 # ts_lsp / cs_lsp — ported to C++23 (the (const CBMType*[]){...} compound
 # literals are now arena-allocated via cbm_type_args). Large legacy resolver
@@ -236,7 +238,7 @@ cbm_add_cxx_library(cbm_lsp_tscs
     SOURCES ${CBM_INTERNAL}/lsp/ts_lsp.cpp ${CBM_INTERNAL}/lsp/cs_lsp.cpp
     DEFS _DEFAULT_SOURCE _GNU_SOURCE
     INCLUDES ${CBM_TS_SRC})
-target_compile_options(cbm_lsp_tscs PRIVATE -w)
+target_compile_options(cbm_lsp_tscs PRIVATE -Wno-comment)
 
 # Preprocessor (already C++, kept at C++14 to match Makefile)
 add_library(cbm_preprocessor OBJECT ${CBM_INTERNAL}/preprocessor.cpp)

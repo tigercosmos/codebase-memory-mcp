@@ -36,7 +36,9 @@ static char *read_file(const char *path, int *out_len) {
         (void)fclose(f);
         return NULL;
     }
-    char *buf = malloc(size + SKIP_ONE);
+    /* +pad: tree-sitter lexer lookahead reads past EOF; keep it in-bounds */
+    enum { CBM_TS_LOOKAHEAD_PAD = 16 };
+    char *buf = malloc((size_t)size + CBM_TS_LOOKAHEAD_PAD);
     if (!buf) {
         (void)fclose(f);
         return NULL;
@@ -46,7 +48,7 @@ static char *read_file(const char *path, int *out_len) {
     if (nread > (size_t)size) {
         nread = (size_t)size;
     }
-    buf[nread] = '\0';
+    memset(buf + nread, 0, CBM_TS_LOOKAHEAD_PAD);
     *out_len = (int)nread;
     return buf;
 }

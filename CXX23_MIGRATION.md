@@ -162,6 +162,29 @@ struct memory layout.
 
 ## Phase 2 — module-by-module C → idiomatic C++23
 
+### Phase 2 progress (safe-incremental track)
+
+Approach (per the maintainer's call): low-risk, high-value modernizations
+module by module, verified against the test suite and committed per logical
+unit; perf-tuned structures (e.g. the minhash 2M-bucket LSH array) and public
+ABI/signatures are left untouched unless flagged.
+
+Done so far:
+- **`qsort` → `std::sort` sweep** across the clean comparator sites:
+  `traces.cpp` (p99), `path_alias.cpp`, `pass_enrichment.cpp`,
+  `ui/layout3d.cpp`, `graph_buffer.cpp`, `pass_parallel.cpp`, and the three
+  `mcp.cpp` grep/search sorts (the last replacing a `strcmp`-cast-over-struct).
+  Each predicate preserves the prior ordering key. Validated 3630/0
+  (non-sanitizer) and 3629/1 (ASan+UBSan, the known RSS check only).
+  Intentionally skipped: `sqlite_writer.cpp`'s parallel index-sort machinery
+  (SortJob + set-once read-only context — perf-critical, marginal gain).
+
+Remaining (not yet started): RAII of scratch allocations, `std::string` for
+clear owners, `std::string_view`/`std::span` at boundaries, `std::format`
+logging, cypher → ranges, concepts on the pass interface, then re-enable
+`-Werror` on first-party C++ TUs.
+
+
 After Phase 1, every first-party TU compiles as C++23 but the code is
 still C-style. Phase 2 is the actual modernization. For each module:
 

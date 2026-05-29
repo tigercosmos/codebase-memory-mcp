@@ -462,7 +462,11 @@ static void run_predump_passes(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx) {
     enum { PREDUMP_PASS_COUNT = 5 };
     struct timespec t;
     for (int i = 0; i < PREDUMP_PASS_COUNT && !check_cancel(p); i++) {
-        if (passes[i].moderate_only && p->mode > CBM_MODE_MODERATE) {
+        /* "moderate_only" passes (similarity/semantic edges) run in FULL,
+         * MODERATE and ADVANCED — they are skipped only in FAST. Compare
+         * explicitly against FAST rather than `> MODERATE` so ADVANCED
+         * (numerically 3) is not mistaken for a lighter mode than FULL. */
+        if (passes[i].moderate_only && p->mode == CBM_MODE_FAST) {
             continue;
         }
         cbm_clock_gettime(CLOCK_MONOTONIC, &t);
@@ -479,9 +483,11 @@ static void run_predump_passes(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx) {
  * launching the dispatch loop). When the cache is unavailable (e.g. if the
  * pipeline opted out of caching), the pass becomes a no-op since there are
  * no extracted results to feed cross-file resolution. */
-static int seq_pass_lsp_cross_dispatch(cbm_pipeline_ctx_t *ctx,
-                                       const cbm_file_info_t *files, int file_count) {
-    if (!ctx || !ctx->result_cache) return 0;
+static int seq_pass_lsp_cross_dispatch(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
+                                       int file_count) {
+    if (!ctx || !ctx->result_cache)
+        return 0;
+    /* Cross-file LSP runs in every mode. */
     return cbm_pipeline_pass_lsp_cross(ctx, files, file_count, ctx->result_cache);
 }
 
@@ -572,17 +578,70 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
         free(cache);
         return rc != 0 ? rc : CBM_NOT_FOUND;
     }
-    /* Cross-file LSP: augments per-file resolved_calls with cross-file
-     * type-aware resolutions before parallel_resolve emits CALLS edges.
-     * Soft-failures only — log and continue. */
+    /* Cross-file LSP precondition: build a project-wide CBMLSPDef[]
+     * once. The fused resolve_worker invokes cbm_pxc_run_one(_ts) per
+     * file using these defs + the file's IMPORTS map, so cross-file
+     * type-resolved CALLS land in result->resolved_calls before the
+     * CALLS-edge emission. This replaces the old sequential
+     * cbm_pipeline_pass_lsp_cross pass which re-read every source from
+     * disk and re-parsed every tree on a single thread (~520s on
+     * kubernetes). Soft-failure: NULL all_defs / NULL def_modules just
+     * mean cross-file LSP no-ops; per-file LSP already ran during
+     * extract. */
     cbm_clock_gettime(CLOCK_MONOTONIC, t);
-    (void)cbm_pipeline_pass_lsp_cross(ctx, files, file_count, cache);
-    cbm_log_info("pass.timing", "pass", "lsp_cross", "elapsed_ms",
+    /* Cross-file LSP (type-aware call/usage resolution across files) — the
+     * most expensive phase — runs in every mode. */
+    const bool run_cross_lsp = true;
+    char **def_modules = NULL;
+    int def_count = 0;
+    CBMLSPDef *all_defs = NULL;
+    if (run_cross_lsp) {
+        def_modules = (char **)calloc((size_t)file_count, sizeof(char *));
+        all_defs = def_modules
+                       ? cbm_pxc_collect_all_defs(cache, files, file_count, ctx->project_name,
+                                                  def_modules, &def_count)
+                       : NULL;
+    }
+    /* Build inverted index: module_qn → defs. The fused resolve_worker
+     * uses this to filter the global all_defs[] down to just the defs
+     * each file actually needs (own_module + imported modules) — the
+     * gopls "package summary" pattern. Drops per-file registry build
+     * cost from O(all_defs) to O(relevant_defs), typically 50-100×
+     * smaller per file. */
+    CBMModuleDefIndex *module_def_index =
+        all_defs ? cbm_pxc_build_module_def_index(all_defs, def_count) : NULL;
+    /* Tier 2 full: pre-build per-language cross-LSP registries.
+     * Built ONCE here; shared READ-ONLY across all files of that language
+     * during resolve. Per-file work is then: parse + AST walk + O(1) lookups
+     * — no registry build, no Phase 1b mutations. Languages added so far:
+     * Go, Python. Others (C/C++, TS/JS, PHP, C#) fall back to per-file. */
+    CBMArena cross_lsp_arena;
+    cbm_arena_init(&cross_lsp_arena);
+    CBMCrossLspRegistries cross_registries = {0};
+    if (all_defs) {
+        cross_registries.go = cbm_go_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
+        cross_registries.python =
+            cbm_py_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
+        cross_registries.c = cbm_c_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
+        cross_registries.cs = cbm_cs_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
+        cross_registries.ts = cbm_ts_build_cross_registry(&cross_lsp_arena, all_defs, def_count);
+    }
+    cbm_log_info("pass.timing", "pass", "lsp_cross_prepare", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(*t)));
     cbm_clock_gettime(CLOCK_MONOTONIC, t);
-    rc = cbm_parallel_resolve(ctx, files, file_count, cache, &shared_ids, worker_count);
+    rc = cbm_parallel_resolve(ctx, files, file_count, cache, &shared_ids, worker_count, all_defs,
+                              def_count, def_modules, module_def_index, &cross_registries);
     cbm_log_info("pass.timing", "pass", "parallel_resolve", "elapsed_ms",
                  itoa_buf((int)elapsed_ms(*t)));
+    cbm_pxc_free_module_def_index(module_def_index);
+    cbm_arena_destroy(&cross_lsp_arena); /* releases all per-lang registries */
+    free(all_defs);
+    if (def_modules) {
+        for (int i = 0; i < file_count; i++) {
+            free(def_modules[i]);
+        }
+        free(def_modules);
+    }
     cbm_gbuf_set_next_id(p->gbuf, atomic_load(&shared_ids));
     cbm_pipeline_extract_infra_routes(p->gbuf, files, cache, file_count);
     cbm_pipeline_process_infra_bindings(p->gbuf, files, cache, file_count);

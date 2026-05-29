@@ -4663,6 +4663,7 @@ TEST(incremental_fast_preserves_mode_skipped_tools_dir) {
     fclose(f);
     /* Bump mtime explicitly — some filesystems have coarse mtime resolution
      * and the rewrite could land in the same tick as the original write. */
+#ifndef _WIN32
     struct stat mst;
     if (stat(path, &mst) == 0) {
         struct timespec times[2];
@@ -4672,6 +4673,7 @@ TEST(incremental_fast_preserves_mode_skipped_tools_dir) {
         times[1].tv_nsec = 0;
         utimensat(AT_FDCWD, path, times, 0);
     }
+#endif /* !_WIN32 */
 
     p = cbm_pipeline_new(tmpdir, dbpath, CBM_MODE_FAST);
     ASSERT_NOT_NULL(p);

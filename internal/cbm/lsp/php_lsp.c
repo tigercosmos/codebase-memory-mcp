@@ -18,6 +18,7 @@
  */
 
 #include "php_lsp.h"
+#include "lsp_node_iter.h"
 #include "../helpers.h"
 #include <ctype.h>
 #include <stdio.h>
@@ -2066,11 +2067,15 @@ static void php_resolve_calls_in_node(PHPLSPContext *ctx, TSNode node) {
         }
     }
 
-    /* Recurse. */
-    uint32_t nc = ts_node_child_count(node);
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode c = ts_node_child(node, i);
-        if (!ts_node_is_null(c)) php_resolve_calls_in_node(ctx, c);
+    /* Recurse via a cursor (O(n)); ts_node_child(node,i) is O(i) → O(n²) on a wide node. */
+    {
+        TSTreeCursor cursor = ts_tree_cursor_new(node);
+        if (ts_tree_cursor_goto_first_child(&cursor)) {
+            do {
+                php_resolve_calls_in_node(ctx, ts_tree_cursor_current_node(&cursor));
+            } while (ts_tree_cursor_goto_next_sibling(&cursor));
+        }
+        ts_tree_cursor_delete(&cursor);
     }
 }
 
@@ -2373,10 +2378,11 @@ void php_lsp_process_file(PHPLSPContext *ctx, TSNode root) {
     if (ts_node_is_null(root)) return;
 
     /* Pass 1: namespace + use declarations. */
-    uint32_t nc = ts_node_child_count(root);
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode c = ts_node_child(root, i);
-        if (ts_node_is_null(c)) continue;
+    // Collect top-level children once (O(n)); ts_node_child(root,i) is O(i) → O(n²).
+    uint32_t kn = 0;
+    TSNode *kids = cbm_lsp_collect_children(ctx->arena, root, &kn);
+    for (uint32_t i = 0; i < kn; i++) {
+        TSNode c = kids[i];
         const char *k = ts_node_type(c);
         if (strcmp(k, "namespace_definition") == 0) {
             set_namespace_from_decl(ctx, c);
@@ -2386,9 +2392,8 @@ void php_lsp_process_file(PHPLSPContext *ctx, TSNode root) {
     }
 
     /* Pass 2: process classes and top-level functions. */
-    for (uint32_t i = 0; i < nc; i++) {
-        TSNode c = ts_node_child(root, i);
-        if (ts_node_is_null(c)) continue;
+    for (uint32_t i = 0; i < kn; i++) {
+        TSNode c = kids[i];
         const char *k = ts_node_type(c);
         if (strcmp(k, "class_declaration") == 0 || strcmp(k, "trait_declaration") == 0 ||
             strcmp(k, "interface_declaration") == 0 || strcmp(k, "enum_declaration") == 0) {
@@ -3670,10 +3675,11 @@ void cbm_run_php_lsp(CBMArena *arena, CBMFileResult *result, const char *source,
         php_class_field_table_t tab = {0};
         /* First pass to populate the use map (so type names in property
          * declarations resolve correctly). */
-        uint32_t nc = ts_node_child_count(root);
-        for (uint32_t i = 0; i < nc; i++) {
-            TSNode c = ts_node_child(root, i);
-            if (ts_node_is_null(c)) continue;
+        /* Collect top-level children once (O(n)); ts_node_child(root,i) is O(i) → O(n²). */
+        uint32_t pkn = 0;
+        TSNode *pkids = cbm_lsp_collect_children(ctx.arena, root, &pkn);
+        for (uint32_t i = 0; i < pkn; i++) {
+            TSNode c = pkids[i];
             const char *k = ts_node_type(c);
             if (strcmp(k, "namespace_definition") == 0) {
                 set_namespace_from_decl(&ctx, c);
@@ -3762,8 +3768,8 @@ static void php_register_lsp_defs(CBMArena *arena, CBMTypeRegistry *reg,
             strcmp(d->label, "Type") == 0) {
             CBMRegisteredType rt;
             memset(&rt, 0, sizeof(rt));
-            rt.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
-            rt.short_name = cbm_arena_strdup(arena, d->short_name);
+            rt.qualified_name = d->qualified_name; /* borrowed — d outlives this call */
+            rt.short_name = d->short_name;
             rt.is_interface = d->is_interface ||
                               strcmp(d->label, "Interface") == 0;
             rt.embedded_types = php_split_pipe(arena, d->embedded_types);
@@ -3776,8 +3782,8 @@ static void php_register_lsp_defs(CBMArena *arena, CBMTypeRegistry *reg,
         if (strcmp(d->label, "Function") == 0 || strcmp(d->label, "Method") == 0) {
             CBMRegisteredFunc rf;
             memset(&rf, 0, sizeof(rf));
-            rf.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
-            rf.short_name = cbm_arena_strdup(arena, d->short_name);
+            rf.qualified_name = d->qualified_name; /* borrowed */
+            rf.short_name = d->short_name;
 
             /* Build FUNC type from "|"-separated return-type texts. Each piece
              * is the unqualified return-type expression as it appears in the
@@ -3804,7 +3810,7 @@ static void php_register_lsp_defs(CBMArena *arena, CBMTypeRegistry *reg,
             rf.signature = cbm_type_func(arena, NULL, NULL, ret_types);
 
             if (strcmp(d->label, "Method") == 0 && d->receiver_type && d->receiver_type[0]) {
-                rf.receiver_type = cbm_arena_strdup(arena, d->receiver_type);
+                rf.receiver_type = d->receiver_type; /* borrowed */
                 /* Auto-register receiver type if cross-file def chain didn't
                  * include it explicitly, so php_lookup_method's chain walk
                  * has somewhere to land. */
@@ -3813,9 +3819,7 @@ static void php_register_lsp_defs(CBMArena *arena, CBMTypeRegistry *reg,
                     memset(&auto_t, 0, sizeof(auto_t));
                     auto_t.qualified_name = rf.receiver_type;
                     const char *dot = strrchr(d->receiver_type, '.');
-                    auto_t.short_name = dot
-                        ? cbm_arena_strdup(arena, dot + 1)
-                        : rf.receiver_type;
+                    auto_t.short_name = dot ? dot + 1 : rf.receiver_type; /* borrowed substring */
                     cbm_registry_add_type(reg, auto_t);
                 }
             }
@@ -3855,6 +3859,10 @@ void cbm_run_php_lsp_cross(
     cbm_php_stdlib_register(&reg, arena);
     php_register_lsp_defs(arena, &reg, defs, def_count);
 
+    /* Finalize registry — O(1) lookups. See go_lsp.c "3c. Finalize"
+     * comment for the rationale. */
+    cbm_registry_finalize(&reg);
+
     PHPLSPContext ctx;
     php_lsp_init(&ctx, arena, source, source_len, &reg, module_qn, out);
 
@@ -3871,10 +3879,11 @@ void cbm_run_php_lsp_cross(
      * resolve to the right type during the call walk. */
     {
         php_class_field_table_t tab = {0};
-        uint32_t nc = ts_node_child_count(root);
-        for (uint32_t i = 0; i < nc; i++) {
-            TSNode c = ts_node_child(root, i);
-            if (ts_node_is_null(c)) continue;
+        /* Collect top-level children once (O(n)); ts_node_child(root,i) is O(i) → O(n²). */
+        uint32_t pkn = 0;
+        TSNode *pkids = cbm_lsp_collect_children(ctx.arena, root, &pkn);
+        for (uint32_t i = 0; i < pkn; i++) {
+            TSNode c = pkids[i];
             const char *k = ts_node_type(c);
             if (strcmp(k, "namespace_definition") == 0) {
                 set_namespace_from_decl(&ctx, c);

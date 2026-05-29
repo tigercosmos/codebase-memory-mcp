@@ -428,11 +428,7 @@ static void walk_calls(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec *spec)
             }
         }
 
-        uint32_t count = ts_node_child_count(node);
-        enum { LAST_IDX_OFFSET = 1 };
-        for (int i = (int)(count - LAST_IDX_OFFSET); i >= 0; i--) {
-            ts_nstack_push(&stack, ctx->arena, ts_node_child(node, (uint32_t)i));
-        }
+        ts_nstack_push_children(&stack, ctx->arena, node);
     }
 }
 

@@ -490,8 +490,8 @@ int cbm_pipeline_githistory_compute(const char *repo_path, cbm_githistory_result
      * we don't re-scan history. NULL on OOM is fine — the caller still
      * gets the couplings. */
     cbm_file_temporal_t *ft_arr = malloc(MAX_FILE_TEMPORAL * sizeof(cbm_file_temporal_t));
-    int ft_count = 0;
     if (ft_arr) {
+        int ft_count = 0;
         CBMHashTable *file_idx = cbm_ht_create(CBM_SZ_1K);
         for (int c = 0; c < commit_count; c++) {
             if (cf[c].count > GH_MAX_FILES) {
@@ -584,8 +584,8 @@ int cbm_pipeline_githistory_apply(cbm_pipeline_ctx_t *ctx, const cbm_githistory_
 
         char props[CBM_SZ_256];
         snprintf(props, sizeof(props),
-                 "{\"extension\":\"%s\",\"last_modified\":%lld,\"change_count\":%d}",
-                 ext_escaped, ft->last_modified, ft->change_count);
+                 "{\"extension\":\"%s\",\"last_modified\":%lld,\"change_count\":%d}", ext_escaped,
+                 ft->last_modified, ft->change_count);
 
         cbm_gbuf_upsert_node(ctx->gbuf, node->label, node->name, node->qualified_name,
                              node->file_path, node->start_line, node->end_line, props);

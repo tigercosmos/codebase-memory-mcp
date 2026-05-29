@@ -14,6 +14,7 @@
 #include "discover/discover.h"
 #include "foundation/hash_table.h"
 #include "cbm.h"
+#include "lsp/go_lsp.h" /* CBMLSPDef for cbm_parallel_resolve cross-LSP inputs */
 #include <stdatomic.h>
 
 /* ── Shared pipeline constants ─────────────────────────────────── */
@@ -59,7 +60,7 @@ typedef struct {
     cbm_gbuf_t *gbuf;         /* owned by pipeline */
     cbm_registry_t *registry; /* owned by pipeline */
     atomic_int *cancelled;    /* pointer to pipeline's cancelled flag */
-    int mode;                 /* cbm_index_mode_t (0=full, 1=moderate, 2=fast) */
+    int mode;                 /* cbm_index_mode_t (0=full, 1=moderate, 2=fast, 3=advanced) */
 
     /* Extraction result cache (sequential pipeline optimization).
      * When non-NULL, pass_definitions stores results here instead of freeing,
@@ -385,9 +386,34 @@ int cbm_build_registry_from_cache(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t
  * Each worker resolves calls, usages, throws, rw, inherits, decorates,
  * and implements edges into per-worker edge bufs, then merges.
  * Runs Go-style implicit IMPLEMENTS as serial post-step. */
+/* Opaque module-def index — defined in pass_lsp_cross.c. Forward-declared
+ * here so we can include it in cbm_parallel_resolve's signature without
+ * pulling the pass header into every consumer of pipeline_internal.h. */
+struct CBMModuleDefIndex;
+
+/* cbm_parallel_resolve's cross_registries param is typed `void*` to avoid
+ * pulling lsp/go_lsp.h into every TU that includes pipeline_internal.h.
+ * Callers cast a CBMCrossLspRegistries* (defined in pass_lsp_cross.h). */
+
 int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count,
                          CBMFileResult **result_cache, _Atomic int64_t *shared_ids,
-                         int worker_count);
+                         int worker_count,
+                         /* Cross-file LSP inputs — pre-built once by the caller and
+                          * shared read-only across workers (typed non-const to match
+                          * the existing cbm_run_X_lsp_cross signatures the resolve
+                          * worker forwards them to). Pass NULL/0/NULL to skip. */
+                         CBMLSPDef *all_defs, int def_count, char *const *def_modules,
+                         /* Optional inverted index module_qn → defs[] — fallback
+                          * path when there's no pre-built registry for this lang. */
+                         struct CBMModuleDefIndex *module_def_index,
+                         /* Optional Tier 2 full: pre-built per-language registries.
+                          * For each language with a non-NULL entry, workers use the
+                          * cbm_run_X_lsp_cross_with_registry fast path (skip per-
+                          * file registry build entirely). Falls back to the filter
+                          * + per-file build path when entry is NULL or struct is NULL.
+                          * Typed as void* here to dodge the typedef/tag ordering
+                          * problem — pass_parallel.c casts back to CBMCrossLspRegistries*. */
+                         void *cross_registries);
 
 /* Post-merge: create Route nodes for HTTP_CALLS/ASYNC_CALLS edges that
  * have url_path in properties but point to library functions instead of routes.
@@ -406,10 +432,8 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
 /* Cross-file LSP type-aware call resolution pass. Augments per-file
  * resolved_calls with cross-file resolutions before call edges are emitted.
  * Implementation: src/pipeline/pass_lsp_cross.c. */
-int cbm_pipeline_pass_lsp_cross(cbm_pipeline_ctx_t *ctx,
-                                const cbm_file_info_t *files,
-                                int file_count,
-                                CBMFileResult **cache);
+int cbm_pipeline_pass_lsp_cross(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,
+                                int file_count, CBMFileResult **cache);
 
 /* Sub-passes called from pass_calls: pattern-based edge extraction */
 void cbm_pipeline_pass_fastapi_depends(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files,

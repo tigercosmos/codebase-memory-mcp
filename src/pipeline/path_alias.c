@@ -20,6 +20,7 @@
 
 #include "pipeline/path_alias.h"
 
+#include "foundation/compat.h"
 #include "foundation/compat_fs.h"
 #include "foundation/constants.h"
 #include "foundation/log.h"
@@ -36,10 +37,10 @@
  * (Next.js Skyline, large nx workspaces) while bounding worst-case
  * memory and walk time. Cap hits are logged. */
 enum {
-    CBM_PATH_ALIAS_MAX_ENTRIES = 256,        /* per single config file       */
-    CBM_PATH_ALIAS_MAX_FILES = 256,          /* config files per repo walk   */
+    CBM_PATH_ALIAS_MAX_ENTRIES = 256, /* per single config file       */
+    CBM_PATH_ALIAS_MAX_FILES = 256,   /* config files per repo walk   */
     CBM_PATH_ALIAS_MAX_FILE_BYTES = 64 * 1024,
-    CBM_PATH_ALIAS_MAX_DEPTH = 32,           /* directory recursion depth    */
+    CBM_PATH_ALIAS_MAX_DEPTH = 32, /* directory recursion depth    */
 };
 
 /* ── Helpers ───────────────────────────────────────────────────── */
@@ -50,14 +51,13 @@ static char *strip_resolved_ext(char *path) {
         return path;
     }
     size_t len = strlen(path);
-    if (len > 3 && path[len - 3] == '.' &&
-        (path[len - 2] == 't' || path[len - 2] == 'j') && path[len - 1] == 's') {
+    if (len > 3 && path[len - 3] == '.' && (path[len - 2] == 't' || path[len - 2] == 'j') &&
+        path[len - 1] == 's') {
         path[len - 3] = '\0';
         return path;
     }
-    if (len > 4 && path[len - 4] == '.' &&
-        (path[len - 3] == 't' || path[len - 3] == 'j') && path[len - 2] == 's' &&
-        path[len - 1] == 'x') {
+    if (len > 4 && path[len - 4] == '.' && (path[len - 3] == 't' || path[len - 3] == 'j') &&
+        path[len - 2] == 's' && path[len - 1] == 'x') {
         path[len - 4] = '\0';
     }
     return path;
@@ -179,8 +179,7 @@ static cbm_path_alias_map_t *load_tsconfig_file(const char *abs_path, const char
     if (paths_obj && yyjson_is_obj(paths_obj)) {
         size_t obj_size = yyjson_obj_size(paths_obj);
         bool capped = obj_size > CBM_PATH_ALIAS_MAX_ENTRIES;
-        int capacity =
-            (int)(capped ? (size_t)CBM_PATH_ALIAS_MAX_ENTRIES : obj_size);
+        int capacity = (int)(capped ? (size_t)CBM_PATH_ALIAS_MAX_ENTRIES : obj_size);
         if (capacity > 0) {
             map->entries = calloc((size_t)capacity, sizeof(cbm_path_alias_t));
             if (!map->entries) {
@@ -206,7 +205,7 @@ static cbm_path_alias_map_t *load_tsconfig_file(const char *abs_path, const char
                 if (star) {
                     entry->has_wildcard = true;
                     entry->alias_prefix =
-                        strndup(alias_pattern, (size_t)(star - alias_pattern));
+                        cbm_strndup(alias_pattern, (size_t)(star - alias_pattern));
                     entry->alias_suffix = strdup(star + 1);
                 } else {
                     entry->has_wildcard = false;
@@ -215,7 +214,7 @@ static cbm_path_alias_map_t *load_tsconfig_file(const char *abs_path, const char
                 }
                 const char *tstar = strchr(target_pattern, '*');
                 if (tstar) {
-                    char *pre = strndup(target_pattern, (size_t)(tstar - target_pattern));
+                    char *pre = cbm_strndup(target_pattern, (size_t)(tstar - target_pattern));
                     entry->target_prefix = resolve_target_relative(dir_prefix, pre);
                     free(pre);
                     entry->target_suffix = strdup(tstar + 1);
@@ -272,10 +271,10 @@ char *cbm_path_alias_resolve(const cbm_path_alias_map_t *map, const char *module
 
     for (int i = 0; i < map->count; i++) {
         const cbm_path_alias_t *e = &map->entries[i];
-        size_t prefix_len = strlen(e->alias_prefix);
-        size_t suffix_len = strlen(e->alias_suffix);
 
         if (e->has_wildcard) {
+            size_t prefix_len = strlen(e->alias_prefix);
+            size_t suffix_len = strlen(e->alias_suffix);
             if (mod_len < prefix_len + suffix_len) {
                 continue;
             }
@@ -363,10 +362,9 @@ static void find_alias_files(const char *abs_dir, const char *rel_dir, alias_con
             continue;
         }
         const char *name = ent->name;
-        if (name[0] == '.' || strcmp(name, "node_modules") == 0 ||
-            strcmp(name, "dist") == 0 || strcmp(name, "build") == 0 ||
-            strcmp(name, ".next") == 0 || strcmp(name, "coverage") == 0 ||
-            strcmp(name, "target") == 0 /* Rust */) {
+        if (name[0] == '.' || strcmp(name, "node_modules") == 0 || strcmp(name, "dist") == 0 ||
+            strcmp(name, "build") == 0 || strcmp(name, ".next") == 0 ||
+            strcmp(name, "coverage") == 0 || strcmp(name, "target") == 0 /* Rust */) {
             continue;
         }
         char child_abs[CBM_SZ_512];
@@ -393,8 +391,7 @@ cbm_path_alias_collection_t *cbm_load_path_aliases(const char *repo_path) {
     int count = 0;
     find_alias_files(repo_path, "", hits, &count, CBM_PATH_ALIAS_MAX_FILES, 0);
     if (count >= CBM_PATH_ALIAS_MAX_FILES) {
-        cbm_log_warn("path_alias.files.cap_hit", "repo", repo_path, "kept",
-                     "256_of_more");
+        cbm_log_warn("path_alias.files.cap_hit", "repo", repo_path, "kept", "256_of_more");
     }
     if (count == 0) {
         free(hits);
@@ -435,8 +432,8 @@ cbm_path_alias_collection_t *cbm_load_path_aliases(const char *repo_path) {
     return coll;
 }
 
-const cbm_path_alias_map_t *cbm_path_alias_find_for_file(
-    const cbm_path_alias_collection_t *coll, const char *rel_path) {
+const cbm_path_alias_map_t *cbm_path_alias_find_for_file(const cbm_path_alias_collection_t *coll,
+                                                         const char *rel_path) {
     if (!coll || !rel_path) {
         return NULL;
     }

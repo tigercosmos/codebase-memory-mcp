@@ -128,10 +128,7 @@ static void scan_string_consts_js(CBMExtractCtx *ctx, chan_const_table_t *tbl) {
             }
         }
 
-        uint32_t count = ts_node_child_count(node);
-        for (int i = (int)count - SKIP_ONE; i >= 0; i--) {
-            ts_nstack_push(&stack, ctx->arena, ts_node_child(node, (uint32_t)i));
-        }
+        ts_nstack_push_children(&stack, ctx->arena, node);
     }
 }
 
@@ -384,10 +381,7 @@ static void extract_channels_js(CBMExtractCtx *ctx) {
         if (strcmp(ts_node_type(node), "call_expression") == 0) {
             js_process_call(ctx, node, &consts);
         }
-        uint32_t count = ts_node_child_count(node);
-        for (int i = (int)count - SKIP_ONE; i >= 0; i--) {
-            ts_nstack_push(&stack, ctx->arena, ts_node_child(node, (uint32_t)i));
-        }
+        ts_nstack_push_children(&stack, ctx->arena, node);
     }
 }
 

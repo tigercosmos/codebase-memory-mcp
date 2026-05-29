@@ -1,4 +1,5 @@
 #include "c_lsp.h"
+#include "lsp_node_iter.h"
 #include "../helpers.h"
 #include <string.h>
 #include <stdio.h>
@@ -3667,10 +3668,16 @@ recurse:;
         }
     }
 
-    // Recurse into children
-    uint32_t nc = ts_node_child_count(node);
-    for (uint32_t i = 0; i < nc; i++) {
-        c_resolve_calls_in_node(ctx, ts_node_child(node, i));
+    // Recurse into children via a cursor (O(n)); ts_node_child(node,i) is O(i)
+    // in tree-sitter → O(n²) on a wide node.
+    {
+        TSTreeCursor cursor = ts_tree_cursor_new(node);
+        if (ts_tree_cursor_goto_first_child(&cursor)) {
+            do {
+                c_resolve_calls_in_node(ctx, ts_tree_cursor_current_node(&cursor));
+            } while (ts_tree_cursor_goto_next_sibling(&cursor));
+        }
+        ts_tree_cursor_delete(&cursor);
     }
 
     if (push_scope) {
@@ -3979,10 +3986,14 @@ static void c_process_namespace(CLSPContext* ctx, TSNode ns_node) {
 
     TSNode body = ts_node_child_by_field_name(ns_node, "body", 4);
     if (!ts_node_is_null(body)) {
-        uint32_t nc = ts_node_child_count(body);
-        for (uint32_t i = 0; i < nc; i++) {
-            c_process_body_child(ctx, ts_node_child(body, i));
+        // Cursor walk (O(n)); namespace bodies can be very wide.
+        TSTreeCursor cursor = ts_tree_cursor_new(body);
+        if (ts_tree_cursor_goto_first_child(&cursor)) {
+            do {
+                c_process_body_child(ctx, ts_tree_cursor_current_node(&cursor));
+            } while (ts_tree_cursor_goto_next_sibling(&cursor));
         }
+        ts_tree_cursor_delete(&cursor);
     }
 
     ctx->current_namespace = saved_ns;
@@ -4114,10 +4125,11 @@ static void c_process_class(CLSPContext* ctx, TSNode class_node) {
         // Pre-pass: register method declarations (no body) as methods in registry.
         // This allows template return type substitution for methods like T& value();
         if (ctx->enclosing_class_qn) {
-            uint32_t nc = ts_node_child_count(body);
-            for (uint32_t i = 0; i < nc; i++) {
-                TSNode child = ts_node_child(body, i);
-                if (ts_node_is_null(child) || !ts_node_is_named(child)) continue;
+            uint32_t bkn = 0;
+            TSNode* bkids = cbm_lsp_collect_children(ctx->arena, body, &bkn);
+            for (uint32_t i = 0; i < bkn; i++) {
+                TSNode child = bkids[i];
+                if (!ts_node_is_named(child)) continue;
                 const char* ck = ts_node_type(child);
                 // field_declaration, declaration, or function_definition = method
                 if (strcmp(ck, "field_declaration") != 0 && strcmp(ck, "declaration") != 0 &&
@@ -4220,10 +4232,11 @@ static void c_process_class(CLSPContext* ctx, TSNode class_node) {
             }
         }
 
-        uint32_t nc = ts_node_child_count(body);
-        for (uint32_t i = 0; i < nc; i++) {
-            TSNode child = ts_node_child(body, i);
-            if (ts_node_is_null(child) || !ts_node_is_named(child)) continue;
+        uint32_t bkn = 0;
+        TSNode* bkids = cbm_lsp_collect_children(ctx->arena, body, &bkn);
+        for (uint32_t i = 0; i < bkn; i++) {
+            TSNode child = bkids[i];
+            if (!ts_node_is_named(child)) continue;
             c_process_body_child(ctx, child);
         }
     }
@@ -4245,14 +4258,16 @@ __attribute__((no_sanitize("address")))
 void c_lsp_process_file(CLSPContext* ctx, TSNode root) {
     if (ts_node_is_null(root)) return;
 
-    uint32_t nc = ts_node_child_count(root);
+    // Collect top-level children once (O(n)); both passes reuse the array.
+    // Indexing ts_node_child(root,i) per iteration is O(i) → O(n²) on a wide root.
+    uint32_t kn = 0;
+    TSNode* kids = cbm_lsp_collect_children(ctx->arena, root, &kn);
     TSNode child;   // Hoisted: prevents ASan stack-use-after-scope between passes
     TSNode inner;
 
     // Pass 1: process using declarations and global variables
-    for (uint32_t i = 0; i < nc; i++) {
-        child = ts_node_child(root, i);
-        if (ts_node_is_null(child)) continue;
+    for (uint32_t i = 0; i < kn; i++) {
+        child = kids[i];
         const char* ck = ts_node_type(child);
 
         if (strcmp(ck, "using_declaration") == 0 ||
@@ -4278,9 +4293,8 @@ void c_lsp_process_file(CLSPContext* ctx, TSNode root) {
     }
 
     // Pass 2: process functions, namespaces, classes, templates
-    for (uint32_t i = 0; i < nc; i++) {
-        child = ts_node_child(root, i);
-        if (ts_node_is_null(child)) continue;
+    for (uint32_t i = 0; i < kn; i++) {
+        child = kids[i];
         c_process_body_child(ctx, child);
     }
 }
@@ -4574,26 +4588,13 @@ void cbm_run_c_lsp(CBMArena* arena, CBMFileResult* result,
 // Entry point: cross-file LSP
 // ============================================================================
 
-void cbm_run_c_lsp_cross(
-    CBMArena* arena,
-    const char* source, int source_len,
-    const char* module_qn,
-    bool cpp_mode,
-    CBMLSPDef* defs, int def_count,
-    const char** include_paths, const char** include_ns_qns, int include_count,
-    TSTree* cached_tree,
-    CBMResolvedCallArray* out) {
-
-    if (!source || source_len == 0 || !out) return;
-
-    CBMTypeRegistry reg;
-    cbm_registry_init(&reg, arena);
-
-    // Register stdlib
-    cbm_c_stdlib_register(&reg, arena);
-    if (cpp_mode) cbm_cpp_stdlib_register(&reg, arena);
-
-    // Register all defs
+/* Register one batch of CBMLSPDef[] into a registry. Shared by the
+ * per-file cross-LSP path and the Tier 2 pre-built registry builder.
+ * Reads field/return/embedded info from the def strings (def-driven —
+ * no per-file AST mutation), so the same defs always yield the same
+ * registry entries regardless of which file is being processed. */
+static void c_register_lsp_defs(CBMArena* arena, CBMTypeRegistry* reg,
+                                const char* module_qn, CBMLSPDef* defs, int def_count) {
     for (int i = 0; i < def_count; i++) {
         CBMLSPDef* d = &defs[i];
         if (!d->qualified_name || !d->short_name) continue;
@@ -4602,8 +4603,8 @@ void cbm_run_c_lsp_cross(
                          strcmp(d->label, "Interface") == 0)) {
             CBMRegisteredType rt;
             memset(&rt, 0, sizeof(rt));
-            rt.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
-            rt.short_name = cbm_arena_strdup(arena, d->short_name);
+            rt.qualified_name = d->qualified_name; /* borrowed — d outlives this call */
+            rt.short_name = d->short_name;
             rt.is_interface = d->is_interface;
 
             // Embedded/base types
@@ -4662,15 +4663,15 @@ void cbm_run_c_lsp_cross(
                 }
             }
 
-            cbm_registry_add_type(&reg, rt);
+            cbm_registry_add_type(reg, rt);
         }
 
         if (d->label && (strcmp(d->label, "Function") == 0 || strcmp(d->label, "Method") == 0)) {
             CBMRegisteredFunc rf;
             memset(&rf, 0, sizeof(rf));
             rf.min_params = -1;
-            rf.qualified_name = cbm_arena_strdup(arena, d->qualified_name);
-            rf.short_name = cbm_arena_strdup(arena, d->short_name);
+            rf.qualified_name = d->qualified_name; /* borrowed */
+            rf.short_name = d->short_name;
 
             const char* def_module = d->def_module_qn ? d->def_module_qn : module_qn;
 
@@ -4698,12 +4699,96 @@ void cbm_run_c_lsp_cross(
             if (!rf.signature) rf.signature = cbm_type_func(arena, NULL, NULL, NULL);
 
             if (d->receiver_type) {
-                rf.receiver_type = cbm_arena_strdup(arena, d->receiver_type);
+                rf.receiver_type = d->receiver_type; /* borrowed */
             }
 
-            cbm_registry_add_func(&reg, rf);
+            cbm_registry_add_func(reg, rf);
         }
     }
+}
+
+/* Tier 2: build a project-wide C/C++/CUDA registry ONCE from all defs.
+ * Registers both C and C++ stdlibs (C is a subset; harmless overlap)
+ * and all C-family defs. Shared READ-ONLY across resolve workers.
+ * Def-driven (no AST field collection) so produces identical entries
+ * to the per-file build — zero quality loss. */
+CBMTypeRegistry* cbm_c_build_cross_registry(CBMArena* arena, CBMLSPDef* defs, int def_count) {
+    if (!arena) return NULL;
+    CBMTypeRegistry* reg = (CBMTypeRegistry*)cbm_arena_alloc(arena, sizeof(*reg));
+    if (!reg) return NULL;
+    cbm_registry_init(reg, arena);
+    cbm_c_stdlib_register(reg, arena);
+    cbm_cpp_stdlib_register(reg, arena);
+    for (int i = 0; i < def_count; i++) {
+        CBMLSPDef* d = &defs[i];
+        if (d->lang != CBM_LANG_C && d->lang != CBM_LANG_CPP && d->lang != CBM_LANG_CUDA) {
+            continue;
+        }
+        c_register_lsp_defs(arena, reg, "", d, 1);
+    }
+    cbm_registry_finalize(reg);
+    return reg;
+}
+
+void cbm_run_c_lsp_cross_with_registry(
+    CBMArena* arena,
+    const char* source, int source_len,
+    const char* module_qn,
+    bool cpp_mode,
+    CBMTypeRegistry* reg,
+    const char** include_paths, const char** include_ns_qns, int include_count,
+    TSTree* cached_tree,
+    CBMResolvedCallArray* out) {
+    if (!source || source_len == 0 || !out || !reg) return;
+
+    TSParser* parser = NULL;
+    TSTree* tree = cached_tree;
+    bool owns_tree = false;
+    if (!tree) {
+        parser = ts_parser_new();
+        if (!parser) return;
+        const TSLanguage* ts_lang = cpp_mode ? tree_sitter_cpp() : tree_sitter_c();
+        ts_parser_set_language(parser, ts_lang);
+        tree = ts_parser_parse_string(parser, NULL, source, source_len);
+        ts_parser_delete(parser);
+        owns_tree = true;
+        if (!tree) return;
+    }
+    TSNode root = ts_tree_root_node(tree);
+
+    CLSPContext ctx;
+    c_lsp_init(&ctx, arena, source, source_len, reg, module_qn, cpp_mode, out);
+    for (int i = 0; i < include_count; i++) {
+        c_lsp_add_include(&ctx, include_paths[i], include_ns_qns[i]);
+    }
+    c_lsp_process_file(&ctx, root);
+
+    if (owns_tree) {
+        ts_tree_delete(tree);
+    }
+}
+
+void cbm_run_c_lsp_cross(
+    CBMArena* arena,
+    const char* source, int source_len,
+    const char* module_qn,
+    bool cpp_mode,
+    CBMLSPDef* defs, int def_count,
+    const char** include_paths, const char** include_ns_qns, int include_count,
+    TSTree* cached_tree,
+    CBMResolvedCallArray* out) {
+
+    if (!source || source_len == 0 || !out) return;
+
+    CBMTypeRegistry reg;
+    cbm_registry_init(&reg, arena);
+
+    // Register stdlib
+    cbm_c_stdlib_register(&reg, arena);
+    if (cpp_mode) cbm_cpp_stdlib_register(&reg, arena);
+
+    // Register all defs (shared helper — def-driven)
+    c_register_lsp_defs(arena, &reg, module_qn, defs, def_count);
 
     // Use cached tree if available, otherwise parse fresh
     TSParser* parser = NULL;
@@ -4722,6 +4807,10 @@ void cbm_run_c_lsp_cross(
     }
 
     TSNode root = ts_tree_root_node(tree);
+
+    // Finalize registry — O(1) lookups. See go_lsp.c "3c. Finalize"
+    // comment for the rationale (linear-scan fallback otherwise).
+    cbm_registry_finalize(&reg);
 
     // Initialize context and run
     CLSPContext ctx;

@@ -46,7 +46,9 @@ static char *read_file(const char *path, int *out_len) {
         return NULL;
     }
 
-    char *buf = malloc(size + SKIP_ONE);
+    /* +pad: tree-sitter lexer lookahead reads past EOF; keep it in-bounds */
+    enum { CBM_TS_LOOKAHEAD_PAD = 16 };
+    char *buf = malloc((size_t)size + CBM_TS_LOOKAHEAD_PAD);
     if (!buf) {
         (void)fclose(f);
         return NULL;
@@ -58,7 +60,7 @@ static char *read_file(const char *path, int *out_len) {
     if (nread > (size_t)size) {
         nread = (size_t)size;
     }
-    buf[nread] = '\0';
+    memset(buf + nread, 0, CBM_TS_LOOKAHEAD_PAD);
     *out_len = (int)nread;
     return buf;
 }
@@ -346,8 +348,8 @@ static int resolve_single_call(cbm_pipeline_ctx_t *ctx, CBMCall *call,
             res.confidence = lsp->confidence;
             res.strategy = lsp->strategy;
             res.candidate_count = 1;
-            emit_classified_edge(ctx, call, source_node, target_node, &res, module_qn,
-                                 imp_keys, imp_vals, imp_count);
+            emit_classified_edge(ctx, call, source_node, target_node, &res, module_qn, imp_keys,
+                                 imp_vals, imp_count);
             return SKIP_ONE;
         }
     }
@@ -432,8 +434,8 @@ int cbm_pipeline_pass_calls(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *file
                 continue;
             }
             total_calls++;
-            if (resolve_single_call(ctx, call, &result->resolved_calls, rel, module_qn,
-                                    imp_keys, imp_vals, imp_count)) {
+            if (resolve_single_call(ctx, call, &result->resolved_calls, rel, module_qn, imp_keys,
+                                    imp_vals, imp_count)) {
                 resolved++;
             } else {
                 unresolved++;

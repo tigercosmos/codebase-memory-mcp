@@ -237,8 +237,7 @@ static int find_deleted_files(const char *repo_path, cbm_file_info_t *files, int
                 ms_cap *= PAIR_LEN;
                 cbm_file_hash_t *tmp = realloc(mode_skipped, (size_t)ms_cap * sizeof(*tmp));
                 if (!tmp) {
-                    cbm_log_error("incremental.err", "msg",
-                                  "find_deleted_files_realloc_oom_ms");
+                    cbm_log_error("incremental.err", "msg", "find_deleted_files_realloc_oom_ms");
                     break;
                 }
                 mode_skipped = tmp;
@@ -250,8 +249,8 @@ static int find_deleted_files(const char *repo_path, cbm_file_info_t *files, int
                  * row with a NULL rel_path that would silently fail the
                  * NOT NULL constraint in upsert and reintroduce the
                  * orphaned-node bug. */
-                cbm_log_error("incremental.err", "msg", "find_deleted_files_strdup_oom",
-                              "rel_path", stored[i].rel_path);
+                cbm_log_error("incremental.err", "msg", "find_deleted_files_strdup_oom", "rel_path",
+                              stored[i].rel_path);
                 free(rp);
                 free(sh);
                 break;
@@ -348,13 +347,13 @@ static void persist_hashes(cbm_store_t *store, const char *project, cbm_file_inf
      * with scope=mode_skipped so the warning is searchable. */
     if (mode_skipped) {
         for (int i = 0; i < mode_skipped_count; i++) {
-            int rc = cbm_store_upsert_file_hash(store, project, mode_skipped[i].rel_path,
-                                                mode_skipped[i].sha256 ? mode_skipped[i].sha256
-                                                                       : "",
-                                                mode_skipped[i].mtime_ns, mode_skipped[i].size);
+            int rc =
+                cbm_store_upsert_file_hash(store, project, mode_skipped[i].rel_path,
+                                           mode_skipped[i].sha256 ? mode_skipped[i].sha256 : "",
+                                           mode_skipped[i].mtime_ns, mode_skipped[i].size);
             if (rc != CBM_STORE_OK) {
-                cbm_log_warn("incremental.persist_hash_failed", "scope", "mode_skipped",
-                             "rel_path", mode_skipped[i].rel_path, "rc", itoa_buf(rc));
+                cbm_log_warn("incremental.persist_hash_failed", "scope", "mode_skipped", "rel_path",
+                             mode_skipped[i].rel_path, "rc", itoa_buf(rc));
                 ms_failed++;
             }
         }
@@ -378,6 +377,10 @@ static void registry_visitor(const cbm_gbuf_node_t *node, void *userdata) {
 /* Run parallel or sequential extract+resolve for changed files. */
 static void run_extract_resolve(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *changed_files, int ci) {
     struct timespec t;
+
+    /* Per-file LSP always runs (every mode). Cross-file LSP stays disabled in
+     * incremental regardless (cbm_parallel_resolve is called with NULL
+     * cross_registries below). */
 
 #define MIN_FILES_FOR_PARALLEL_INCR 50
     int worker_count = cbm_default_worker_count(true);
@@ -403,15 +406,16 @@ static void run_extract_resolve(cbm_pipeline_ctx_t *ctx, cbm_file_info_t *change
             cbm_log_info("pass.timing", "pass", "incr_registry", "elapsed_ms",
                          itoa_buf((int)elapsed_ms(t)));
 
-            /* NOTE: cross-file LSP (cbm_pipeline_pass_lsp_cross) is intentionally
-             * NOT run here. Its project-wide def list is built from the per-file
-             * result cache, which on the incremental path holds only the changed
-             * files — so it cannot resolve calls into UNCHANGED files and would
-             * diverge from (and could mis-bind vs) a full index. Correct
-             * incremental cross-file resolution needs the full-project def set
-             * (see plan.md WS1B/WS1C); deferred. */
+            /* Incremental skips cross-file LSP precondition build — it would need
+             * all_defs from the full project, not just the changed slice. Per-file
+             * LSP (run inside cbm_extract_file) still fires; cross-file resolution
+             * is deferred to the next full re-index. Pass NULL/0/NULL to make the
+             * fused step in resolve_worker a no-op. (Correct incremental cross-file
+             * resolution requires the full-project def set — plan.md WS1B/WS1C.) */
             cbm_clock_gettime(CLOCK_MONOTONIC, &t);
-            cbm_parallel_resolve(ctx, changed_files, ci, cache, &shared_ids, worker_count);
+            cbm_parallel_resolve(ctx, changed_files, ci, cache, &shared_ids, worker_count, NULL, 0,
+                                 NULL, NULL /* module_def_index */,
+                                 NULL /* cross_registries — incremental skips Tier 2 prebuild */);
             cbm_gbuf_set_next_id(ctx->gbuf, atomic_load(&shared_ids));
             cbm_log_info("pass.timing", "pass", "incr_resolve", "elapsed_ms",
                          itoa_buf((int)elapsed_ms(t)));
@@ -627,8 +631,7 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
     cbm_log_info("incremental.registry_seed", "symbols", itoa_buf(cbm_registry_size(registry)),
                  "elapsed_ms", itoa_buf((int)elapsed_ms(t)));
 
-    cbm_path_alias_collection_t *path_aliases =
-        cbm_load_path_aliases(cbm_pipeline_repo_path(p));
+    cbm_path_alias_collection_t *path_aliases = cbm_load_path_aliases(cbm_pipeline_repo_path(p));
     cbm_cc_index_t *cc_index = cbm_cc_index_build(cbm_pipeline_repo_path(p));
 
     cbm_pipeline_ctx_t ctx = {

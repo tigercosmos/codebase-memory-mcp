@@ -69,12 +69,12 @@ static inline void safe_buf_free_impl(void **buf, size_t *count) {
  * For arrays of heap-allocated pointers, prefer a manual realloc+cleanup pattern.
  * Usage: safe_grow(arr, count, cap, growth_factor)
  * After the call, arr is the new buffer (NULL on OOM). */
-#define safe_grow(arr, n, cap, factor)                                                             \
-    do {                                                                                           \
-        if ((size_t)(n) >= (size_t)(cap)) {                                                        \
-            (cap) *= (factor);                                                                     \
-            (arr) = safe_realloc((arr), (size_t)(cap) * sizeof(*(arr)));                           \
-        }                                                                                          \
+#define safe_grow(arr, n, cap, factor)                                   \
+    do {                                                                 \
+        if ((size_t)(n) >= (size_t)(cap)) {                              \
+            (cap) *= (factor);                                           \
+            (arr) = safe_realloc((arr), (size_t)(cap) * sizeof(*(arr))); \
+        }                                                                \
     } while (0)
 
 /* ── Memory mapping ────────────────────────────────────────────── */

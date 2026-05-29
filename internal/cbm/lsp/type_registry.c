@@ -146,10 +146,8 @@ void cbm_registry_add_type(CBMTypeRegistry* reg, CBMRegisteredType type) {
     reg->types[reg->type_count++] = type;
 }
 
-const CBMRegisteredFunc* cbm_registry_lookup_method(const CBMTypeRegistry* reg,
+static const CBMRegisteredFunc* lookup_method_self(const CBMTypeRegistry* reg,
     const char* receiver_qn, const char* method_name) {
-    if (!reg || !receiver_qn || !method_name) return NULL;
-
     // Hashed path when registry is finalized.
     if (reg->method_buckets && reg->method_bucket_count > 0) {
         uint64_t h = fnv1a_pair(receiver_qn, method_name);
@@ -178,10 +176,18 @@ const CBMRegisteredFunc* cbm_registry_lookup_method(const CBMTypeRegistry* reg,
     return NULL;
 }
 
-const CBMRegisteredType* cbm_registry_lookup_type(const CBMTypeRegistry* reg,
-    const char* qualified_name) {
-    if (!reg || !qualified_name) return NULL;
+const CBMRegisteredFunc* cbm_registry_lookup_method(const CBMTypeRegistry* reg,
+    const char* receiver_qn, const char* method_name) {
+    if (!reg || !receiver_qn || !method_name) return NULL;
+    const CBMRegisteredFunc* r = lookup_method_self(reg, receiver_qn, method_name);
+    if (!r && reg->fallback) {
+        return cbm_registry_lookup_method(reg->fallback, receiver_qn, method_name);
+    }
+    return r;
+}
 
+static const CBMRegisteredType* lookup_type_self(const CBMTypeRegistry* reg,
+    const char* qualified_name) {
     if (reg->type_qn_buckets && reg->type_qn_bucket_count > 0) {
         uint64_t h = fnv1a(qualified_name);
         int slot = (int)(h & (uint64_t)(reg->type_qn_bucket_count - 1));
@@ -205,10 +211,18 @@ const CBMRegisteredType* cbm_registry_lookup_type(const CBMTypeRegistry* reg,
     return NULL;
 }
 
-const CBMRegisteredFunc* cbm_registry_lookup_func(const CBMTypeRegistry* reg,
+const CBMRegisteredType* cbm_registry_lookup_type(const CBMTypeRegistry* reg,
     const char* qualified_name) {
     if (!reg || !qualified_name) return NULL;
+    const CBMRegisteredType* r = lookup_type_self(reg, qualified_name);
+    if (!r && reg->fallback) {
+        return cbm_registry_lookup_type(reg->fallback, qualified_name);
+    }
+    return r;
+}
 
+static const CBMRegisteredFunc* lookup_func_self(const CBMTypeRegistry* reg,
+    const char* qualified_name) {
     if (reg->func_qn_buckets && reg->func_qn_bucket_count > 0) {
         uint64_t h = fnv1a(qualified_name);
         int slot = (int)(h & (uint64_t)(reg->func_qn_bucket_count - 1));
@@ -230,6 +244,16 @@ const CBMRegisteredFunc* cbm_registry_lookup_func(const CBMTypeRegistry* reg,
         }
     }
     return NULL;
+}
+
+const CBMRegisteredFunc* cbm_registry_lookup_func(const CBMTypeRegistry* reg,
+    const char* qualified_name) {
+    if (!reg || !qualified_name) return NULL;
+    const CBMRegisteredFunc* r = lookup_func_self(reg, qualified_name);
+    if (!r && reg->fallback) {
+        return cbm_registry_lookup_func(reg->fallback, qualified_name);
+    }
+    return r;
 }
 
 const CBMRegisteredType* cbm_registry_resolve_alias(const CBMTypeRegistry* reg, const char* type_qn) {
@@ -311,7 +335,11 @@ const CBMRegisteredFunc* cbm_registry_lookup_method_by_args(const CBMTypeRegistr
             }
         }
     }
-    return range_match ? range_match : first_match;
+    const CBMRegisteredFunc* res = range_match ? range_match : first_match;
+    if (!res && reg->fallback) {
+        return cbm_registry_lookup_method_by_args(reg->fallback, receiver_qn, method_name, arg_count);
+    }
+    return res;
 }
 
 // --- Overload scoring by parameter type ---
@@ -405,7 +433,12 @@ const CBMRegisteredFunc* cbm_registry_lookup_method_by_types(const CBMTypeRegist
             if (s > best_score) { best_score = s; best = f; }
         }
     }
-    return best ? best : first_match;
+    const CBMRegisteredFunc* res = best ? best : first_match;
+    if (!res && reg->fallback) {
+        return cbm_registry_lookup_method_by_types(reg->fallback, receiver_qn, method_name,
+                                                   arg_types, arg_count);
+    }
+    return res;
 }
 
 const CBMRegisteredFunc* cbm_registry_lookup_symbol_by_types(const CBMTypeRegistry* reg,
@@ -436,7 +469,12 @@ const CBMRegisteredFunc* cbm_registry_lookup_symbol_by_types(const CBMTypeRegist
             if (s > best_score) { best_score = s; best = f; }
         }
     }
-    return best ? best : first_match;
+    const CBMRegisteredFunc* res = best ? best : first_match;
+    if (!res && reg->fallback) {
+        return cbm_registry_lookup_symbol_by_types(reg->fallback, package_qn, name,
+                                                   arg_types, arg_count);
+    }
+    return res;
 }
 
 const CBMRegisteredFunc* cbm_registry_lookup_symbol_by_args(const CBMTypeRegistry* reg,
@@ -467,7 +505,11 @@ const CBMRegisteredFunc* cbm_registry_lookup_symbol_by_args(const CBMTypeRegistr
             }
         }
     }
-    return range_match ? range_match : first_match;
+    const CBMRegisteredFunc* res = range_match ? range_match : first_match;
+    if (!res && reg->fallback) {
+        return cbm_registry_lookup_symbol_by_args(reg->fallback, package_qn, name, arg_count);
+    }
+    return res;
 }
 
 // --- TS-specific helpers ---

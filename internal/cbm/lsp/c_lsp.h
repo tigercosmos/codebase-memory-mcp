@@ -114,6 +114,23 @@ void cbm_run_c_lsp_cross(
     TSTree* cached_tree,           // NULL = parse internally
     CBMResolvedCallArray* out);
 
+// Tier 2: build a project-wide C/C++/CUDA registry ONCE from all defs
+// (filters by lang). Shared READ-ONLY across resolve workers. Def-driven
+// (no AST field collection) → identical entries to the per-file build.
+CBMTypeRegistry* cbm_c_build_cross_registry(CBMArena* arena, CBMLSPDef* defs, int def_count);
+
+// Cross-file LSP using a pre-built shared registry (Tier 2). Skips the
+// per-file registry build; just parse + resolve.
+void cbm_run_c_lsp_cross_with_registry(
+    CBMArena* arena,
+    const char* source, int source_len,
+    const char* module_qn,
+    bool cpp_mode,
+    CBMTypeRegistry* reg,          // pre-built, finalized, READ-ONLY
+    const char** include_paths, const char** include_ns_qns, int include_count,
+    TSTree* cached_tree,           // NULL = parse internally
+    CBMResolvedCallArray* out);
+
 // Register C stdlib types and functions into a registry.
 void cbm_c_stdlib_register(CBMTypeRegistry* reg, CBMArena* arena);
 

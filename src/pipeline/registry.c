@@ -17,6 +17,7 @@ enum { REG_INIT_CAP = 16, REG_MIN_CANDIDATES = 3, REG_RESOLVED = 1, REG_SUFFIX_A
 
 #define DEFAULT_CONFIDENCE 0.5
 #include "pipeline/pipeline.h"
+#include "foundation/compat.h" /* CBM_TLS */
 #include "foundation/hash_table.h"
 #include "foundation/dyn_array.h"
 #include "foundation/platform.h"
@@ -149,10 +150,149 @@ static const char *best_by_import_distance(const char **candidates, int count,
     return best;
 }
 
+/* ── Per-file is_import_reachable memoization cache ───────────────
+ *
+ * The hot path on kubernetes spends ~50% of resolve_calls CPU in
+ * is_import_reachable's O(candidates × imports × strstr) scan. The
+ * SAME candidate_qn is re-evaluated dozens of times per file because
+ * the same callee_name appears in multiple call sites and each lookup
+ * re-checks all candidates for that name.
+ *
+ * Cache life-cycle is per-FILE (because import_vals changes between
+ * files). resolve_file_calls calls _begin at file entry and _end at
+ * file exit. Thread-local so each worker has its own cache without
+ * contention. */
+static CBM_TLS CBMHashTable *_reach_cache = NULL;
+
+/* Sentinels stored as values in the cache. NULL means "not cached".
+ * We need two distinct non-NULL pointers to encode true/false. */
+#define REACH_CACHE_TRUE ((void *)(uintptr_t)1)
+#define REACH_CACHE_FALSE ((void *)(uintptr_t)2)
+
+static void reach_cache_free_key(const char *key, void *val, void *ud) {
+    (void)val;
+    (void)ud;
+    free((char *)key);
+}
+
+void cbm_registry_reach_cache_begin(int estimated_capacity) {
+    if (_reach_cache) {
+        /* Defensive: caller forgot to call _end. Clear and reuse. */
+        cbm_ht_foreach(_reach_cache, reach_cache_free_key, NULL);
+        cbm_ht_clear(_reach_cache);
+        return;
+    }
+    if (estimated_capacity < 16)
+        estimated_capacity = 16;
+    _reach_cache = cbm_ht_create((uint32_t)estimated_capacity);
+}
+
+void cbm_registry_reach_cache_end(void) {
+    if (!_reach_cache)
+        return;
+    cbm_ht_foreach(_reach_cache, reach_cache_free_key, NULL);
+    cbm_ht_free(_reach_cache);
+    _reach_cache = NULL;
+}
+
+/* ── Per-file import-map prefix → module-QN hash ──────────────────
+ *
+ * resolve_import_map does a linear strcmp scan over the per-file
+ * import list for every call (and every usage, throw, rw, def). On
+ * kubernetes typical files have 20-30 imports and ~200 calls. That's
+ * 4000-6000 strcmps per file × 20K files = ~80M strcmps.
+ *
+ * Build a hash from prefix → module_qn ONCE per file at file entry.
+ * Each lookup becomes O(1). Keys and values are BORROWED from the
+ * caller's import_map — they outlive the cache scope. */
+static CBM_TLS CBMHashTable *_import_map_cache = NULL;
+
+void cbm_registry_import_map_cache_begin(const char **keys, const char **vals, int count) {
+    if (_import_map_cache) {
+        cbm_ht_free(_import_map_cache);
+        _import_map_cache = NULL;
+    }
+    if (!keys || !vals || count <= 0)
+        return;
+    _import_map_cache = cbm_ht_create((uint32_t)count * 2u + 8u);
+    if (!_import_map_cache)
+        return;
+    for (int i = 0; i < count; i++) {
+        if (keys[i] && vals[i]) {
+            cbm_ht_set(_import_map_cache, keys[i], (void *)(uintptr_t)vals[i]);
+        }
+    }
+}
+
+void cbm_registry_import_map_cache_end(void) {
+    if (!_import_map_cache)
+        return;
+    /* Keys/values borrowed from caller — no free callback needed. */
+    cbm_ht_free(_import_map_cache);
+    _import_map_cache = NULL;
+}
+
+/* ── Per-file full-result cache for cbm_registry_resolve ──────────
+ *
+ * THE big one: 98.7% of resolve_calls CPU on kubernetes lives inside
+ * cbm_registry_resolve's strategy chain (suffix_match iterating
+ * hundreds of candidates per common name like "Get"/"Add"/"New"
+ * × 1M LSP-miss calls = ~800s of work).
+ *
+ * Since module_qn is CONSTANT per file, the resolution for a given
+ * callee_name within a file is also constant — same name resolves
+ * to the same QN every time. Cache the full cbm_resolution_t result
+ * keyed by callee_name; first lookup does the full chain, repeats
+ * are O(1). On K8s a typical file has ~200 calls but only ~50
+ * unique callee_names → ~75% hit rate → ~75% of the resolve cost
+ * eliminated. */
+typedef struct {
+    cbm_resolution_t res;
+} resolve_cache_entry_t;
+
+static CBM_TLS CBMHashTable *_resolve_cache = NULL;
+/* Entries are malloc'd; keys are strdup'd. Both freed in _end. */
+
+static void resolve_cache_free_entry(const char *key, void *val, void *ud) {
+    (void)ud;
+    free((char *)key);
+    free(val);
+}
+
+void cbm_registry_resolve_cache_begin(int estimated_capacity) {
+    if (_resolve_cache) {
+        cbm_ht_foreach(_resolve_cache, resolve_cache_free_entry, NULL);
+        cbm_ht_free(_resolve_cache);
+        _resolve_cache = NULL;
+    }
+    if (estimated_capacity < 32)
+        estimated_capacity = 32;
+    _resolve_cache = cbm_ht_create((uint32_t)estimated_capacity);
+}
+
+void cbm_registry_resolve_cache_end(void) {
+    if (!_resolve_cache)
+        return;
+    cbm_ht_foreach(_resolve_cache, resolve_cache_free_entry, NULL);
+    cbm_ht_free(_resolve_cache);
+    _resolve_cache = NULL;
+}
+
 /* Check if candidate's module prefix appears in import map values.
- * Uses stack buffer to avoid malloc/free per call in hot resolution loop. */
+ * Uses stack buffer to avoid malloc/free per call in hot resolution loop.
+ * Per-file memoization via TLS cache: repeated lookups of the same
+ * candidate_qn (same name appears in many call sites) become O(1)
+ * after the first computation. */
 static bool is_import_reachable(const char *candidate_qn, const char **import_vals,
                                 int import_count) {
+    if (_reach_cache) {
+        void *cached = cbm_ht_get(_reach_cache, candidate_qn);
+        if (cached == REACH_CACHE_TRUE)
+            return true;
+        if (cached == REACH_CACHE_FALSE)
+            return false;
+    }
+
     char cand_mod[CBM_SZ_512];
     const char *last = strrchr(candidate_qn, '.');
     if (last) {
@@ -165,12 +305,21 @@ static bool is_import_reachable(const char *candidate_qn, const char **import_va
     } else {
         snprintf(cand_mod, sizeof(cand_mod), "%s", candidate_qn);
     }
+    bool reachable = false;
     for (int i = 0; i < import_count; i++) {
         if (strstr(cand_mod, import_vals[i]) || strstr(import_vals[i], cand_mod)) {
-            return true;
+            reachable = true;
+            break;
         }
     }
-    return false;
+
+    if (_reach_cache) {
+        char *kdup = strdup(candidate_qn);
+        if (kdup) {
+            cbm_ht_set(_reach_cache, kdup, reachable ? REACH_CACHE_TRUE : REACH_CACHE_FALSE);
+        }
+    }
+    return reachable;
 }
 
 /* Scale confidence inversely with candidate count. */
@@ -325,12 +474,17 @@ static cbm_resolution_t resolve_import_map(const cbm_registry_t *r, const char *
         return empty_result();
     }
 
-    /* Find prefix in import map keys */
+    /* Find prefix in import map keys. Prefer the per-file TLS hash
+     * cache (O(1)) over the linear scan when available. */
     const char *resolved = NULL;
-    for (int i = 0; i < map_count; i++) {
-        if (strcmp(keys[i], prefix) == 0) {
-            resolved = vals[i];
-            break;
+    if (_import_map_cache) {
+        resolved = (const char *)cbm_ht_get(_import_map_cache, prefix);
+    } else {
+        for (int i = 0; i < map_count; i++) {
+            if (strcmp(keys[i], prefix) == 0) {
+                resolved = vals[i];
+                break;
+            }
         }
     }
     if (!resolved) {
@@ -467,6 +621,17 @@ cbm_resolution_t cbm_registry_resolve(const cbm_registry_t *r, const char *calle
         return empty_result();
     }
 
+    /* Per-file cache: same callee_name in N call sites → 1 chain walk
+     * + N-1 O(1) hash hits. module_qn is constant per file so the
+     * cache key only needs callee_name. */
+    if (_resolve_cache) {
+        resolve_cache_entry_t *cached =
+            (resolve_cache_entry_t *)cbm_ht_get(_resolve_cache, callee_name);
+        if (cached) {
+            return cached->res;
+        }
+    }
+
     /* Split callee: "pkg.Func" → prefix="pkg", suffix="Func" */
     char prefix[CBM_SZ_256] = {0};
     const char *suffix = NULL;
@@ -486,18 +651,30 @@ cbm_resolution_t cbm_registry_resolve(const cbm_registry_t *r, const char *calle
     /* Strategy 1: import map */
     cbm_resolution_t res =
         resolve_import_map(r, prefix, suffix, import_map_keys, import_map_vals, import_map_count);
-    if (res.qualified_name && res.qualified_name[0]) {
-        return res;
+    if (!(res.qualified_name && res.qualified_name[0])) {
+        /* Strategy 2: same module */
+        res = resolve_same_module(r, callee_name, suffix, module_qn);
+    }
+    if (!(res.qualified_name && res.qualified_name[0])) {
+        /* Strategy 3+4: name lookup */
+        res = resolve_name_lookup(r, callee_name, module_qn, import_map_vals, import_map_count);
     }
 
-    /* Strategy 2: same module */
-    res = resolve_same_module(r, callee_name, suffix, module_qn);
-    if (res.qualified_name && res.qualified_name[0]) {
-        return res;
+    /* Cache the result (including empty — caching the negative answer
+     * is just as valuable; same name asks the same question). */
+    if (_resolve_cache) {
+        resolve_cache_entry_t *e = (resolve_cache_entry_t *)malloc(sizeof(*e));
+        if (e) {
+            e->res = res;
+            char *kdup = strdup(callee_name);
+            if (kdup) {
+                cbm_ht_set(_resolve_cache, kdup, e);
+            } else {
+                free(e);
+            }
+        }
     }
-
-    /* Strategy 3+4: name lookup */
-    return resolve_name_lookup(r, callee_name, module_qn, import_map_vals, import_map_count);
+    return res;
 }
 
 /* ── Fuzzy Resolve ──────────────────────────────────────────────── */

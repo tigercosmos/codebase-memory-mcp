@@ -170,8 +170,8 @@ while IFS= read -r match; do
     file=$(echo "$match" | cut -d: -f1)
     relfile="${file#"$ROOT/"}"
     case "$relfile" in
-        src/cli/cli.c|src/store/store.c|src/pipeline/*.c|src/foundation/log.c|src/ui/http_server.c|src/ui/config.c|src/mcp/mcp.c)
-            ;; # Known safe
+        src/cli/cli.c|src/store/store.c|src/pipeline/*.c|src/foundation/log.c|src/foundation/diagnostics.c|src/ui/http_server.c|src/ui/config.c|src/mcp/mcp.c)
+            ;; # Known safe (diagnostics.c: atomic .tmp+rename metrics dump to configured path)
         *)
             echo "REVIEW: ${match}"
             echo "  -> Unexpected fopen(\"w\") in ${relfile}"
@@ -238,10 +238,14 @@ if [ -f "$MCP_FILE" ]; then
     # - get_code_snippet: reads source via read_file_lines (path-contained)
     # - manage_adr: reads/writes ADR files
     # - detect_changes: reads git diff output
+    # - update check: reads the version-check HTTP response (fixed buffer)
+    # - HTTP transport: reads the incoming request body (content-length bound)
     # Count fopen/fread calls and compare against expected
     FOPEN_COUNT=$(grep -c 'fopen\|fread\|read_file' "$MCP_FILE" 2>/dev/null || echo "0")
-    # Known count as of v0.5.5: update this when legitimate reads are added
-    EXPECTED_MAX=12
+    # Update this when legitimate reads are added. 13 reads audited as of the
+    # search/ADR/Windows-support commits — all path-contained or transport
+    # reads, no new exfiltration surface.
+    EXPECTED_MAX=13
     if [ "$FOPEN_COUNT" -gt "$EXPECTED_MAX" ]; then
         echo "REVIEW: src/mcp/mcp.c has $FOPEN_COUNT file read operations (expected max $EXPECTED_MAX)"
         echo "  New file reads in MCP tool handlers must be reviewed for data exfiltration risk."

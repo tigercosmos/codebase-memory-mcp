@@ -34,7 +34,8 @@ static inline void ts_nstack_push(TSNodeStack *s, CBMArena *arena, TSNode node) 
     if (s->count >= s->cap) {
         int new_cap = s->cap ? s->cap * 2 : 512;
         TSNode *new_items = (TSNode *)cbm_arena_alloc(arena, (size_t)new_cap * sizeof(TSNode));
-        if (!new_items) return; /* OOM: best-effort, stop growing */
+        if (!new_items)
+            return; /* OOM: best-effort, stop growing */
         if (s->items && s->count > 0) {
             memcpy(new_items, s->items, (size_t)s->count * sizeof(TSNode));
         }
@@ -48,6 +49,38 @@ static inline void ts_nstack_push(TSNodeStack *s, CBMArena *arena, TSNode node) 
 /* Pop a node from the stack. Caller must check s->count > 0. */
 static inline TSNode ts_nstack_pop(TSNodeStack *s) {
     return s->items[--s->count];
+}
+
+/*
+ * Push all children of `node` so they POP in forward (source) order — a drop-in
+ * replacement for the common idiom:
+ *     for (int i = (int)count - 1; i >= 0; i--) ts_nstack_push(s, a, ts_node_child(node, i));
+ *
+ * That idiom calls ts_node_child(node, i) once per index, and ts_node_child is
+ * O(i) in tree-sitter (it walks the child iterator from the first child each
+ * time). Over a node with N children that is O(N^2) — catastrophic on a program
+ * root holding hundreds of thousands of top-level nodes (e.g. fixture/generated
+ * files). This helper enumerates children in a single O(N) cursor pass, then
+ * reverses the just-pushed segment so pop order is identical to the old idiom.
+ */
+static inline void ts_nstack_push_children(TSNodeStack *s, CBMArena *arena, TSNode node) {
+    int base = s->count;
+    TSTreeCursor cursor = ts_tree_cursor_new(node);
+    if (ts_tree_cursor_goto_first_child(&cursor)) {
+        do {
+            ts_nstack_push(s, arena, ts_tree_cursor_current_node(&cursor));
+        } while (ts_tree_cursor_goto_next_sibling(&cursor));
+    }
+    ts_tree_cursor_delete(&cursor);
+    /* Reverse [base, count) so the first child pops first (forward order). */
+    int lo = base, hi = s->count - 1;
+    while (lo < hi) {
+        TSNode tmp = s->items[lo];
+        s->items[lo] = s->items[hi];
+        s->items[hi] = tmp;
+        lo++;
+        hi--;
+    }
 }
 
 #endif /* CBM_EXTRACT_NODE_STACK_H */

@@ -45,6 +45,12 @@ int cbm_count_branching(TSNode node, const char **branching_types);
 // Is this a module-level node? (not nested inside function/class body)
 bool cbm_is_module_level(TSNode node, CBMLanguage lang);
 
+// Same check, but the node's PARENT is supplied directly — avoids the
+// O(n) ts_node_parent rescan. Use at call sites iterating a known
+// parent's children (the common case). `parent` is the parent of the
+// node being classified.
+bool cbm_is_module_level_p(TSNode parent, CBMLanguage lang);
+
 // --- FQN computation ---
 
 // Compute qualified name: project.rel_path_parts.name

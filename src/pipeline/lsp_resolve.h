@@ -45,8 +45,8 @@
  * the textual callee_name as the last dot-separated segment. The
  * pointer returned aliases into `arr` and stays valid as long as the
  * underlying CBMFileResult is alive. */
-static inline const CBMResolvedCall *
-cbm_pipeline_find_lsp_resolution(const CBMResolvedCallArray *arr, const CBMCall *call) {
+static inline const CBMResolvedCall *cbm_pipeline_find_lsp_resolution(
+    const CBMResolvedCallArray *arr, const CBMCall *call) {
     if (!arr || arr->count == 0 || !call) {
         return NULL;
     }
@@ -92,9 +92,9 @@ cbm_pipeline_find_lsp_resolution(const CBMResolvedCallArray *arr, const CBMCall 
  * external/unknown and the caller drops the edge — same as today.
  *
  * Returns the matching node, or NULL if neither lookup hits. */
-static inline const cbm_gbuf_node_t *
-cbm_pipeline_lsp_target_node(const cbm_gbuf_t *gbuf, const char *project_name,
-                             const char *callee_qn) {
+static inline const cbm_gbuf_node_t *cbm_pipeline_lsp_target_node(const cbm_gbuf_t *gbuf,
+                                                                  const char *project_name,
+                                                                  const char *callee_qn) {
     if (!gbuf || !callee_qn) {
         return NULL;
     }

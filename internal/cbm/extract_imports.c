@@ -1,7 +1,7 @@
 #include "cbm.h"
 #include "arena.h" // CBMArena, cbm_arena_strdup/strndup/sprintf
 #include "helpers.h"
-#include "lang_specs.h" // CBMLangSpec, CBMEmbeddedLangSpec, cbm_lang_spec, cbm_ts_language
+#include "lang_specs.h"      // CBMLangSpec, CBMEmbeddedLangSpec, cbm_lang_spec, cbm_ts_language
 #include "tree_sitter/api.h" // TSNode, ts_node_*
 #include "foundation/constants.h"
 #include "extract_node_stack.h"
@@ -436,10 +436,7 @@ static void walk_es_imports(CBMExtractCtx *ctx, TSNode root) {
         }
 
         if (push_children) {
-            uint32_t count = ts_node_child_count(node);
-            for (int i = (int)count - SKIP_ONE; i >= 0; i--) {
-                ts_nstack_push(&stack, ctx->arena, ts_node_child(node, (uint32_t)i));
-            }
+            ts_nstack_push_children(&stack, ctx->arena, node);
         }
     }
 }
@@ -836,10 +833,7 @@ static void walk_wolfram_imports(CBMExtractCtx *ctx, TSNode root) {
             process_wolfram_needs(ctx, node);
         }
 
-        uint32_t count = ts_node_child_count(node);
-        for (int i = (int)count - SKIP_ONE; i >= 0; i--) {
-            ts_nstack_push(&stack, ctx->arena, ts_node_child(node, (uint32_t)i));
-        }
+        ts_nstack_push_children(&stack, ctx->arena, node);
     }
 }
 

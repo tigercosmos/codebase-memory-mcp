@@ -32,6 +32,16 @@ void cbm_service_patterns_init(void);
  * "project.venv.requests.api.get"). Import-alias transparent. */
 cbm_svc_kind_t cbm_service_pattern_match(const char *resolved_qn);
 
+/* Per-worker TLS cache for cbm_service_pattern_match results. The
+ * pattern matcher runs once per resolved CALL edge in emit_service_
+ * edge — that's 6 pattern lists × ~30 patterns × strstr per call ≈
+ * ~180 strstrs per call. The same resolved QN repeats across most of
+ * the call edges in a project (e.g. "fmt.Errorf"), so caching turns
+ * a linear pattern-list scan into one hash lookup. Call _begin once
+ * per worker thread before the resolve loop and _end at the end. */
+void cbm_service_pattern_cache_begin(void);
+void cbm_service_pattern_cache_end(void);
+
 /* Get the HTTP method from the callee name suffix (e.g., ".get" → "GET").
  * Returns NULL if method cannot be inferred. */
 const char *cbm_service_pattern_http_method(const char *callee_name);

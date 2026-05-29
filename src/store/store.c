@@ -445,7 +445,7 @@ static void regex_free_cb(void *p) {
 static void sqlite_regexp(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     (void)argc;
     const char *pattern = (const char *)sqlite3_value_text(argv[0]);
-    const char *text    = (const char *)sqlite3_value_text(argv[SKIP_ONE]);
+    const char *text = (const char *)sqlite3_value_text(argv[SKIP_ONE]);
     if (!pattern || !text) {
         sqlite3_result_int(ctx, 0);
         return;
@@ -454,7 +454,10 @@ static void sqlite_regexp(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
     cbm_regex_t *re = (cbm_regex_t *)sqlite3_get_auxdata(ctx, 0);
     if (!re) {
         re = malloc(sizeof(cbm_regex_t));
-        if (!re) { sqlite3_result_error_nomem(ctx); return; }
+        if (!re) {
+            sqlite3_result_error_nomem(ctx);
+            return;
+        }
         if (cbm_regcomp(re, pattern, CBM_REG_EXTENDED | CBM_REG_NOSUB) != 0) {
             free(re);
             sqlite3_result_error(ctx, "invalid regex", CBM_NOT_FOUND);
@@ -470,7 +473,7 @@ static void sqlite_regexp(sqlite3_context *ctx, int argc, sqlite3_value **argv) 
 static void sqlite_iregexp(sqlite3_context *ctx, int argc, sqlite3_value **argv) {
     (void)argc;
     const char *pattern = (const char *)sqlite3_value_text(argv[0]);
-    const char *text    = (const char *)sqlite3_value_text(argv[SKIP_ONE]);
+    const char *text = (const char *)sqlite3_value_text(argv[SKIP_ONE]);
     if (!pattern || !text) {
         sqlite3_result_int(ctx, 0);
         return;
@@ -479,7 +482,10 @@ static void sqlite_iregexp(sqlite3_context *ctx, int argc, sqlite3_value **argv)
     cbm_regex_t *re = (cbm_regex_t *)sqlite3_get_auxdata(ctx, 0);
     if (!re) {
         re = malloc(sizeof(cbm_regex_t));
-        if (!re) { sqlite3_result_error_nomem(ctx); return; }
+        if (!re) {
+            sqlite3_result_error_nomem(ctx);
+            return;
+        }
         if (cbm_regcomp(re, pattern, CBM_REG_EXTENDED | CBM_REG_NOSUB | CBM_REG_ICASE) != 0) {
             free(re);
             sqlite3_result_error(ctx, "invalid regex", CBM_NOT_FOUND);
@@ -675,12 +681,11 @@ bool cbm_store_check_integrity(cbm_store_t *s) {
     if (ok) {
         /* Check that root_path in projects table starts with '/' or a drive letter.
          * Corrupt DBs often have numeric strings like "826" in root_path. */
-        rc = sqlite3_prepare_v2(
-            s->db,
-            "SELECT root_path FROM projects WHERE root_path != '' "
-            "AND NOT (substr(root_path, 1, 1) = '/' "
-            "OR (substr(root_path, 1, 1) BETWEEN 'A' AND 'Z')) LIMIT 1;",
-            CBM_NOT_FOUND, &stmt, NULL);
+        rc = sqlite3_prepare_v2(s->db,
+                                "SELECT root_path FROM projects WHERE root_path != '' "
+                                "AND NOT (substr(root_path, 1, 1) = '/' "
+                                "OR (substr(root_path, 1, 1) BETWEEN 'A' AND 'Z')) LIMIT 1;",
+                                CBM_NOT_FOUND, &stmt, NULL);
         if (rc == SQLITE_OK) {
             if (sqlite3_step(stmt) == SQLITE_ROW) {
                 const char *bad_path = (const char *)sqlite3_column_text(stmt, 0);
@@ -2171,7 +2176,7 @@ typedef struct {
  * Freed in one shot after both statements are finalized. */
 typedef struct {
     char *ptrs[ST_LIKE_POOL_MAX];
-    int   count;
+    int count;
 } search_like_pool_t;
 
 static void like_pool_add(search_like_pool_t *pool, char *ptr) {
@@ -2276,16 +2281,17 @@ static void where_add_regex(char *where, int where_sz, int *wlen, int *nparams,
  * The idx_nodes_name index satisfies LIKE '%literal%', cutting the rows that
  * reach the (more expensive) iregexp call to only those containing the literal.
  * cbm_extract_like_hints bails on alternation, so no false negatives. */
-static void where_add_like_hints(const char *column, const char *pattern, char *where,
-                                  int where_sz, int *wlen, int *nparams, search_bind_t *binds,
-                                  int *bind_idx, search_like_pool_t *pool) {
+static void where_add_like_hints(const char *column, const char *pattern, char *where, int where_sz,
+                                 int *wlen, int *nparams, search_bind_t *binds, int *bind_idx,
+                                 search_like_pool_t *pool) {
     char *hints[ST_LIKE_HINT_MAX];
     int nhints = cbm_extract_like_hints(pattern, hints, ST_LIKE_HINT_MAX);
     char bind_buf[CBM_SZ_64];
     for (int i = 0; i < nhints; i++) {
         char *lp = make_like_hint(hints[i]);
         free(hints[i]);
-        if (!lp) continue;
+        if (!lp)
+            continue;
         like_pool_add(pool, lp);
         snprintf(bind_buf, sizeof(bind_buf), "%s LIKE ?%d", column, *bind_idx + SKIP_ONE);
         *wlen = where_append(where, where_sz, *wlen, nparams, bind_buf);
@@ -2310,14 +2316,14 @@ static int search_where_basic(const cbm_search_params_t *params, char *where, in
         where_bind_text(binds, bind_idx, params->label);
     }
     if (params->name_pattern) {
-        where_add_like_hints("n.name", params->name_pattern, where, where_sz, wlen, nparams,
-                             binds, bind_idx, pool);
+        where_add_like_hints("n.name", params->name_pattern, where, where_sz, wlen, nparams, binds,
+                             bind_idx, pool);
         where_add_regex(where, where_sz, wlen, nparams, binds, bind_idx, "n.name",
                         params->name_pattern, params->case_sensitive);
     }
     if (params->qn_pattern) {
-        where_add_like_hints("n.qualified_name", params->qn_pattern, where, where_sz, wlen,
-                             nparams, binds, bind_idx, pool);
+        where_add_like_hints("n.qualified_name", params->qn_pattern, where, where_sz, wlen, nparams,
+                             binds, bind_idx, pool);
         where_add_regex(where, where_sz, wlen, nparams, binds, bind_idx, "n.qualified_name",
                         params->qn_pattern, params->case_sensitive);
     }

@@ -102,6 +102,20 @@ void cbm_run_py_lsp_cross(
     TSTree* cached_tree,           // NULL = parse internally
     CBMResolvedCallArray* out);
 
+/* Tier 2: pre-built per-language registry (mirrors Go pilot).
+ * Filters all_defs to Python entries, builds + finalizes once. */
+CBMTypeRegistry* cbm_py_build_cross_registry(
+    CBMArena* arena, CBMLSPDef* defs, int def_count);
+
+void cbm_run_py_lsp_cross_with_registry(
+    CBMArena* arena,
+    const char* source, int source_len,
+    const char* module_qn,
+    CBMTypeRegistry* reg,          // pre-built, finalized, READ-ONLY
+    const char** import_names, const char** import_qns, int import_count,
+    TSTree* cached_tree,
+    CBMResolvedCallArray* out);
+
 // --- Batch cross-file LSP ---
 
 typedef struct {

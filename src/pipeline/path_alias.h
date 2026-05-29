@@ -79,8 +79,8 @@ void cbm_path_alias_collection_free(cbm_path_alias_collection_t *coll);
 /* Pick the nearest ancestor scope for a file path that is relative to the
  * repo root. Returns the scope's alias map, or NULL if no scope applies.
  * The returned pointer is owned by the collection. */
-const cbm_path_alias_map_t *cbm_path_alias_find_for_file(
-    const cbm_path_alias_collection_t *coll, const char *rel_path);
+const cbm_path_alias_map_t *cbm_path_alias_find_for_file(const cbm_path_alias_collection_t *coll,
+                                                         const char *rel_path);
 
 /* Resolve module_path against map. Returns a heap-allocated repo-relative
  * path (caller frees), or NULL when no alias entry matches and no

@@ -1181,8 +1181,7 @@ static const char **extract_base_classes(CBMArena *a, TSNode node, const char *s
     for (const char **f = fields; *f; f++) {
         TSNode super = ts_node_child_by_field_name(node, *f, (uint32_t)strlen(*f));
         if (!ts_node_is_null(super)) {
-            base_count += collect_bases_from_field(a, super, source,
-                                                   bases + base_count,
+            base_count += collect_bases_from_field(a, super, source, bases + base_count,
                                                    MAX_BASES_MINUS_1 - base_count);
         }
     }
@@ -3218,7 +3217,9 @@ static void walk_variables_iter(CBMExtractCtx *ctx, TSNode root, const CBMLangSp
                 continue;
             }
             if (cbm_kind_in_set(child, spec->variable_node_types)) {
-                if (cbm_is_module_level(child, ctx->language)) {
+                /* parent of `child` is `node` (we're iterating its children) —
+                 * pass it directly to avoid the O(n) ts_node_parent rescan. */
+                if (cbm_is_module_level_p(node, ctx->language)) {
                     extract_var_names(ctx, child, spec);
                 }
             }
@@ -3247,40 +3248,50 @@ static void extract_variables(CBMExtractCtx *ctx, TSNode root, const CBMLangSpec
         return;
     }
 
-    uint32_t count = ts_node_child_count(root);
-    for (uint32_t i = 0; i < count; i++) {
-        TSNode child = ts_node_child(root, i);
-        if (ts_node_is_null(child)) {
-            continue;
-        }
+    // `root` is the file's root node (the sole caller passes ctx->root), so it
+    // is the parent of every top-level child and the module-level check is
+    // invariant across the loop — hoist it out (and it's now O(1) via _p).
+    // NB: this short-circuit relies on `root` always being the file root; if a
+    // future caller passes a non-root node, restore the per-child check.
+    if (!cbm_is_module_level_p(root, ctx->language)) {
+        return;
+    }
 
-        if (!cbm_is_module_level(child, ctx->language)) {
-            continue;
-        }
+    // Iterate top-level children via a cursor (O(n) total) instead of
+    // ts_node_child(root, i) per index, which is O(i) each → O(n²) on files
+    // with tens of thousands of top-level statements (e.g. generated/fixture
+    // files like TS's reallyLargeFile.ts, 583K lines).
+    TSTreeCursor cursor = ts_tree_cursor_new(root);
+    if (ts_tree_cursor_goto_first_child(&cursor)) {
+        do {
+            TSNode child = ts_tree_cursor_current_node(&cursor);
 
-        if (cbm_kind_in_set(child, spec->variable_node_types)) {
-            extract_var_names(ctx, child, spec);
-            continue;
-        }
-
-        // Unwrap wrapper nodes: expression_statement, export_statement, statement
-        const char *ck = ts_node_type(child);
-        if (strcmp(ck, "expression_statement") == 0 || strcmp(ck, "export_statement") == 0 ||
-            strcmp(ck, "statement") == 0) {
-            // Check inner named children for variable types
-            uint32_t nc = ts_node_named_child_count(child);
-            for (uint32_t j = 0; j < nc; j++) {
-                TSNode inner = ts_node_named_child(child, j);
-                if (cbm_kind_in_set(inner, spec->variable_node_types)) {
-                    extract_var_names(ctx, inner, spec);
-                }
-            }
-            // Also check if the wrapper itself is a variable type (e.g., PHP expression_statement)
             if (cbm_kind_in_set(child, spec->variable_node_types)) {
                 extract_var_names(ctx, child, spec);
+                continue;
             }
-        }
+
+            // Unwrap wrapper nodes: expression_statement, export_statement, statement
+            const char *ck = ts_node_type(child);
+            if (strcmp(ck, "expression_statement") == 0 || strcmp(ck, "export_statement") == 0 ||
+                strcmp(ck, "statement") == 0) {
+                // Check inner named children for variable types
+                uint32_t nc = ts_node_named_child_count(child);
+                for (uint32_t j = 0; j < nc; j++) {
+                    TSNode inner = ts_node_named_child(child, j);
+                    if (cbm_kind_in_set(inner, spec->variable_node_types)) {
+                        extract_var_names(ctx, inner, spec);
+                    }
+                }
+                // Also check if the wrapper itself is a variable type (e.g., PHP
+                // expression_statement)
+                if (cbm_kind_in_set(child, spec->variable_node_types)) {
+                    extract_var_names(ctx, child, spec);
+                }
+            }
+        } while (ts_tree_cursor_goto_next_sibling(&cursor));
     }
+    ts_tree_cursor_delete(&cursor);
 }
 
 // Extract typed struct/class fields for cross-file LSP resolution (C/C++/CUDA/Go/Java/Rust etc.)
@@ -3362,7 +3373,8 @@ static void extract_class_fields(CBMExtractCtx *ctx, TSNode class_node, const ch
          * For the nested case, the child has no "type" field directly. Detect by
          * walking named children for a variable_declaration. */
         TSNode type_node = ts_node_child_by_field_name(child, TS_FIELD("type"));
-        TSNode name_node = ts_node_is_null(type_node) ? (TSNode){0} : resolve_field_name_node(child);
+        TSNode name_node =
+            ts_node_is_null(type_node) ? (TSNode){0} : resolve_field_name_node(child);
 
         if (ts_node_is_null(type_node)) {
             uint32_t cnc = ts_node_named_child_count(child);

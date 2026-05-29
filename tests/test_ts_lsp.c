@@ -23,6 +23,7 @@
  */
 #include "test_framework.h"
 #include "cbm.h"
+#include "../src/foundation/compat.h"
 #include "lsp/ts_lsp.h"
 
 /* ── Helpers ───────────────────────────────────────────────────────────────── */
@@ -2555,13 +2556,13 @@ TEST(tslsp_baseline_vs_lsp_simple) {
         "class Conn { ping(): void {} }\n"
         "function go(c: Conn) { c.ping(); }\n";
 
-    setenv("CBM_LSP_DISABLED", "1", 1);
+    cbm_setenv("CBM_LSP_DISABLED", "1", 1);
     CBMFileResult *base = extract_ts(source);
     int br = 0, bu = 0, bt = 0;
     count_calls(base, &br, &bu, &bt);
     cbm_free_result(base);
 
-    unsetenv("CBM_LSP_DISABLED");
+    cbm_unsetenv("CBM_LSP_DISABLED");
     CBMFileResult *lsp = extract_ts(source);
     int lr = 0, lu = 0, lt = 0;
     count_calls(lsp, &lr, &lu, &lt);
@@ -2579,13 +2580,13 @@ TEST(tslsp_baseline_vs_lsp_chained) {
         "function newQ(): Q { return new Q(); }\n"
         "function go() { newQ().where('x').limit(5).execute(); }\n";
 
-    setenv("CBM_LSP_DISABLED", "1", 1);
+    cbm_setenv("CBM_LSP_DISABLED", "1", 1);
     CBMFileResult *base = extract_ts(source);
     int br = 0, bu = 0, bt = 0;
     count_calls(base, &br, &bu, &bt);
     cbm_free_result(base);
 
-    unsetenv("CBM_LSP_DISABLED");
+    cbm_unsetenv("CBM_LSP_DISABLED");
     CBMFileResult *lsp = extract_ts(source);
     int lr = 0, lu = 0, lt = 0;
     count_calls(lsp, &lr, &lu, &lt);
@@ -2601,13 +2602,13 @@ TEST(tslsp_baseline_vs_lsp_callbacks) {
         "class Box { run(): void {} }\n"
         "function go(boxes: Box[]) { boxes.map(b => b.run()).forEach(_x => {}); }\n";
 
-    setenv("CBM_LSP_DISABLED", "1", 1);
+    cbm_setenv("CBM_LSP_DISABLED", "1", 1);
     CBMFileResult *base = extract_ts(source);
     int br = 0, bu = 0, bt = 0;
     count_calls(base, &br, &bu, &bt);
     cbm_free_result(base);
 
-    unsetenv("CBM_LSP_DISABLED");
+    cbm_unsetenv("CBM_LSP_DISABLED");
     CBMFileResult *lsp = extract_ts(source);
     int lr = 0, lu = 0, lt = 0;
     count_calls(lsp, &lr, &lu, &lt);
@@ -2624,13 +2625,13 @@ TEST(tslsp_baseline_vs_lsp_narrowing) {
         "class B { pong(): void {} }\n"
         "function go(x: A | B) { if (x instanceof A) x.ping(); else x.pong(); }\n";
 
-    setenv("CBM_LSP_DISABLED", "1", 1);
+    cbm_setenv("CBM_LSP_DISABLED", "1", 1);
     CBMFileResult *base = extract_ts(source);
     int br = 0, bu = 0, bt = 0;
     count_calls(base, &br, &bu, &bt);
     cbm_free_result(base);
 
-    unsetenv("CBM_LSP_DISABLED");
+    cbm_unsetenv("CBM_LSP_DISABLED");
     CBMFileResult *lsp = extract_ts(source);
     int lr = 0, lu = 0, lt = 0;
     count_calls(lsp, &lr, &lu, &lt);

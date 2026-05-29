@@ -28,6 +28,7 @@
 #include "test_framework.h"
 #include "cbm.h"
 #include "lsp/py_lsp.h"
+#include <stdlib.h>
 #include <time.h>
 
 static const char *bench_source =
@@ -217,6 +218,13 @@ static double elapsed_ms(struct timespec t0, struct timespec t1) {
 }
 
 TEST(pylsp_bench_resolution_ratio) {
+    /* Perf benchmark: time-budgeted, so skip under CBM_SKIP_PERF (set by the
+     * CI dry-run). Under ASan+UBSan the budget is unattainable and an early
+     * assert-bail would leak the result; runs normally when perf is enabled. */
+    const char *skip = getenv("CBM_SKIP_PERF");
+    if (skip && skip[0] && skip[0] != '0') {
+        SKIP("CBM_SKIP_PERF=1 (perf benchmark)");
+    }
     int slen = (int)strlen(bench_source);
 
     struct timespec t0;

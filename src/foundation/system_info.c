@@ -101,7 +101,7 @@ static cbm_system_info_t detect_system_bsd(void) {
     return info;
 }
 
-#else /* Linux */
+#elif !defined(_WIN32) /* Linux */
 
 static cbm_system_info_t detect_system_linux(void) {
     cbm_system_info_t info;

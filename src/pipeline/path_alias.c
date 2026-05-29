@@ -20,6 +20,7 @@
 
 #include "pipeline/path_alias.h"
 
+#include "foundation/compat.h"
 #include "foundation/compat_fs.h"
 #include "foundation/constants.h"
 #include "foundation/log.h"
@@ -203,7 +204,7 @@ static cbm_path_alias_map_t *load_tsconfig_file(const char *abs_path, const char
                 const char *star = strchr(alias_pattern, '*');
                 if (star) {
                     entry->has_wildcard = true;
-                    entry->alias_prefix = strndup(alias_pattern, (size_t)(star - alias_pattern));
+                    entry->alias_prefix = cbm_strndup(alias_pattern, (size_t)(star - alias_pattern));
                     entry->alias_suffix = strdup(star + 1);
                 } else {
                     entry->has_wildcard = false;
@@ -212,7 +213,7 @@ static cbm_path_alias_map_t *load_tsconfig_file(const char *abs_path, const char
                 }
                 const char *tstar = strchr(target_pattern, '*');
                 if (tstar) {
-                    char *pre = strndup(target_pattern, (size_t)(tstar - target_pattern));
+                    char *pre = cbm_strndup(target_pattern, (size_t)(tstar - target_pattern));
                     entry->target_prefix = resolve_target_relative(dir_prefix, pre);
                     free(pre);
                     entry->target_suffix = strdup(tstar + 1);

@@ -85,7 +85,7 @@ static void signal_handler(int sig) {
 /* ── Watcher background thread ──────────────────────────────────── */
 
 static void *watcher_thread(void *arg) {
-    cbm_watcher_t *w = arg;
+    cbm_watcher_t *w = (cbm_watcher_t *)arg;
 #define WATCHER_BASE_INTERVAL_MS 5000
 
     cbm_watcher_run(w, WATCHER_BASE_INTERVAL_MS);
@@ -95,7 +95,7 @@ static void *watcher_thread(void *arg) {
 /* ── HTTP UI background thread ──────────────────────────────────── */
 
 static void *http_thread(void *arg) {
-    cbm_http_server_t *srv = arg;
+    cbm_http_server_t *srv = (cbm_http_server_t *)arg;
     cbm_http_server_run(srv);
     return NULL;
 }

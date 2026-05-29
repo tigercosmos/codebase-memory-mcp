@@ -322,9 +322,8 @@ cbm_add_cxx_library(cbm_mcp       SOURCES src/mcp/mcp.cpp)
 cbm_add_cxx_library(cbm_discover  SOURCES
     src/discover/userconfig.cpp
     src/discover/gitignore.cpp
-    src/discover/discover.cpp)
-# language.c — kept as C (same sparse designator reason as lang_specs.c).
-cbm_add_c_library(cbm_discover_language SOURCES src/discover/language.c)
+    src/discover/discover.cpp
+    src/discover/language.cpp)
 cbm_add_cxx_library(cbm_graph_buffer SOURCES src/graph_buffer/graph_buffer.cpp)
 cbm_add_cxx_library(cbm_pipeline  SOURCES
     src/pipeline/fqn.cpp
@@ -368,7 +367,7 @@ set(CBM_FIRSTPARTY_TARGETS
     cbm_extraction cbm_lang_specs
     cbm_ac_lz4 cbm_zstd_store cbm_sqlite_writer
     cbm_store cbm_cypher cbm_mcp
-    cbm_discover cbm_discover_language
+    cbm_discover
     cbm_graph_buffer
     cbm_pipeline cbm_simhash cbm_semantic cbm_traces cbm_watcher
     cbm_cli cbm_ui)

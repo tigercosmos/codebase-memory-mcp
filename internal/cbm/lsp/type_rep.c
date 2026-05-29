@@ -666,7 +666,15 @@ const CBMType* cbm_type_substitute(CBMArena* a, const CBMType* t,
     case CBM_TYPE_TYPE_PARAM: {
         for (int i = 0; type_params[i]; i++) {
             if (strcmp(t->data.type_param.name, type_params[i]) == 0) {
-                return type_args[i];
+                /* Callers (c_lsp.c) pass `deduced[8] = {NULL}` with some entries
+                 * still NULL for type params we could not deduce from call-site
+                 * args. Returning NULL here propagates through recursive
+                 * cbm_type_{pointer,reference,...} wrappers and yields a CBMType
+                 * whose data.<kind>.elem is NULL, which downstream code may
+                 * deref without guarding. Fall back to the unsubstituted
+                 * TYPE_PARAM in that case — it keeps the result NULL-safe and
+                 * later resolution simply leaves the call unresolved. */
+                return type_args[i] ? type_args[i] : t;
             }
         }
         return t; // unmatched param stays as-is

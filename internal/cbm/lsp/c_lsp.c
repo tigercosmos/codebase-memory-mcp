@@ -1787,9 +1787,16 @@ static const CBMType* c_eval_expr_type_inner(CLSPContext* ctx, TSNode node) {
                 }
             }
 
-            // Unwrap references in return type
-            if (ret->kind == CBM_TYPE_REFERENCE || ret->kind == CBM_TYPE_RVALUE_REF)
+            // Unwrap references in return type. Guard against NULL: prior
+            // substitution paths can leave ret NULL, and an unwrap step can
+            // produce a REFERENCE with a NULL elem. Companion to the
+            // cbm_type_substitute fix in type_rep.c that prevents NULL from
+            // propagating in the first place, but kept here defensively.
+            if (!ret) return cbm_type_unknown();
+            if (ret->kind == CBM_TYPE_REFERENCE || ret->kind == CBM_TYPE_RVALUE_REF) {
+                if (!ret->data.reference.elem) return cbm_type_unknown();
                 ret = ret->data.reference.elem;
+            }
             return ret;
         }
 

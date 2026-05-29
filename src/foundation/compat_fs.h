@@ -11,6 +11,11 @@
 #include <stddef.h>
 #include <stdio.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ── Directory iteration ──────────────────────────────────────── */
 
 /* Max filename length (MAX_PATH on Windows, NAME_MAX on POSIX). */
@@ -55,5 +60,9 @@ int cbm_rmdir(const char *path);
  * Returns the process exit code, or -1 on fork/exec failure.
  * POSIX: fork() + execvp(). Windows: _spawnvp(). */
 int cbm_exec_no_shell(const char *const *argv);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_COMPAT_FS_H */

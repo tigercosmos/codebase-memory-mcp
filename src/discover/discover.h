@@ -15,6 +15,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Use the existing CBMLanguage enum from extraction layer */
 #include "cbm.h"
 
@@ -112,5 +117,9 @@ int cbm_discover(const char *repo_path, const cbm_discover_opts_t *opts, cbm_fil
 
 /* Free an array of file info results. NULL-safe. */
 void cbm_discover_free(cbm_file_info_t *files, int count);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_DISCOVER_H */

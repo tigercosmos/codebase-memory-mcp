@@ -15,7 +15,12 @@
 #include "foundation/hash_table.h"
 #include "cbm.h"
 #include "lsp/go_lsp.h" /* CBMLSPDef for cbm_parallel_resolve cross-LSP inputs */
-#include <stdatomic.h>
+#include "foundation/cbm_atomic.h"
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* ── Shared pipeline constants ─────────────────────────────────── */
 
@@ -373,7 +378,7 @@ char *cbm_infra_qn(const char *project_name, const char *rel_path, const char *i
  * Caches CBMFileResult* in result_cache[file_idx] for reuse in Phase 3B/4.
  * shared_ids provides globally unique node/edge IDs across workers. */
 int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count,
-                         CBMFileResult **result_cache, _Atomic int64_t *shared_ids,
+                         CBMFileResult **result_cache, cbm_atomic_int64 *shared_ids,
                          int worker_count);
 
 /* Phase 3B: Serial registry build from cached extraction results.
@@ -396,7 +401,7 @@ struct CBMModuleDefIndex;
  * Callers cast a CBMCrossLspRegistries* (defined in pass_lsp_cross.h). */
 
 int cbm_parallel_resolve(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, int file_count,
-                         CBMFileResult **result_cache, _Atomic int64_t *shared_ids,
+                         CBMFileResult **result_cache, cbm_atomic_int64 *shared_ids,
                          int worker_count,
                          /* Cross-file LSP inputs — pre-built once by the caller and
                           * shared read-only across workers (typed non-const to match
@@ -504,5 +509,9 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
 /* Pipeline accessors for incremental use */
 const char *cbm_pipeline_repo_path(const cbm_pipeline_t *p);
 atomic_int *cbm_pipeline_cancelled_ptr(cbm_pipeline_t *p);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_PIPELINE_INTERNAL_H */

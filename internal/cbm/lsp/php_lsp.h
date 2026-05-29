@@ -9,6 +9,20 @@
 
 /* PHPLSPContext — per-file state for PHP type-aware call resolution.
  * Mirrors GoLSPContext / CLSPContext structure. */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* `use`-kind enumeration. Hoisted to file scope because an anonymous
+ * enum inside the struct below would leak its enumerators to the
+ * surrounding scope only in C, not C++. */
+typedef enum {
+    CBM_PHP_USE_CLASS = 0,
+    CBM_PHP_USE_FUNCTION,
+    CBM_PHP_USE_CONST
+} CBMPhpUseKind;
+
 typedef struct {
     CBMArena *arena;
     const char *source;
@@ -24,7 +38,7 @@ typedef struct {
      * use_kinds[i] selects whether the local maps a class, function, or const. */
     const char **use_local_names;
     const char **use_target_qns;
-    enum { CBM_PHP_USE_CLASS = 0, CBM_PHP_USE_FUNCTION, CBM_PHP_USE_CONST } *use_kinds;
+    CBMPhpUseKind *use_kinds;
     int use_count;
     int use_cap;
 
@@ -125,5 +139,9 @@ void cbm_batch_php_lsp_cross(
     CBMArena *arena,
     CBMBatchPHPLSPFile *files, int file_count,
     CBMResolvedCallArray *out);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_LSP_PHP_LSP_H */

@@ -4,6 +4,11 @@
 #include "type_rep.h"
 #include "../arena.h"
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     const char* name;
     const CBMType* type;
@@ -32,5 +37,9 @@ CBMScope* cbm_scope_push(CBMArena* a, CBMScope* current);
 CBMScope* cbm_scope_pop(CBMScope* scope);
 void cbm_scope_bind(CBMScope* scope, const char* name, const CBMType* type);
 const CBMType* cbm_scope_lookup(const CBMScope* scope, const char* name);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_LSP_SCOPE_H

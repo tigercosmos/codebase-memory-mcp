@@ -12,6 +12,11 @@
 #include "foundation/constants.h"
 #include <stddef.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ── Flags ────────────────────────────────────────────────────── */
 
 #define CBM_REG_EXTENDED 1
@@ -51,5 +56,9 @@ int cbm_regexec(const cbm_regex_t *r, const char *str, int nmatch, cbm_regmatch_
 
 /* Free compiled regex. */
 void cbm_regfree(cbm_regex_t *r);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_COMPAT_REGEX_H */

@@ -19,6 +19,11 @@
 #define CBM_ARTIFACT_META "artifact.json"
 #define CBM_ARTIFACT_DIR ".codebase-memory"
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Export quality levels */
 enum {
     CBM_ARTIFACT_FAST = 0, /* zstd -3, no index stripping (watcher path) */
@@ -45,5 +50,9 @@ bool cbm_artifact_exists(const char *repo_path);
 /* Get the git commit hash from artifact metadata. Caller must free().
  * Returns NULL if artifact doesn't exist or has no commit field. */
 char *cbm_artifact_commit(const char *repo_path);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_ARTIFACT_H */

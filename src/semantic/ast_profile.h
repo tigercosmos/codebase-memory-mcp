@@ -14,6 +14,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Forward declare tree-sitter types to avoid pulling in api.h everywhere. */
 typedef struct TSNode TSNode;
 
@@ -78,5 +83,9 @@ bool cbm_ast_profile_from_str(const char *str, cbm_ast_profile_t *out);
 /* Convert profile to a normalized float vector for cosine similarity.
  * out must have CBM_AST_PROFILE_DIMS elements. */
 void cbm_ast_profile_to_vector(const cbm_ast_profile_t *p, float *out);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_AST_PROFILE_H */

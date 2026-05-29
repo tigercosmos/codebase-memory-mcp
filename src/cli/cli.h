@@ -11,6 +11,11 @@
 
 #include <stdbool.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ── Version ──────────────────────────────────────────────────── */
 
 /* Set the version string (called from main). */
@@ -265,5 +270,9 @@ int cbm_cmd_config(int argc, char **argv);
  * with search_graph hits for Grep/Glob calls. NEVER blocks: every failure
  * path returns 0 with no stdout output. */
 int cbm_cmd_hook_augment(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_CLI_H */

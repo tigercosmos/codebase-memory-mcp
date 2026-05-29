@@ -7,6 +7,11 @@
 
 #include "store/store.h"
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Result of a cross-repo matching run. */
 typedef struct {
     int http_edges;    /* CROSS_HTTP_CALLS edges created */
@@ -28,5 +33,9 @@ typedef struct {
  * Returns result with edge counts. */
 cbm_cross_repo_result_t cbm_cross_repo_match(const char *project, const char **target_projects,
                                              int target_count);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_PASS_CROSS_REPO_H */

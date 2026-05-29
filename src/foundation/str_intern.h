@@ -12,6 +12,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct CBMInternPool CBMInternPool;
 
 /* Create a new intern pool. */
@@ -32,5 +37,9 @@ uint32_t cbm_intern_count(const CBMInternPool *pool);
 
 /* Total bytes stored (unique strings only). */
 size_t cbm_intern_bytes(const CBMInternPool *pool);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_STR_INTERN_H */

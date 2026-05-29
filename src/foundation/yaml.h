@@ -14,6 +14,11 @@
 
 #include <stdbool.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct cbm_yaml_node cbm_yaml_node_t;
 
 /* Parse a YAML string into a tree. Returns NULL on error.
@@ -42,5 +47,9 @@ int cbm_yaml_get_str_list(const cbm_yaml_node_t *root, const char *path, const c
 
 /* Check if a node at the given path exists. */
 bool cbm_yaml_has(const cbm_yaml_node_t *root, const char *path);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_YAML_H */

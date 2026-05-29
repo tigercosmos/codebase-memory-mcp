@@ -32,6 +32,11 @@
  * single '*' wildcard. The pattern is split at the wildcard so resolution
  * can match the prefix/suffix and slot the wildcard portion into the
  * target. Patterns without '*' are exact-match. */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     char *alias_prefix;  /* portion before '*' in the key   (e.g. "@/")    */
     char *alias_suffix;  /* portion after  '*' in the key   (usually "")   */
@@ -88,5 +93,9 @@ const cbm_path_alias_map_t *cbm_path_alias_find_for_file(const cbm_path_alias_co
  * .jsx) are stripped from the resolved path so the existing module-FQN
  * pipeline can consume it. */
 char *cbm_path_alias_resolve(const cbm_path_alias_map_t *map, const char *module_path);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_PATH_ALIAS_H */

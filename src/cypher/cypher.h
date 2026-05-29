@@ -16,6 +16,11 @@
 #include <stdbool.h>
 #include <store/store.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ── Token types ────────────────────────────────────────────────── */
 
 typedef enum {
@@ -310,5 +315,9 @@ int cbm_cypher_parse(const char *query, cbm_query_t **out, char **error);
 
 /* Free a query AST. */
 void cbm_query_free(cbm_query_t *q);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_CYPHER_H */

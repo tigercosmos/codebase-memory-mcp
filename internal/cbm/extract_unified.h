@@ -14,6 +14,11 @@
 
 // WalkState tracks scope context during the unified cursor walk.
 // Replaces parent-chain walks for enclosing_func_qn, inside_call, etc.
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     const char *enclosing_func_qn;  // current function QN (module_qn at top level)
     const char *enclosing_class_qn; // current class QN (NULL outside class)
@@ -45,5 +50,9 @@ void handle_type_assigns(CBMExtractCtx *ctx, TSNode node, const CBMLangSpec *spe
 // functions for calls/usages/throws/readwrites/type_refs/env_accesses/type_assigns.
 // Definitions and imports stay as separate passes (different recursion patterns).
 void cbm_extract_unified(CBMExtractCtx *ctx);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_EXTRACT_UNIFIED_H

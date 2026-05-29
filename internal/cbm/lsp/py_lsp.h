@@ -10,6 +10,11 @@
 // Lambda body record. When a lambda is assigned to a name (`fn =
 // lambda x: x.method()`), we stash its parameter list + body so the
 // next call site (`fn(arg)`) can do call-site driven inference.
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     const char* name;            // bound name, e.g. "fn"
     TSNode lambda_node;          // the lambda AST node
@@ -134,5 +139,9 @@ void cbm_batch_py_lsp_cross(
     CBMArena* arena,
     CBMBatchPyLSPFile* files, int file_count,
     CBMResolvedCallArray* out);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_LSP_PY_LSP_H

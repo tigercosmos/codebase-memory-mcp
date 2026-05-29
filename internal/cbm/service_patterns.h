@@ -11,6 +11,11 @@
 #ifndef CBM_SERVICE_PATTERNS_H
 #define CBM_SERVICE_PATTERNS_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Edge type returned by pattern match. */
 typedef enum {
     CBM_SVC_NONE = 0,      /* Not a service pattern — use normal CALLS */
@@ -54,5 +59,9 @@ const char *cbm_service_pattern_route_method(const char *callee_name);
 /* Get the broker name for an async QN (e.g., "pubsub" from a Pub/Sub QN).
  * Returns NULL if not an async pattern. */
 const char *cbm_service_pattern_broker(const char *resolved_qn);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_SERVICE_PATTERNS_H */

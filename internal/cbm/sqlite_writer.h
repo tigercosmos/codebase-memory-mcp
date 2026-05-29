@@ -5,6 +5,11 @@
 
 // --- Input structs (flat, borrowed strings) ---
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     int64_t id; // sequential ID (1..N), assigned by Go
     const char *project;
@@ -53,5 +58,9 @@ int cbm_write_db(const char *path, const char *project, const char *root_path,
                  const char *indexed_at, CBMDumpNode *nodes, int node_count, CBMDumpEdge *edges,
                  int edge_count, CBMDumpVector *vectors, int vector_count,
                  CBMDumpTokenVec *token_vecs, int token_vec_count);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_SQLITE_WRITER_H

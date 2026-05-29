@@ -7,6 +7,11 @@
 #ifndef CBM_UI_EMBEDDED_ASSETS_H
 #define CBM_UI_EMBEDDED_ASSETS_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     const char *path;          /* URL path, e.g. "/index.html" */
     const unsigned char *data; /* raw file bytes */
@@ -21,5 +26,9 @@ extern const int CBM_EMBEDDED_FILE_COUNT;
 
 /* Look up an embedded file by URL path. Returns NULL if not found. */
 const cbm_embedded_file_t *cbm_embedded_lookup(const char *path);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_UI_EMBEDDED_ASSETS_H */

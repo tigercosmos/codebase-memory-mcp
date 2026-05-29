@@ -10,6 +10,11 @@
 // embedded-imports walker locates each script_node_type in the host AST,
 // finds its content_node_type child, and re-parses that slice with the
 // embedded_language's grammar so existing extractors run on the inner AST.
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     const char *script_node_type;  // e.g. "script_element"
     const char *content_node_type; // e.g. "raw_text"
@@ -47,5 +52,9 @@ const CBMLangSpec *cbm_lang_spec(CBMLanguage lang);
 // Get the TSLanguage* for a given language. Returns NULL for unsupported.
 // These resolve at link time to grammar symbols from Go tree-sitter modules.
 const TSLanguage *cbm_ts_language(CBMLanguage lang);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_LANG_SPECS_H

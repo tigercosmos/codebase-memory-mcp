@@ -4,6 +4,11 @@
 #include "cbm.h"
 
 // Extract text of a node from source. Returns arena-allocated string.
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 char *cbm_node_text(CBMArena *a, TSNode node, const char *source);
 
 // Check if a string is a language keyword (should be skipped as callee/usage).
@@ -61,5 +66,9 @@ char *cbm_fqn_module(CBMArena *a, const char *project, const char *rel_path);
 
 // Folder QN: project.dir_parts
 char *cbm_fqn_folder(CBMArena *a, const char *project, const char *rel_dir);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_HELPERS_H

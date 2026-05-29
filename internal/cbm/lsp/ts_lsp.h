@@ -20,6 +20,11 @@
 //
 // Modes are independent: a `.tsx` file sets jsx_mode=true with js_mode=false; a `.jsx` file
 // sets both true.
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     CBMArena* arena;
     const char* source;
@@ -152,5 +157,9 @@ typedef struct {
 void cbm_batch_ts_lsp_cross(CBMArena* arena,
                             CBMBatchTSLSPFile* files, int file_count,
                             CBMResolvedCallArray* out);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_LSP_TS_LSP_H

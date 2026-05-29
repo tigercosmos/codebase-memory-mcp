@@ -37,6 +37,11 @@
 #include "pipeline/pipeline_internal.h"
 #include <stdbool.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* True iff this language has a cbm_run_X_lsp_cross resolver wired up. */
 bool cbm_pxc_has_cross_lsp(CBMLanguage lang);
 
@@ -149,5 +154,9 @@ void cbm_pxc_run_one_ts(CBMFileResult *r, const char *source, int source_len, co
                         CBMLSPDef *all_defs, int def_count, const char **imp_keys,
                         const char **imp_vals, int imp_count, bool js_mode, bool jsx_mode,
                         bool dts_mode);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_PIPELINE_PASS_LSP_CROSS_H */

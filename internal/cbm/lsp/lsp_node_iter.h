@@ -21,6 +21,11 @@
 
 /* Collect `node`'s children into an arena array (source order) via one O(n)
  * cursor pass. Returns NULL and sets *out_n=0 for a childless node or on OOM. */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 static inline TSNode* cbm_lsp_collect_children(CBMArena* arena, TSNode node, uint32_t* out_n) {
     uint32_t nc = ts_node_child_count(node);
     *out_n = 0;
@@ -38,5 +43,9 @@ static inline TSNode* cbm_lsp_collect_children(CBMArena* arena, TSNode node, uin
     *out_n = kn;
     return kids;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_LSP_NODE_ITER_H */

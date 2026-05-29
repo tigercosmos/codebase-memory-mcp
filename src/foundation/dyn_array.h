@@ -21,6 +21,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Declare a dynamic array type for a given element type. */
 #define CBM_DYN_ARRAY(T) \
     struct {             \
@@ -37,7 +42,7 @@
             void *_new = realloc((da)->items, (size_t)_new_cap * sizeof(*(da)->items)); \
             if (!_new)                                                                  \
                 break;                                                                  \
-            (da)->items = _new;                                                         \
+            (da)->items = (__typeof__((da)->items))_new;                                    \
             (da)->cap = _new_cap;                                                       \
         }                                                                               \
         (da)->items[(da)->count++] = (item);                                            \
@@ -101,5 +106,9 @@
         }                                                                      \
         (da)->count--;                                                         \
     } while (0)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_DYN_ARRAY_H */

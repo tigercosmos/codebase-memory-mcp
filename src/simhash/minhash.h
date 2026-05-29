@@ -29,6 +29,11 @@
  * 30 leaf tokens ≈ BigCloneBench standard of 50 raw source tokens. */
 #define CBM_MINHASH_MIN_NODES 30
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Default Jaccard threshold for SIMILAR_TO edge emission. */
 #define CBM_MINHASH_JACCARD_THRESHOLD 0.95
 
@@ -113,5 +118,9 @@ int cbm_lsh_query_into(const cbm_lsh_index_t *idx, const cbm_minhash_t *fp,
 
 /* Free the LSH index and all internal storage. */
 void cbm_lsh_free(cbm_lsh_index_t *idx);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_MINHASH_H */

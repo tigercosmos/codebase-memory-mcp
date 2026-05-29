@@ -9,6 +9,11 @@
 
 #include <stdbool.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Default values */
 #define CBM_UI_DEFAULT_PORT 9749
 #define CBM_UI_DEFAULT_ENABLED false
@@ -27,5 +32,9 @@ void cbm_ui_config_save(const cbm_ui_config_t *cfg);
 /* Get the config file path. Writes to buf (up to bufsz bytes).
  * Exposed for testing. */
 void cbm_ui_config_path(char *buf, int bufsz);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_UI_CONFIG_H */

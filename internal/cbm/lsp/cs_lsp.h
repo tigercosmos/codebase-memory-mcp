@@ -50,6 +50,11 @@
  *                                a single file but handled for ASP.NET-style
  *                                Program.cs files).
  */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef enum {
     CBM_CS_USING_NAMESPACE = 0,
     CBM_CS_USING_STATIC,
@@ -175,5 +180,9 @@ void cbm_batch_cs_lsp_cross(CBMArena *arena, CBMBatchCSLSPFile *files, int file_
 
 /* Register .NET BCL stdlib types and functions. Generated. */
 void cbm_csharp_stdlib_register(CBMTypeRegistry *reg, CBMArena *arena);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_LSP_CS_LSP_H */

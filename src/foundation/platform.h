@@ -15,6 +15,11 @@
 #include <stdbool.h>
 #include <stdlib.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ── Safe memory ──────────────────────────────────────────────── */
 
 /* Safe realloc: frees old pointer on failure instead of leaking it.
@@ -73,7 +78,7 @@ static inline void safe_buf_free_impl(void **buf, size_t *count) {
     do {                                                                 \
         if ((size_t)(n) >= (size_t)(cap)) {                              \
             (cap) *= (factor);                                           \
-            (arr) = safe_realloc((arr), (size_t)(cap) * sizeof(*(arr))); \
+            (arr) = (grep_match_t*)safe_realloc((arr), (size_t)(cap) * sizeof(*(arr))); \
         }                                                                \
     } while (0)
 
@@ -161,5 +166,9 @@ int64_t cbm_file_size(const char *path);
  * On Windows, converts backslashes to forward slashes.
  * On POSIX, this is a no-op. Returns the input pointer. */
 char *cbm_normalize_path_sep(char *path);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_PLATFORM_H */

@@ -11,6 +11,11 @@
 #include <stddef.h>
 #include <stdint.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ── Attribute key-value pair ─────────────────────────────────────── */
 
 typedef struct {
@@ -68,5 +73,9 @@ int64_t cbm_parse_duration(const char *start_nano, const char *end_nano);
 /* Calculate P99 from an array of int64_t values.
  * Sorts values in-place. Returns 0 for empty array. */
 int64_t cbm_calculate_p99(int64_t *values, int count);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_TRACES_H */

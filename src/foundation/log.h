@@ -13,6 +13,11 @@
 
 #include <stdint.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef enum {
     CBM_LOG_DEBUG = 0,
     CBM_LOG_INFO = 1,
@@ -52,5 +57,9 @@ void cbm_log_int(CBMLogLevel level, const char *msg, const char *key, int64_t va
 /* Optional log sink callback — called with the formatted log line. */
 typedef void (*cbm_log_sink_fn)(const char *line);
 void cbm_log_set_sink(cbm_log_sink_fn fn);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_LOG_H */

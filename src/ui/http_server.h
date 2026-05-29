@@ -12,6 +12,11 @@
 
 #include <stdbool.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct cbm_http_server cbm_http_server_t;
 
 /* Create an HTTP server on the given port.
@@ -40,5 +45,9 @@ void cbm_ui_log_append(const char *line);
 
 /* Set the binary path for subprocess spawning (call from main). */
 void cbm_http_server_set_binary_path(const char *path);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_UI_HTTP_SERVER_H */

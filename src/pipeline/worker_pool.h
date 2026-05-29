@@ -12,6 +12,11 @@
 
 #include <stdbool.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Worker callback: called once per iteration with index [0..count-1]. */
 typedef void (*cbm_parallel_fn)(int idx, void *ctx);
 
@@ -28,5 +33,9 @@ typedef struct {
  * If count <= 0, this is a no-op.
  * If count <= 1 or workers <= 1, runs single-threaded. */
 void cbm_parallel_for(int count, cbm_parallel_fn fn, void *ctx, cbm_parallel_for_opts_t opts);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_WORKER_POOL_H */

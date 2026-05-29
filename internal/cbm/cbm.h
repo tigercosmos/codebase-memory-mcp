@@ -8,6 +8,11 @@
 
 // Language enum mirrors lang.Language in Go.
 // Order must match lang_specs.c tables.
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef enum {
     CBM_LANG_GO = 0,
     CBM_LANG_PYTHON,
@@ -564,5 +569,9 @@ void cbm_extract_unified(CBMExtractCtx *ctx);
 
 // K8s / Kustomize semantic extractor (called when language is CBM_LANG_K8S or CBM_LANG_KUSTOMIZE).
 void cbm_extract_k8s(CBMExtractCtx *ctx);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_H

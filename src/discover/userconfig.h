@@ -19,6 +19,11 @@
 
 #include "cbm.h" /* CBMLanguage */
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ── Types ──────────────────────────────────────────────────────── */
 
 typedef struct {
@@ -68,5 +73,9 @@ void cbm_set_user_lang_config(const cbm_userconfig_t *cfg);
  * Called internally by cbm_language_for_extension().
  */
 const cbm_userconfig_t *cbm_get_user_lang_config(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_USERCONFIG_H */

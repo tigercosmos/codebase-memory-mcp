@@ -17,6 +17,11 @@
 #define CBM_ARENA_MAX_BLOCKS 256
 #define CBM_ARENA_DEFAULT_BLOCK_SIZE ((size_t)64 * 1024) /* 64KB */
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     char *blocks[CBM_ARENA_MAX_BLOCKS];
     size_t block_sizes[CBM_ARENA_MAX_BLOCKS]; /* per-block sizes (for stats) */
@@ -55,5 +60,9 @@ void cbm_arena_destroy(CBMArena *a);
 
 /* Return total bytes allocated (for diagnostics). */
 size_t cbm_arena_total(const CBMArena *a);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_ARENA_H */

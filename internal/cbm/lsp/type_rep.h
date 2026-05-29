@@ -6,6 +6,11 @@
 #include <stdint.h>
 
 // CBMTypeKind enumerates all type representations.
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef enum {
     CBM_TYPE_UNKNOWN = 0,
     CBM_TYPE_NAMED,       // named type: "Database", "http.Request"
@@ -223,5 +228,9 @@ const CBMType* cbm_type_resolve_alias(const CBMType* t);
 // type_args: corresponding concrete types
 const CBMType* cbm_type_substitute(CBMArena* a, const CBMType* t,
     const char** type_params, const CBMType** type_args);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_LSP_TYPE_REP_H

@@ -10,6 +10,11 @@
 #define CBM_ARENA_MAX_BLOCKS 256
 #define CBM_ARENA_DEFAULT_BLOCK_SIZE (64 * 1024) // 64KB initial
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     char *blocks[CBM_ARENA_MAX_BLOCKS];
     size_t block_sizes[CBM_ARENA_MAX_BLOCKS]; // per-block sizes (for stats)
@@ -37,5 +42,9 @@ char *cbm_arena_sprintf(CBMArena *a, const char *fmt, ...) __attribute__((format
 
 // Free all blocks. Arena is invalid after this call.
 void cbm_arena_destroy(CBMArena *a);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_ARENA_H

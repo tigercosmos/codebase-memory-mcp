@@ -11,7 +11,12 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdatomic.h>
+#include "foundation/cbm_atomic.h"
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* ── Opaque handle ──────────────────────────────────────────────── */
 
@@ -53,7 +58,7 @@ cbm_gbuf_t *cbm_gbuf_new(const char *project, const char *root_path);
  * Used for parallel extraction where multiple gbufs need unique IDs.
  * If id_source is NULL, behaves like cbm_gbuf_new(). */
 cbm_gbuf_t *cbm_gbuf_new_shared_ids(const char *project, const char *root_path,
-                                    _Atomic int64_t *id_source);
+                                    cbm_atomic_int64 *id_source);
 
 /* Free the graph buffer and all owned data. NULL-safe. */
 void cbm_gbuf_free(cbm_gbuf_t *gb);
@@ -176,5 +181,9 @@ int cbm_gbuf_flush_to_store(cbm_gbuf_t *gb, cbm_store_t *store);
  * Upserts nodes, inserts edges. Used for incremental indexing.
  * Returns 0 on success. */
 int cbm_gbuf_merge_into_store(cbm_gbuf_t *gb, cbm_store_t *store);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_GRAPH_BUFFER_H */

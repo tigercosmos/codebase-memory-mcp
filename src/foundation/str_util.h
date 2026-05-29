@@ -11,6 +11,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Join two path components with '/'. Handles trailing/leading slashes. */
 char *cbm_path_join(CBMArena *a, const char *base, const char *name);
 
@@ -79,5 +84,9 @@ bool cbm_validate_shell_arg(const char *s);
  * Writes into buf (including NUL). Returns number of chars written (excl NUL).
  * If buf is too small, output is truncated but always NUL-terminated. */
 int cbm_json_escape(char *buf, int bufsize, const char *src);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_STR_UTIL_H */

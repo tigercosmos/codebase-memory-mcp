@@ -18,6 +18,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Forward declarations */
 typedef struct cbm_store cbm_store_t;
 typedef struct cbm_gbuf cbm_gbuf_t;
@@ -195,5 +200,9 @@ cbm_fuzzy_result_t cbm_registry_fuzzy_resolve(const cbm_registry_t *r, const cha
                                               const char **import_map_vals, int import_map_count);
 
 const char *cbm_confidence_band(double score);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_PIPELINE_H */

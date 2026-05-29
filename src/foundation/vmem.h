@@ -20,6 +20,11 @@
 /* Initialize vmem with a budget = ram_fraction * total_physical_ram.
  * Thread-safe: only the first call takes effect.
  * Must be called before any cbm_vmem_alloc() calls. */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void cbm_vmem_init(double ram_fraction);
 
 /* Allocate size bytes via mmap/VirtualAlloc.
@@ -46,5 +51,9 @@ bool cbm_vmem_over_budget(void);
 /* Per-worker budget hint: budget / num_workers.
  * For monitoring/logging only — workers never block. */
 size_t cbm_vmem_worker_budget(int num_workers);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_VMEM_H */

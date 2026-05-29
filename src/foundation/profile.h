@@ -18,6 +18,11 @@
 #include <stdbool.h>
 #include <time.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Runtime-active flag. Set once by cbm_profile_init() from CBM_PROFILE env. */
 extern bool cbm_profile_active;
 
@@ -54,5 +59,9 @@ void cbm_profile_log_elapsed(const char *phase, const char *sub, const struct ti
             cbm_profile_log_elapsed((phase), (sub), &(start_var), (long)(items)); \
         }                                                                         \
     } while (0)
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_PROFILE_H */

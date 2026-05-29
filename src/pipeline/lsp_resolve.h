@@ -45,6 +45,11 @@
  * the textual callee_name as the last dot-separated segment. The
  * pointer returned aliases into `arr` and stays valid as long as the
  * underlying CBMFileResult is alive. */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 static inline const CBMResolvedCall *cbm_pipeline_find_lsp_resolution(
     const CBMResolvedCallArray *arr, const CBMCall *call) {
     if (!arr || arr->count == 0 || !call) {
@@ -118,5 +123,9 @@ static inline const cbm_gbuf_node_t *cbm_pipeline_lsp_target_node(const cbm_gbuf
     }
     return cbm_gbuf_find_by_qn(gbuf, buf);
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_PIPELINE_LSP_RESOLVE_H */

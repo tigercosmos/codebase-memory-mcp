@@ -9,7 +9,12 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <stdatomic.h>
+#include "foundation/cbm_atomic.h"
+
+
+#ifdef __cplusplus
+extern "C" {
+#endif
 
 /* Global query stats — updated by the MCP server on each tool call. */
 typedef struct {
@@ -31,5 +36,9 @@ bool cbm_diag_start(void);
 
 /* Stop the writer thread and delete the diagnostics file. */
 void cbm_diag_stop(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_DIAGNOSTICS_H */

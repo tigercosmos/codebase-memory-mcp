@@ -7,6 +7,11 @@
 #include "../cbm.h"
 
 // GoLSPContext holds state for Go expression type evaluation within a file.
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     CBMArena* arena;
     const char* source;
@@ -151,5 +156,9 @@ void cbm_batch_go_lsp_cross(
     CBMArena* arena,
     CBMBatchGoLSPFile* files, int file_count,
     CBMResolvedCallArray* out);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_LSP_GO_LSP_H

@@ -4,6 +4,11 @@
 #include <stdint.h>
 
 // Forward declaration — full struct in ac.c
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct CBMAutomaton CBMAutomaton;
 
 // Input for batch LZ4 scanning.
@@ -48,5 +53,9 @@ int cbm_ac_scan_batch(const CBMAutomaton *ac, const char *names_buf, const int *
 int cbm_ac_num_states(const CBMAutomaton *ac);
 int cbm_ac_num_patterns(const CBMAutomaton *ac);
 int cbm_ac_table_bytes(const CBMAutomaton *ac);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_AC_H

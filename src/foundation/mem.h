@@ -14,6 +14,11 @@
 /* Initialize memory budget = ram_fraction * total_physical_ram.
  * Thread-safe: only the first call takes effect.
  * Configures mimalloc options for reduced upfront memory. */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void cbm_mem_init(double ram_fraction);
 
 /* Current RSS in bytes via mi_process_info().
@@ -34,5 +39,9 @@ size_t cbm_mem_worker_budget(int num_workers);
 
 /* Return unused pages to the OS. Call between files to bound per-file peak. */
 void cbm_mem_collect(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_MEM_H */

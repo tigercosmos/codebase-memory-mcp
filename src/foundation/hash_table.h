@@ -17,6 +17,11 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Opaque — full definition lives in hash_table.c. */
 typedef struct CBMHashTable CBMHashTable;
 
@@ -53,5 +58,9 @@ void cbm_ht_foreach(const CBMHashTable *ht, cbm_ht_iter_fn fn, void *userdata);
 
 /* Clear all entries (keeps allocated memory). */
 void cbm_ht_clear(CBMHashTable *ht);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_HASH_TABLE_H */

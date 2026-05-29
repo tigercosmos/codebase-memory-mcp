@@ -11,6 +11,11 @@
 #include <stdint.h>
 #include <stdio.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ── Forward declarations ─────────────────────────────────────── */
 
 typedef struct cbm_store cbm_store_t; /* from store/store.h */
@@ -139,5 +144,9 @@ struct cbm_pipeline *cbm_mcp_server_active_pipeline(cbm_mcp_server_t *srv);
  * Writes to out_path (up to out_size bytes). Returns true on success.
  * On Windows, strips leading / from /C:/path. */
 bool cbm_parse_file_uri(const char *uri, char *out_path, int out_size);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_MCP_H */

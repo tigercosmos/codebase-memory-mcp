@@ -14,6 +14,11 @@
 #include <stdbool.h>
 #include <stddef.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ── Opaque handle ──────────────────────────────────────────────── */
 
 typedef struct cbm_store cbm_store_t;
@@ -650,5 +655,9 @@ int cbm_store_count_vectors(cbm_store_t *s, const char *project);
 /* Execute an arbitrary SQL statement (pragmas, FTS5 maintenance, etc).
  * Returns CBM_STORE_OK on success. */
 int cbm_store_exec(cbm_store_t *s, const char *sql);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_STORE_H */

@@ -8,6 +8,11 @@
 #include "go_lsp.h"  // for CBMLSPDef, CBMResolvedCallArray
 
 // CLSPContext holds state for C/C++ expression type evaluation within a file.
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     CBMArena* arena;
     const char* source;
@@ -159,5 +164,9 @@ void cbm_batch_c_lsp_cross(
     CBMArena* arena,
     CBMBatchCLSPFile* files, int file_count,
     CBMResolvedCallArray* out);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_LSP_C_LSP_H

@@ -24,6 +24,11 @@
 
 /* Install slab allocator as tree-sitter's malloc/calloc/realloc/free.
  * Must be called once before any ts_parser_new() calls. Thread-safe. */
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void cbm_slab_install(void);
 
 /* Reset the current thread's slab: all chunks become available.
@@ -48,5 +53,9 @@ void *cbm_slab_test_malloc(size_t size);
 void cbm_slab_test_free(void *ptr);
 void *cbm_slab_test_realloc(void *ptr, size_t size);
 void *cbm_slab_test_calloc(size_t count, size_t size);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_SLAB_ALLOC_H */

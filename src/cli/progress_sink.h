@@ -12,8 +12,17 @@
 
 #include <stdio.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 void cbm_progress_sink_init(FILE *out);
 void cbm_progress_sink_fini(void);
 void cbm_progress_sink_fn(const char *line);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif

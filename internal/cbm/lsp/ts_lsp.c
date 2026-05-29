@@ -30,6 +30,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include "../helpers.h"   /* cbm_node_text and friends — prototypes required since ts_lsp.c is no longer unity-built via lsp_all */
 
 #define TS_LSP_MAX_EVAL_DEPTH 64
 #define TS_LSP_FIELD_LEN(s) ((uint32_t)(sizeof(s) - 1))

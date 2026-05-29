@@ -13,6 +13,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* Forward declarations */
 typedef struct cbm_store cbm_store_t;
 
@@ -68,5 +73,9 @@ int cbm_watcher_watch_count(cbm_watcher_t *w);
 
 /* Return the adaptive poll interval (ms) for a given file count. */
 int cbm_watcher_poll_interval_ms(int file_count);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_WATCHER_H */

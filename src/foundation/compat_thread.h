@@ -9,6 +9,11 @@
 
 #include <stddef.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ── Thread ───────────────────────────────────────────────────── */
 
 #ifdef _WIN32
@@ -71,5 +76,9 @@ int cbm_aligned_alloc(void **ptr, size_t alignment, size_t size);
 
 /* Free memory from cbm_aligned_alloc. */
 void cbm_aligned_free(void *ptr);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_COMPAT_THREAD_H */

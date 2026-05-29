@@ -6,6 +6,11 @@
 
 // Decorator-derived flags (Python). Added at struct tail so existing
 // callers that memset to zero before populating other fields keep working.
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef enum {
     CBM_FUNC_FLAG_NONE         = 0,
     CBM_FUNC_FLAG_PROPERTY     = 1 << 0,  // @property -> obj.attr returns getter return
@@ -173,5 +178,9 @@ const CBMRegisteredFunc* cbm_registry_lookup_callable(const CBMTypeRegistry* reg
 // the given key type (string vs number). Returns NULL if no matching index signature.
 const CBMType* cbm_registry_lookup_index_signature(const CBMTypeRegistry* reg,
     const char* type_qn, const CBMType* key_type);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif // CBM_LSP_TYPE_REGISTRY_H

@@ -16,6 +16,11 @@
 #include "tree_sitter/api.h"
 #include <string.h> /* memcpy */
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 typedef struct {
     TSNode *items;
     int count;
@@ -82,5 +87,9 @@ static inline void ts_nstack_push_children(TSNodeStack *s, CBMArena *arena, TSNo
         hi--;
     }
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_EXTRACT_NODE_STACK_H */

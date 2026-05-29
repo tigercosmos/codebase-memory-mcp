@@ -7,6 +7,11 @@
 #ifndef CBM_CONSTANTS_H
 #define CBM_CONSTANTS_H
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ── Allocation counts ───────────────────────────────────────── */
 enum { CBM_ALLOC_ONE = 1 }; /* calloc(CBM_ALLOC_ONE, sizeof(T)) */
 
@@ -93,5 +98,9 @@ enum {
 
 /* Common offset constants (used across many files). */
 enum { SKIP_ONE = 1, PAIR_LEN = 2 };
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_CONSTANTS_H */

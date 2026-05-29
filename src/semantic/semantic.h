@@ -27,6 +27,11 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ── Configuration ───────────────────────────────────────────────── */
 
 /* Random Indexing dimension. 256 is sufficient for <500K functions. */
@@ -193,5 +198,9 @@ float cbm_sem_proximity(const char *path_a, const char *path_b);
  * Blends with mean of top-k neighbor embeddings (α=0.3). */
 void cbm_sem_diffuse(cbm_sem_vec_t *combined, const cbm_sem_vec_t *neighbors, int neighbor_count,
                      float alpha);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* CBM_SEMANTIC_H */

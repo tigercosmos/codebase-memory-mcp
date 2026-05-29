@@ -11,10 +11,19 @@
 #include <stddef.h>
 #include <stdio.h>
 
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 /* ── Thread-local storage ─────────────────────────────────────── */
-/* _Thread_local is C11 standard — works on GCC, Clang, and MSVC (2019+).
+/* _Thread_local is C11; thread_local is C++11 (same semantics).
  * __declspec(thread) is MSVC-only and doesn't work on MinGW GCC. */
+#ifdef __cplusplus
+#define CBM_TLS thread_local
+#else
 #define CBM_TLS _Thread_local
+#endif
 
 /* ── Sleep ────────────────────────────────────────────────────── */
 #ifdef _WIN32
@@ -154,6 +163,10 @@ static inline const char *cbm_tmpdir(void) {
 #define CBM_HAS_SIGACTION 0
 #else
 #define CBM_HAS_SIGACTION 1
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif /* CBM_COMPAT_H */

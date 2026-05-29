@@ -229,7 +229,8 @@ static int write_file(const char *path, const char *content) {
 }
 
 TEST(path_alias_loader_monorepo) {
-    char tmpl[] = "/tmp/cbm_palias_XXXXXX";
+    char tmpl[256];
+    snprintf(tmpl, sizeof(tmpl), "/tmp/cbm_palias_XXXXXX");
     char *root = cbm_mkdtemp(tmpl);
     ASSERT_NOT_NULL(root);
 
@@ -291,7 +292,8 @@ TEST(path_alias_loader_monorepo) {
 /* ── Loader returns NULL when no configs found ─────────────────── */
 
 TEST(path_alias_loader_no_configs) {
-    char tmpl[] = "/tmp/cbm_palias_empty_XXXXXX";
+    char tmpl[256];
+    snprintf(tmpl, sizeof(tmpl), "/tmp/cbm_palias_empty_XXXXXX");
     char *root = cbm_mkdtemp(tmpl);
     ASSERT_NOT_NULL(root);
 

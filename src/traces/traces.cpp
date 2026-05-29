@@ -11,6 +11,8 @@ enum { TRACE_PATH_SLASHES = 3, TRACE_NOT_FOUND = -1 };
 #include <stdio.h>
 #include <inttypes.h>
 
+#include <algorithm>
+
 /* ── extractServiceName ──────────────────────────────────────────── */
 
 const char *cbm_extract_service_name(const cbm_trace_resource_t *r) {
@@ -121,17 +123,11 @@ bool cbm_extract_http_info(const cbm_trace_span_t *span, const char *service_nam
 
 /* ── calculateP99 ────────────────────────────────────────────────── */
 
-static int cmp_int64(const void *a, const void *b) {
-    int64_t va = *(const int64_t *)a;
-    int64_t vb = *(const int64_t *)b;
-    return (va > vb) - (va < vb);
-}
-
 int64_t cbm_calculate_p99(int64_t *values, int count) {
     if (!values || count <= 0) {
         return 0;
     }
-    qsort(values, count, sizeof(int64_t), cmp_int64);
+    std::sort(values, values + count);
 #define P99_PERCENTILE 0.99
 
     int idx = (int)((double)count * P99_PERCENTILE);

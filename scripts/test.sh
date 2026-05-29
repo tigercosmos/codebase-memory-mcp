@@ -57,7 +57,18 @@ verify_compiler "$CC"
 # Step 1: Clean
 scripts/clean.sh
 
-# Step 2 + 3: Build and run tests (with arch prefix on macOS)
-$ARCH_PREFIX make -j"$NPROC" -f Makefile.cbm test $MAKE_ARGS
+# Step 2: Configure with ASan+UBSan (mirrors the old `make test`). $MAKE_ARGS
+# carries any VAR=VAL passthrough; CC/CXX are already exported above and fed to
+# CMake explicitly so a re-run with a different compiler reconfigures cleanly.
+CMAKE_ARGS=(-DCBM_SANITIZE=ON)
+[[ -n "${CC:-}" ]]  && CMAKE_ARGS+=(-DCMAKE_C_COMPILER="$CC")
+[[ -n "${CXX:-}" ]] && CMAKE_ARGS+=(-DCMAKE_CXX_COMPILER="$CXX")
+$ARCH_PREFIX cmake -S "$ROOT" -B "$ROOT/build/c" "${CMAKE_ARGS[@]}"
+
+# Step 3: Build the test runner
+$ARCH_PREFIX cmake --build "$ROOT/build/c" -j"$NPROC" --target test-runner
+
+# Step 4: Run the full suite from the repo root (tests use CWD-relative fixtures)
+"$ROOT/build/c/test-runner"
 
 echo "=== All tests passed ==="

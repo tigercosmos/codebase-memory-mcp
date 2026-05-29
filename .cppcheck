@@ -1,6 +1,6 @@
 # cppcheck suppressions file
 # Only universally-supported suppression IDs here.
-# Version-specific IDs go in Makefile.cbm as --suppress flags.
+# Version-specific IDs go in scripts/lint.sh as --suppress flags.
 
 # Vendored code
 *:internal/cbm/vendored/*

@@ -28,9 +28,12 @@ baseline.
 ## Current state — Phase 1 complete
 
 * Branch: `worktree-cxx23-migration`
-* Build system: **CMake** (`CMakeLists.txt` at repo root). The original
-  `Makefile.cbm` still builds and remains the source of truth for CI
-  until the build-system swap is completed (see Phase 1 closing tasks).
+* Build system: **CMake** (`CMakeLists.txt` at repo root) is now the sole
+  build system. `Makefile.cbm` has been **deleted**; the CI wrapper scripts
+  (`scripts/{build,test,lint,security}.sh`), the pre-commit hook, the Nix
+  flake, and the mingw Docker images all drive CMake. The production binary
+  target (`codebase-memory-mcp`) and a `cbm-with-ui` (`-DCBM_WITH_UI=ON`)
+  path are wired.
 * **92 first-party `.c` → `.cpp`** ports (64 in `src/`, 28 in
   `internal/cbm/`), total ~226 LOC added vs ~10 deleted across 159
   files (extern "C" wraps + atomic shim + cast inserts + one goto-init
@@ -138,12 +141,18 @@ struct memory layout.
    (`codebase-memory-mcp`) is now wired in CMake (stub-UI `cbm` variant)
    and verified to build + run. The embedded-assets `cbm-with-ui` variant
    is still not wired.
-2. Mirror `Makefile.cbm`'s `test-tsan`, `lint-tidy`, `lint-cppcheck`,
-   `lint-format`, `lint-no-suppress`, `security` targets.
-3. Delete `Makefile.cbm` and update CI
-   (`.github/workflows/*.yml`, `install.sh`, `install.ps1`,
-   `scripts/security-*.sh`, `scripts/check-nolint-whitelist.sh`) to use
-   CMake.
+2. ✅ **Done:** the lint pipeline (clang-tidy / cppcheck / clang-format /
+   NOLINT policy) moved into `scripts/lint.sh` (cppcheck now in C++23 mode),
+   and the `security` umbrella into `scripts/security.sh`. (`test-tsan` was a
+   no-op in the Makefile and was dropped.)
+3. ✅ **Done:** `Makefile.cbm` deleted. CI goes through the wrapper scripts
+   (`scripts/{build,test,lint}.sh`), which now invoke CMake; the workflows
+   call those scripts and were unchanged. `flake.nix`, `Dockerfile.mingw`,
+   `docker-compose.yml`, `smoke_guard.sh`, and the pre-commit hook were
+   repointed at CMake. **Locally verified on Linux** (build.sh + test.sh);
+   the macOS/static-musl/mingw/Nix and `--with-ui` paths are faithful
+   translations that still need a CI run to validate (clang-format/cppcheck
+   were not installed in the dev env, so lint.sh is likewise CI-pending).
 4. Re-enable `-Werror` on first-party C++ TUs (it's currently off for
    the C++23 side via `CBM_WERROR=OFF` to allow `-Wextra` warnings like
    enum-narrowing and format-truncation through). C side keeps

@@ -46,8 +46,10 @@ WORKDIR /src
 ENTRYPOINT ["/bin/bash", "-c"]
 
 # Default: cross-compile production build
-CMD ["make -j4 -f Makefile.cbm clean-c && \
-     make -j4 -f Makefile.cbm cbm \
-       CC=x86_64-w64-mingw32-clang \
-       CXX=x86_64-w64-mingw32-clang++ \
+CMD ["rm -rf build/c && \
+     cmake -S /src -B /src/build/c -DCBM_SANITIZE=OFF -DCBM_WERROR=OFF \
+       -DCMAKE_BUILD_TYPE=None -DCMAKE_C_FLAGS=-O2 -DCMAKE_CXX_FLAGS=-O2 \
+       -DCMAKE_C_COMPILER=x86_64-w64-mingw32-clang \
+       -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-clang++ && \
+     cmake --build /src/build/c -j4 --target codebase-memory-mcp \
      && echo '=== Windows cross-compile: OK ==='"]

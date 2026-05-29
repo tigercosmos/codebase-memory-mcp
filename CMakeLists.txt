@@ -477,6 +477,15 @@ if(CBM_STATIC)
     target_link_options(codebase-memory-mcp PRIVATE -static)
 endif()
 
+if(CBM_WITH_UI)
+    # Link the raw asset object files produced by scripts/embed-frontend.sh
+    # (ld -r -b binary -> build/embedded/embed_*.o), referenced by the generated
+    # embedded_assets.c. build.sh runs the embed step before configuring, so the
+    # objects exist at configure time.
+    file(GLOB CBM_EMBED_OBJS ${CMAKE_SOURCE_DIR}/build/embedded/embed_*.o)
+    target_link_libraries(codebase-memory-mcp PRIVATE ${CBM_EMBED_OBJS})
+endif()
+
 if(WIN32)
     target_link_libraries(codebase-memory-mcp PRIVATE ws2_32 psapi)
     target_link_options(codebase-memory-mcp PRIVATE

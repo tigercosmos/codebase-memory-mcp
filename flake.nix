@@ -16,15 +16,19 @@
 
           src = ./.;
 
-          nativeBuildInputs = [ pkgs.gnumake ];
+          nativeBuildInputs = [ pkgs.cmake ];
           buildInputs = [ pkgs.zlib ];
 
-          # scripts/build.sh verifies the compiler via `file`, which fails on Nix
-          # because CC is a bash wrapper script rather than a binary. Call make
-          # directly to bypass that check; the Nix stdenv already guarantees the
-          # correct compiler and target architecture.
+          # Build the production binary directly with CMake (-O2, no NDEBUG so the
+          # vendored tree-sitter scanners keep their assertions; WERROR off for the
+          # not-yet-clean C++ bodies). Bypasses scripts/build.sh, whose `file`-based
+          # compiler check fails on Nix's bash-wrapper CC; the Nix stdenv already
+          # guarantees the right compiler and target.
+          dontUseCmakeConfigure = true;
           buildPhase = ''
-            make -j$NIX_BUILD_CORES -f Makefile.cbm cbm
+            cmake -S . -B build/c -DCBM_SANITIZE=OFF -DCBM_WERROR=OFF \
+              -DCMAKE_BUILD_TYPE=None -DCMAKE_C_FLAGS=-O2 -DCMAKE_CXX_FLAGS=-O2
+            cmake --build build/c -j$NIX_BUILD_CORES --target codebase-memory-mcp
           '';
 
           installPhase = ''

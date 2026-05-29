@@ -19,7 +19,7 @@ FAILURES=0
 
 # ── Step 1: Build ─────────────────────────────────────────────────
 echo "[smoke_guard] Building project..."
-make -f "$PROJECT_ROOT/Makefile.cbm" cbm -C "$PROJECT_ROOT" --quiet 2>&1
+"$PROJECT_ROOT/scripts/build.sh" 2>&1
 if [ ! -x "$BINARY" ]; then
     echo "[smoke_guard] FAIL: binary not found at $BINARY after build" >&2
     exit 1

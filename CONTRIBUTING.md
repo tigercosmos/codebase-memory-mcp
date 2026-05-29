@@ -43,7 +43,7 @@ Runs clang-tidy, cppcheck, and clang-format. All must pass before committing (al
 ## Run Security Audit
 
 ```bash
-make -f Makefile.cbm security
+scripts/security.sh
 ```
 
 Runs 8 security layers: static allow-list audit, binary string scan, UI audit, install audit, network egress test, MCP robustness (fuzz), vendored dependency integrity, and frontend integrity.

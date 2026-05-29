@@ -64,10 +64,11 @@ services:
     volumes:
       - ..:/src
     command: >-
-      make -j4 -f Makefile.cbm clean-c &&
-      make -j4 -f Makefile.cbm build/c/test-runner
-        CC=x86_64-w64-mingw32-clang
-        CXX=x86_64-w64-mingw32-clang++ &&
+      rm -rf build/c &&
+      cmake -S /src -B /src/build/c -DCBM_SANITIZE=OFF
+        -DCMAKE_C_COMPILER=x86_64-w64-mingw32-clang
+        -DCMAKE_CXX_COMPILER=x86_64-w64-mingw32-clang++ &&
+      cmake --build /src/build/c -j4 --target test-runner &&
       echo '=== Running tests under Wine ===' &&
       WINEDEBUG=-all wine64 build/c/test-runner.exe &&
       echo '=== Windows test: OK ==='

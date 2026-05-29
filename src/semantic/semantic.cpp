@@ -1231,7 +1231,7 @@ static reverse_index_t *build_reverse_index(cbm_sem_corpus_t *corpus) {
     rev->offsets[corpus->entry_count] = running;
     /* Phase C: fill flat array. Ensure allocation size > 0 even for empty
      * corpora (avoids malloc(0) which is implementation-defined). */
-    size_t flat_bytes = (total > 0 ? (size_t)total : SKIP_ONE) * sizeof(cooccur_pos_t);
+    size_t flat_bytes = (total > 0 ? (size_t)total : (size_t)SKIP_ONE) * sizeof(cooccur_pos_t);
     rev->flat = (__typeof__(rev->flat))malloc(flat_bytes);
     if (!rev->flat) {
         free(rev->offsets);

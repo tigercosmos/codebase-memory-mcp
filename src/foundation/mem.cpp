@@ -67,7 +67,7 @@ static size_t os_rss(void) {
     }
     (void)fclose(f);
     long ps = sysconf(_SC_PAGESIZE);
-    return rss_pages * (ps > 0 ? (size_t)ps : CBM_SZ_4K);
+    return rss_pages * (ps > 0 ? (size_t)ps : (size_t)CBM_SZ_4K);
 #endif
 }
 

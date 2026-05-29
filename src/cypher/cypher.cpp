@@ -2183,7 +2183,7 @@ static void rb_init(result_builder_t *rb) {
 }
 
 static void rb_set_columns(result_builder_t *rb, const char **cols, int count) {
-    rb->columns = (__typeof__(rb->columns))malloc((count > 0 ? (size_t)count : SKIP_ONE) * sizeof(const char *));
+    rb->columns = (__typeof__(rb->columns))malloc((count > 0 ? (size_t)count : (size_t)SKIP_ONE) * sizeof(const char *));
     for (int i = 0; i < count; i++) {
         rb->columns[i] = heap_strdup(cols[i]);
     }
@@ -2195,7 +2195,7 @@ static void rb_add_row(result_builder_t *rb, const char **values) {
         rb->row_cap *= PAIR_LEN;
         rb->rows = (__typeof__(rb->rows))safe_realloc(rb->rows, rb->row_cap * sizeof(const char **));
     }
-    const char **row = (const char **)malloc((rb->col_count > 0 ? (size_t)rb->col_count : SKIP_ONE) * sizeof(const char *));
+    const char **row = (const char **)malloc((rb->col_count > 0 ? (size_t)rb->col_count : (size_t)SKIP_ONE) * sizeof(const char *));
     for (int i = 0; i < rb->col_count; i++) {
         row[i] = values[i] ? heap_strdup(values[i]) : heap_strdup("");
     }

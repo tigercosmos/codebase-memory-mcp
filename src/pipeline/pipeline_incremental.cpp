@@ -87,7 +87,7 @@ static bool *classify_files(cbm_file_info_t *files, int file_count, cbm_file_has
 
     /* Build lookup: rel_path -> stored hash */
     CBMHashTable *ht =
-        cbm_ht_create(stored_count > 0 ? (size_t)stored_count * PAIR_LEN : CBM_SZ_64);
+        cbm_ht_create(stored_count > 0 ? (size_t)stored_count * PAIR_LEN : (size_t)CBM_SZ_64);
     for (int i = 0; i < stored_count; i++) {
         cbm_ht_set(ht, stored[i].rel_path, &stored[i]);
     }

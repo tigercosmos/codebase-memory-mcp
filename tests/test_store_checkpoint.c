@@ -22,7 +22,7 @@
 TEST(checkpoint_does_not_truncate_wal) {
     enum { N_ROWS = 100, PATH_BUF = 256, PATH_BUF_EXT = 300 };
     char db_path[PATH_BUF];
-    snprintf(db_path, sizeof(db_path), "/tmp/cbm_test_ckpt_%d.db", (int)getpid());
+    snprintf(db_path, sizeof(db_path), "%s/cbm_test_ckpt_%d.db", cbm_tmpdir(), (int)getpid());
     char wal_path[PATH_BUF_EXT];
     snprintf(wal_path, sizeof(wal_path), "%s-wal", db_path);
     char shm_path[PATH_BUF_EXT];

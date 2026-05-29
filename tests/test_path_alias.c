@@ -230,7 +230,7 @@ static int write_file(const char *path, const char *content) {
 
 TEST(path_alias_loader_monorepo) {
     char tmpl[] = "/tmp/cbm_palias_XXXXXX";
-    char *root = mkdtemp(tmpl);
+    char *root = cbm_mkdtemp(tmpl);
     ASSERT_NOT_NULL(root);
 
     char sub[512];
@@ -292,7 +292,7 @@ TEST(path_alias_loader_monorepo) {
 
 TEST(path_alias_loader_no_configs) {
     char tmpl[] = "/tmp/cbm_palias_empty_XXXXXX";
-    char *root = mkdtemp(tmpl);
+    char *root = cbm_mkdtemp(tmpl);
     ASSERT_NOT_NULL(root);
 
     cbm_path_alias_collection_t *coll = cbm_load_path_aliases(root);

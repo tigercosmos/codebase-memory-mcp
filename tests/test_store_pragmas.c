@@ -66,7 +66,7 @@ TEST(mmap_size_partial_garbage_falls_back_to_default) {
 TEST(store_open_with_mmap_disabled) {
     cbm_setenv("CBM_SQLITE_MMAP_SIZE", "0", 1);
     char tmp_path[256];
-    snprintf(tmp_path, sizeof(tmp_path), "/tmp/cbm_test_pragmas_%d.db", (int)getpid());
+    snprintf(tmp_path, sizeof(tmp_path), "%s/cbm_test_pragmas_%d.db", cbm_tmpdir(), (int)getpid());
     unlink(tmp_path);
 
     cbm_store_t *s = cbm_store_open_path(tmp_path);

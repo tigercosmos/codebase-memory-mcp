@@ -61,6 +61,8 @@ enum { PP_CSHARP_M_PREFIX_LEN = 2 };
 
 #include "foundation/cbm_atomic.h"
 #include <stdint.h>
+
+#include <algorithm>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -374,16 +376,8 @@ typedef struct {
     int64_t size;
 } file_sort_entry_t;
 
-static int compare_by_size_desc(const void *a, const void *b) {
-    const file_sort_entry_t *fa = (const file_sort_entry_t*)a;
-    const file_sort_entry_t *fb = (const file_sort_entry_t*)b;
-    if (fb->size > fa->size) {
-        return SKIP_ONE;
-    }
-    if (fb->size < fa->size) {
-        return CBM_NOT_FOUND;
-    }
-    return 0;
+static bool file_size_greater(const file_sort_entry_t &a, const file_sort_entry_t &b) {
+    return a.size > b.size; /* descending by size */
 }
 
 /* ── Phase 3A: Parallel Extract ──────────────────────────────────── */
@@ -649,7 +643,7 @@ int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
         sorted[i].idx = i;
         sorted[i].size = files[i].size;
     }
-    qsort(sorted, file_count, sizeof(file_sort_entry_t), compare_by_size_desc);
+    std::sort(sorted, sorted + file_count, file_size_greater);
     CBM_PROF_END_N("parallel_extract", "2_sort_files", t_sort, file_count);
 
     /* Allocate per-worker state (cache-line aligned via posix_memalign) */

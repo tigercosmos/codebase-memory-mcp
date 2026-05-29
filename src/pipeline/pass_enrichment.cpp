@@ -10,6 +10,8 @@
 enum { ENRICH_ATTR_SKIP = 2, ENRICH_MAX_CAMEL = 16 };
 #include "pipeline/pipeline.h"
 #include <stdint.h>
+
+#include <algorithm>
 #include "pipeline/pipeline_internal.h"
 #include "graph_buffer/graph_buffer.h"
 #include "foundation/log.h"
@@ -272,11 +274,6 @@ static char *inject_decorator_tags(const char *json, char **tags, int tag_count)
     return result;
 }
 
-/* Simple string comparison for qsort */
-static int cmp_str(const void *a, const void *b) {
-    return strcmp(*(const char **)a, *(const char **)b);
-}
-
 /* Free tagged_node_t array. */
 static void free_tagged_nodes(tagged_node_t *nodes, int count) {
     for (int n = 0; n < count; n++) {
@@ -347,7 +344,8 @@ static int apply_decorator_tags(cbm_gbuf_t *gbuf, tagged_node_t *nodes, int node
         if (tag_count == 0) {
             continue;
         }
-        qsort(tag_words, tag_count, sizeof(char *), cmp_str);
+        std::sort(tag_words, tag_words + tag_count,
+                  [](const char *a, const char *b) { return strcmp(a, b) < 0; });
 
         const cbm_gbuf_node_t *gn = cbm_gbuf_find_by_qn(gbuf, nodes[n].qualified_name);
         if (!gn) {

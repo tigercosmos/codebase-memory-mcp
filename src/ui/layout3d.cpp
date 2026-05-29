@@ -16,6 +16,8 @@
 
 #include <yyjson/yyjson.h>
 
+#include <algorithm>
+
 #include <math.h>
 #include <stdlib.h>
 #include <string.h>
@@ -357,10 +359,8 @@ typedef struct {
     int idx;
 } node_id_entry_t;
 
-static int cmp_node_id_entry(const void *a, const void *b) {
-    int64_t da = ((const node_id_entry_t *)a)->id;
-    int64_t db = ((const node_id_entry_t *)b)->id;
-    return (da > db) - (da < db);
+static bool node_id_entry_less(const node_id_entry_t &a, const node_id_entry_t &b) {
+    return a.id < b.id;
 }
 
 static int find_node_index(const node_id_entry_t *map, int count, int64_t id) {
@@ -429,7 +429,7 @@ cbm_layout_result_t *cbm_layout_compute(cbm_store_t *store, const char *project,
         id_map[i].id = search_out.results[i].node.id;
         id_map[i].idx = i;
     }
-    qsort(id_map, (size_t)n, sizeof(node_id_entry_t), cmp_node_id_entry);
+    std::sort(id_map, id_map + n, node_id_entry_less);
 
     /* 3. Query edges — filter during fetch via binary search (O(e log n)) */
     int *deg = (int *)calloc((size_t)n, sizeof(int));

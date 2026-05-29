@@ -27,6 +27,8 @@
 #include "foundation/platform.h"
 
 #include <stdbool.h>
+
+#include <algorithm>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -86,34 +88,14 @@ static char *resolve_target_relative(const char *dir_prefix, const char *target)
     return result;
 }
 
-/* qsort comparator: alias entries by alias_prefix length, descending. */
-static int cmp_alias_entry_by_specificity(const void *a, const void *b) {
-    const cbm_path_alias_t *ea = (const cbm_path_alias_t*)a;
-    const cbm_path_alias_t *eb = (const cbm_path_alias_t*)b;
-    size_t la = strlen(ea->alias_prefix);
-    size_t lb = strlen(eb->alias_prefix);
-    if (lb > la) {
-        return 1;
-    }
-    if (lb < la) {
-        return -1;
-    }
-    return 0;
+/* std::sort predicate: alias entries by alias_prefix length, descending. */
+static bool alias_entry_more_specific(const cbm_path_alias_t &a, const cbm_path_alias_t &b) {
+    return strlen(a.alias_prefix) > strlen(b.alias_prefix);
 }
 
-/* qsort comparator: scopes by dir_prefix length, descending. */
-static int cmp_scope_by_specificity(const void *a, const void *b) {
-    const cbm_path_alias_scope_t *sa = (const cbm_path_alias_scope_t*)a;
-    const cbm_path_alias_scope_t *sb = (const cbm_path_alias_scope_t*)b;
-    size_t la = strlen(sa->dir_prefix);
-    size_t lb = strlen(sb->dir_prefix);
-    if (lb > la) {
-        return 1;
-    }
-    if (lb < la) {
-        return -1;
-    }
-    return 0;
+/* std::sort predicate: scopes by dir_prefix length, descending. */
+static bool scope_more_specific(const cbm_path_alias_scope_t &a, const cbm_path_alias_scope_t &b) {
+    return strlen(a.dir_prefix) > strlen(b.dir_prefix);
 }
 
 /* ── tsconfig.json / jsconfig.json loader ──────────────────────── */
@@ -229,8 +211,7 @@ static cbm_path_alias_map_t *load_tsconfig_file(const char *abs_path, const char
                              /* itoa via thread-local buffer would be tidier; keep simple */
                              "256_of_more");
             }
-            qsort(map->entries, (size_t)map->count, sizeof(cbm_path_alias_t),
-                  cmp_alias_entry_by_specificity);
+            std::sort(map->entries, map->entries + map->count, alias_entry_more_specific);
         }
     }
 
@@ -427,8 +408,7 @@ cbm_path_alias_collection_t *cbm_load_path_aliases(const char *repo_path) {
         return NULL;
     }
 
-    qsort(coll->scopes, (size_t)coll->count, sizeof(cbm_path_alias_scope_t),
-          cmp_scope_by_specificity);
+    std::sort(coll->scopes, coll->scopes + coll->count, scope_more_specific);
     return coll;
 }
 

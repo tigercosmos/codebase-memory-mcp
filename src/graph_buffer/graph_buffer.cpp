@@ -32,6 +32,8 @@ enum {
 #include "foundation/profile.h"
 #include <sqlite3.h>
 
+#include <algorithm>
+
 #include "foundation/cbm_atomic.h"
 #include <stdint.h> // int64_t
 #include <stdio.h>
@@ -1161,10 +1163,8 @@ static int64_t remap_id(const int64_t *temp_to_final, int64_t max_temp_id, int64
 }
 
 /* Build dump-ready node array with sequential IDs. Populates temp_to_final mapping. */
-static int cmp_dump_vectors_by_id(const void *a, const void *b) {
-    int64_t da = ((const CBMDumpVector *)a)->node_id;
-    int64_t db = ((const CBMDumpVector *)b)->node_id;
-    return (da > db) - (da < db);
+static bool dump_vector_id_less(const CBMDumpVector &a, const CBMDumpVector &b) {
+    return a.node_id < b.node_id;
 }
 
 static CBMDumpNode *build_dump_nodes(cbm_gbuf_t *gb, int live_count, int64_t *temp_to_final,
@@ -1275,8 +1275,8 @@ static void remap_sort_dedup_vectors(cbm_gbuf_t *gb, const int64_t *temp_to_fina
     gb->dump_vector_count = remapped;
 
     if (gb->dump_vector_count >= GB_MIN_FOR_DEDUP) {
-        qsort(gb->dump_vectors, (size_t)gb->dump_vector_count, sizeof(CBMDumpVector),
-              cmp_dump_vectors_by_id);
+        std::sort(gb->dump_vectors, gb->dump_vectors + gb->dump_vector_count,
+                  dump_vector_id_less);
         int deduped = 0;
         for (int i = 0; i < gb->dump_vector_count; i++) {
             if (i + GB_DEDUP_LOOKAHEAD < gb->dump_vector_count &&

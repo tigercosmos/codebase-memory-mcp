@@ -7,7 +7,6 @@
 
 #include "store/store.h"
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

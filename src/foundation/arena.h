@@ -17,7 +17,6 @@
 #define CBM_ARENA_MAX_BLOCKS 256
 #define CBM_ARENA_DEFAULT_BLOCK_SIZE ((size_t)64 * 1024) /* 64KB */
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

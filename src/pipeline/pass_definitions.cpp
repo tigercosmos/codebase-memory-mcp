@@ -356,10 +356,9 @@ int cbm_pipeline_pass_definitions(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t
         }
 
         /* Extract */
-        CBMFileResult *result =
-            cbm_extract_file(source, source_len, lang, ctx->project_name, rel, CBM_EXTRACT_BUDGET,
-                             cbm_cc_index_defines(ctx->cc_index, rel),
-                             cbm_cc_index_includes(ctx->cc_index, rel));
+        CBMFileResult *result = cbm_extract_file(
+            source, source_len, lang, ctx->project_name, rel, CBM_EXTRACT_BUDGET,
+            cbm_cc_index_defines(ctx->cc_index, rel), cbm_cc_index_includes(ctx->cc_index, rel));
         free(source);
 
         if (!result) {

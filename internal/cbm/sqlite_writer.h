@@ -5,7 +5,6 @@
 
 // --- Input structs (flat, borrowed strings) ---
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

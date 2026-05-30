@@ -195,7 +195,8 @@ static int find_deleted_files(const char *repo_path, cbm_file_info_t *files, int
 
     int ms_count = 0;
     int ms_cap = CBM_SZ_64;
-    cbm_file_hash_t *mode_skipped = (cbm_file_hash_t *)malloc((size_t)ms_cap * sizeof(cbm_file_hash_t));
+    cbm_file_hash_t *mode_skipped =
+        (cbm_file_hash_t *)malloc((size_t)ms_cap * sizeof(cbm_file_hash_t));
     if (!mode_skipped) {
         cbm_log_error("incremental.err", "msg", "find_deleted_files_oom_ms");
         free(deleted);
@@ -235,7 +236,8 @@ static int find_deleted_files(const char *repo_path, cbm_file_info_t *files, int
              * can correctly classify this file. */
             if (ms_count >= ms_cap) {
                 ms_cap *= PAIR_LEN;
-                cbm_file_hash_t *tmp = (cbm_file_hash_t *)realloc(mode_skipped, (size_t)ms_cap * sizeof(*tmp));
+                cbm_file_hash_t *tmp =
+                    (cbm_file_hash_t *)realloc(mode_skipped, (size_t)ms_cap * sizeof(*tmp));
                 if (!tmp) {
                     cbm_log_error("incremental.err", "msg", "find_deleted_files_realloc_oom_ms");
                     break;
@@ -575,7 +577,8 @@ int cbm_pipeline_run_incremental(cbm_pipeline_t *p, const char *db_path, cbm_fil
 
     /* Build list of changed files */
     cbm_file_info_t *changed_files =
-        (n_changed > 0) ? (cbm_file_info_t*)malloc((size_t)n_changed * sizeof(cbm_file_info_t)) : NULL;
+        (n_changed > 0) ? (cbm_file_info_t *)malloc((size_t)n_changed * sizeof(cbm_file_info_t))
+                        : NULL;
     int ci = 0;
     for (int i = 0; i < file_count; i++) {
         if (is_changed[i]) {

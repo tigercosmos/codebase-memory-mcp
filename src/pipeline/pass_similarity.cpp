@@ -112,7 +112,8 @@ static int collect_fp_entries(cbm_gbuf_t *gbuf, fp_entry_t **out_entries) {
             }
             if (count >= cap) {
                 int new_cap = cap < FP_ENTRY_INIT_CAP ? FP_ENTRY_INIT_CAP : cap * FP_ENTRY_GROW;
-                fp_entry_t *grown = (fp_entry_t *)realloc(entries, (size_t)new_cap * sizeof(fp_entry_t));
+                fp_entry_t *grown =
+                    (fp_entry_t *)realloc(entries, (size_t)new_cap * sizeof(fp_entry_t));
                 if (!grown) {
                     break;
                 }
@@ -151,7 +152,8 @@ static void sim_edge_buf_push(sim_edge_buf_t *buf, int64_t src, int64_t tgt, dou
                               bool same_file) {
     if (buf->count >= buf->cap) {
         int nc = buf->cap < SIM_EDGE_INIT_CAP ? SIM_EDGE_INIT_CAP : buf->cap * SIM_EDGE_GROW;
-        sim_deferred_edge_t *grown = (sim_deferred_edge_t *)realloc(buf->edges, (size_t)nc * sizeof(sim_deferred_edge_t));
+        sim_deferred_edge_t *grown =
+            (sim_deferred_edge_t *)realloc(buf->edges, (size_t)nc * sizeof(sim_deferred_edge_t));
         if (!grown) {
             return;
         }
@@ -174,7 +176,7 @@ typedef struct {
 enum { SIM_CAND_CAP = 4096 };
 
 static void sim_query_worker(int worker_id, void *ctx_ptr) {
-    sim_query_ctx_t *sc = (sim_query_ctx_t*)ctx_ptr;
+    sim_query_ctx_t *sc = (sim_query_ctx_t *)ctx_ptr;
     sim_edge_buf_t *my_buf = &sc->worker_bufs[worker_id];
 
     /* Thread-local candidate buffer (stack-allocated) */
@@ -270,7 +272,8 @@ int cbm_pipeline_pass_similarity(cbm_pipeline_ctx_t *ctx) {
     /* Phase 2: Build LSH index (sequential — cbm_lsh_insert mutates shared state) */
     CBM_PROF_START(t_lsh_build);
     cbm_lsh_index_t *lsh = cbm_lsh_new();
-    cbm_lsh_entry_t *lsh_entries = (cbm_lsh_entry_t *)malloc((size_t)entry_count * sizeof(cbm_lsh_entry_t));
+    cbm_lsh_entry_t *lsh_entries =
+        (cbm_lsh_entry_t *)malloc((size_t)entry_count * sizeof(cbm_lsh_entry_t));
     if (!lsh_entries) {
         free(entries);
         cbm_lsh_free(lsh);
@@ -293,9 +296,11 @@ int cbm_pipeline_pass_similarity(cbm_pipeline_ctx_t *ctx) {
      * in its own deferred buffer. Shared edge_counts is atomic.
      * Final merge into gbuf is sequential (gbuf not thread-safe). */
     CBM_PROF_START(t_query_emit);
-    std::atomic<int> *edge_counts = (std::atomic<int>*)calloc((size_t)entry_count, sizeof(std::atomic<int>));
+    std::atomic<int> *edge_counts =
+        (std::atomic<int> *)calloc((size_t)entry_count, sizeof(std::atomic<int>));
     int worker_count = cbm_default_worker_count(false);
-    sim_edge_buf_t *worker_bufs = (sim_edge_buf_t *)calloc((size_t)worker_count, sizeof(sim_edge_buf_t));
+    sim_edge_buf_t *worker_bufs =
+        (sim_edge_buf_t *)calloc((size_t)worker_count, sizeof(sim_edge_buf_t));
 
     {
         sim_query_ctx_t sc = {

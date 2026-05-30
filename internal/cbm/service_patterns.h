@@ -11,7 +11,6 @@
 #ifndef CBM_SERVICE_PATTERNS_H
 #define CBM_SERVICE_PATTERNS_H
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

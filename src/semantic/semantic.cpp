@@ -524,7 +524,8 @@ static int corpus_get_or_add(cbm_sem_corpus_t *c, const char *token) {
     }
     if (c->entry_count >= c->entry_cap) {
         int new_cap = c->entry_cap < CORPUS_INIT_CAP ? CORPUS_INIT_CAP : c->entry_cap * PAIR_LEN;
-        corpus_entry_t *grown = (corpus_entry_t *)realloc(c->entries, (size_t)new_cap * sizeof(corpus_entry_t));
+        corpus_entry_t *grown =
+            (corpus_entry_t *)realloc(c->entries, (size_t)new_cap * sizeof(corpus_entry_t));
         if (!grown) {
             return CBM_NOT_FOUND;
         }
@@ -568,11 +569,13 @@ void cbm_sem_corpus_add_doc(cbm_sem_corpus_t *corpus, const char **tokens, int c
         corpus->doc_cap = new_cap;
     }
     int doc_idx = corpus->doc_count++;
-    corpus->doc_token_ids[doc_idx] = (__typeof__(corpus->doc_token_ids[doc_idx]))malloc((size_t)count * sizeof(int));
+    corpus->doc_token_ids[doc_idx] =
+        (__typeof__(corpus->doc_token_ids[doc_idx]))malloc((size_t)count * sizeof(int));
     corpus->doc_token_counts[doc_idx] = count;
 
     /* Per-doc unique set for IDF */
-    int *seen = (int *)calloc((size_t)corpus->entry_cap + (size_t)count + CORPUS_INIT_CAP, sizeof(int));
+    int *seen =
+        (int *)calloc((size_t)corpus->entry_cap + (size_t)count + CORPUS_INIT_CAP, sizeof(int));
     int seen_count = 0;
 
     for (int i = 0; i < count; i++) {
@@ -668,7 +671,7 @@ static void batch_resolve_one_doc(batch_resolve_ctx_t *bc, int doc_index, int *s
 
 static void batch_resolve_worker(int worker_id, void *ctx_ptr) {
     (void)worker_id;
-    batch_resolve_ctx_t *bc = (batch_resolve_ctx_t*)ctx_ptr;
+    batch_resolve_ctx_t *bc = (batch_resolve_ctx_t *)ctx_ptr;
     /* Per-worker scratch for unique-per-doc tracking */
     int local_seen_cap = CBM_SEM_SEEN_INIT_CAP;
     int *seen = (int *)malloc((size_t)local_seen_cap * sizeof(int));
@@ -739,7 +742,8 @@ void cbm_sem_corpus_add_docs_batch(cbm_sem_corpus_t *corpus, char **all_tokens,
     /* Phase B (PARALLEL): Resolve tokens → IDs and count doc_freq per entry.
      * token_map is now read-only; each worker owns its doc range (no writes
      * to shared state except atomic doc_freq counters). */
-    std::atomic<int> *doc_freq_atomic = (std::atomic<int>*)calloc((size_t)corpus->entry_count, sizeof(std::atomic<int>));
+    std::atomic<int> *doc_freq_atomic =
+        (std::atomic<int> *)calloc((size_t)corpus->entry_count, sizeof(std::atomic<int>));
     if (!doc_freq_atomic) {
         /* OOM fallback: sequential path. Roll back doc_count first since
          * add_doc increments it itself. */
@@ -899,7 +903,7 @@ static void cooccur_sparse_one_target(cooccur_sparse_ctx_t *cc, int tid, cbm_sem
 
 static void cooccur_worker_sparse(int worker_id, void *ctx_ptr) {
     (void)worker_id;
-    cooccur_sparse_ctx_t *cc = (cooccur_sparse_ctx_t*)ctx_ptr;
+    cooccur_sparse_ctx_t *cc = (cooccur_sparse_ctx_t *)ctx_ptr;
     while (true) {
         int ci =
             atomic_fetch_add_explicit(&cc->next_chunk, CBM_SEM_ATOMIC_INC, memory_order_relaxed);
@@ -981,7 +985,7 @@ static void cooccur_int8_one_target(cooccur_int8_ctx_t *cc, int tid, cbm_sem_vec
 
 static void cooccur_worker_int8(int worker_id, void *ctx_ptr) {
     (void)worker_id;
-    cooccur_int8_ctx_t *cc = (cooccur_int8_ctx_t*)ctx_ptr;
+    cooccur_int8_ctx_t *cc = (cooccur_int8_ctx_t *)ctx_ptr;
     while (true) {
         int ci =
             atomic_fetch_add_explicit(&cc->next_chunk, CBM_SEM_ATOMIC_INC, memory_order_relaxed);
@@ -1016,7 +1020,7 @@ typedef struct {
 
 static void normalize_worker(int worker_id, void *ctx_ptr) {
     (void)worker_id;
-    norm_ctx_t *nc = (norm_ctx_t*)ctx_ptr;
+    norm_ctx_t *nc = (norm_ctx_t *)ctx_ptr;
     while (true) {
         int start = atomic_fetch_add_explicit(&nc->next_idx, CBM_SEM_WORKER_STACK_CAP,
                                               memory_order_relaxed);
@@ -1042,7 +1046,7 @@ typedef struct {
 
 static void blend_worker(int worker_id, void *ctx_ptr) {
     (void)worker_id;
-    blend_ctx_t *bc = (blend_ctx_t*)ctx_ptr;
+    blend_ctx_t *bc = (blend_ctx_t *)ctx_ptr;
     while (true) {
         int start = atomic_fetch_add_explicit(&bc->next_idx, CBM_SEM_WORKER_STACK_CAP,
                                               memory_order_relaxed);
@@ -1133,7 +1137,7 @@ static void build_src_entry(const char *token, cbm_sem_src_entry_t *out) {
 
 static void src_build_worker(int worker_id, void *ctx_ptr) {
     (void)worker_id;
-    src_build_ctx_t *sc = (src_build_ctx_t*)ctx_ptr;
+    src_build_ctx_t *sc = (src_build_ctx_t *)ctx_ptr;
     while (true) {
         int start = atomic_fetch_add_explicit(&sc->next_idx, CBM_SEM_WORKER_STACK_CAP,
                                               memory_order_relaxed);
@@ -1162,7 +1166,7 @@ typedef struct {
 
 static void pass1_quantize_worker(int worker_id, void *ctx_ptr) {
     (void)worker_id;
-    pass1_quant_ctx_t *qc = (pass1_quant_ctx_t*)ctx_ptr;
+    pass1_quant_ctx_t *qc = (pass1_quant_ctx_t *)ctx_ptr;
     while (true) {
         int start =
             atomic_fetch_add_explicit(&qc->next_idx, CBM_SEM_RRI_TILE, memory_order_relaxed);
@@ -1216,7 +1220,8 @@ static reverse_index_t *build_reverse_index(cbm_sem_corpus_t *corpus) {
         }
     }
     /* Phase B: exclusive prefix sum → offsets[] */
-    rev->offsets = (__typeof__(rev->offsets))malloc(((size_t)corpus->entry_count + SKIP_ONE) * sizeof(int));
+    rev->offsets =
+        (__typeof__(rev->offsets))malloc(((size_t)corpus->entry_count + SKIP_ONE) * sizeof(int));
     if (!rev->offsets) {
         free(counts);
         free(rev);
@@ -1311,7 +1316,8 @@ static void finalize_pass1(finalize_params_t *p) {
 
 /* Sub-phases 4+5: quantize pass1 to int8, run RRI pass 2, blend + normalize. */
 static void finalize_pass2(finalize_params_t *p) {
-    int8_t *pass1_q = (int8_t *)malloc((size_t)p->corpus->entry_count * CBM_SEM_DIM * sizeof(int8_t));
+    int8_t *pass1_q =
+        (int8_t *)malloc((size_t)p->corpus->entry_count * CBM_SEM_DIM * sizeof(int8_t));
     if (pass1_q) {
         pass1_quant_ctx_t qc = {
             .entries = p->corpus->entries,
@@ -1322,7 +1328,8 @@ static void finalize_pass2(finalize_params_t *p) {
         cbm_parallel_for(p->worker_count, pass1_quantize_worker, &qc, p->opts);
     }
 
-    cbm_sem_vec_t *pass1 = (cbm_sem_vec_t *)malloc((size_t)p->corpus->entry_count * sizeof(cbm_sem_vec_t));
+    cbm_sem_vec_t *pass1 =
+        (cbm_sem_vec_t *)malloc((size_t)p->corpus->entry_count * sizeof(cbm_sem_vec_t));
     if (pass1) {
         for (int i = 0; i < p->corpus->entry_count; i++) {
             pass1[i] = p->corpus->entries[i].enriched_vec;
@@ -1389,7 +1396,8 @@ void cbm_sem_corpus_finalize(cbm_sem_corpus_t *corpus) {
         corpus->finalized = true;
         return;
     }
-    cbm_sem_src_entry_t *src_entries = (cbm_sem_src_entry_t *)calloc((size_t)corpus->entry_count, sizeof(cbm_sem_src_entry_t));
+    cbm_sem_src_entry_t *src_entries =
+        (cbm_sem_src_entry_t *)calloc((size_t)corpus->entry_count, sizeof(cbm_sem_src_entry_t));
     if (!src_entries) {
         free_reverse_index(rev);
         corpus->finalized = true;
@@ -1430,7 +1438,7 @@ float cbm_sem_corpus_idf(const cbm_sem_corpus_t *corpus, const char *token) {
     if (!corpus || !token || corpus->doc_count == 0) {
         return 0.0F;
     }
-    int idx = parse_token_index((const char*)cbm_ht_get(corpus->token_map, token));
+    int idx = parse_token_index((const char *)cbm_ht_get(corpus->token_map, token));
     if (idx < 0 || idx >= corpus->entry_count) {
         return 0.0F;
     }
@@ -1445,7 +1453,7 @@ const cbm_sem_vec_t *cbm_sem_corpus_ri_vec(const cbm_sem_corpus_t *corpus, const
     if (!corpus || !token) {
         return NULL;
     }
-    int idx = parse_token_index((const char*)cbm_ht_get(corpus->token_map, token));
+    int idx = parse_token_index((const char *)cbm_ht_get(corpus->token_map, token));
     if (idx < 0 || idx >= corpus->entry_count) {
         return NULL;
     }

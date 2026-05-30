@@ -11,7 +11,6 @@
 #include <stdint.h>
 #include "foundation/cbm_atomic.h"
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

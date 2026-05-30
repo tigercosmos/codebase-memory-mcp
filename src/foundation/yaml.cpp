@@ -57,7 +57,8 @@ static bool node_add_child(cbm_yaml_node_t *parent, cbm_yaml_node_t *child) {
     if (parent->child_count >= parent->child_cap) {
         int new_cap =
             parent->child_cap < YAML_INIT_CAP ? YAML_INIT_CAP : parent->child_cap * PAIR_LEN;
-        cbm_yaml_node_t **new_arr = (cbm_yaml_node_t **)realloc(parent->children, (size_t)new_cap * sizeof(*new_arr));
+        cbm_yaml_node_t **new_arr =
+            (cbm_yaml_node_t **)realloc(parent->children, (size_t)new_cap * sizeof(*new_arr));
         if (!new_arr) {
             return false;
         }

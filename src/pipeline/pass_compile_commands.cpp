@@ -337,7 +337,8 @@ int cbm_parse_compile_commands(const char *json_data, const char *repo_path, cha
     }
 
     char **paths = (char **)calloc(arr_len, sizeof(char *));
-    cbm_compile_flags_t **flags = (cbm_compile_flags_t **)calloc(arr_len, sizeof(cbm_compile_flags_t *));
+    cbm_compile_flags_t **flags =
+        (cbm_compile_flags_t **)calloc(arr_len, sizeof(cbm_compile_flags_t *));
     int count = 0;
 
     yyjson_val *entry;

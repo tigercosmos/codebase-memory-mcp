@@ -207,7 +207,8 @@ static int parse_extra_extensions(yyjson_val *root, cbm_userext_t **entries, int
         }
 
         /* Grow the array */
-        cbm_userext_t *tmp = (cbm_userext_t *)realloc(*entries, (size_t)(*count + SKIP_ONE) * sizeof(cbm_userext_t));
+        cbm_userext_t *tmp =
+            (cbm_userext_t *)realloc(*entries, (size_t)(*count + SKIP_ONE) * sizeof(cbm_userext_t));
         if (!tmp) {
             return CBM_NOT_FOUND;
         }

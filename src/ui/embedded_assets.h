@@ -7,7 +7,6 @@
 #ifndef CBM_UI_EMBEDDED_ASSETS_H
 #define CBM_UI_EMBEDDED_ASSETS_H
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

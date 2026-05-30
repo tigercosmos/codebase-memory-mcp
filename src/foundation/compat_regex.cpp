@@ -14,8 +14,7 @@
 /* ── Windows: use vendored TRE regex ─────────────────────────── */
 #include "../../vendored/tre/regex.h"
 
-static_assert(sizeof(regex_t) <= CBM_SZ_256,
-               "cbm_regex_t opaque buffer too small for TRE regex_t");
+static_assert(sizeof(regex_t) <= CBM_SZ_256, "cbm_regex_t opaque buffer too small for TRE regex_t");
 
 static int translate_flags_tre(int flags) {
     int tre_flags = 0;

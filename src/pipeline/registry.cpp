@@ -355,7 +355,7 @@ static void free_label(const char *key, void *value, void *ud) {
 
 static void free_qn_array(const char *key, void *value, void *ud) {
     (void)ud;
-    qn_array_t *arr = (qn_array_t*)value;
+    qn_array_t *arr = (qn_array_t *)value;
     if (arr) {
         for (int i = 0; i < arr->count; i++) {
             free(arr->items[i]);
@@ -418,7 +418,7 @@ const char *cbm_registry_label_of(const cbm_registry_t *r, const char *qn) {
     if (!r || !qn) {
         return NULL;
     }
-    return (const char*)cbm_ht_get(r->exact, qn);
+    return (const char *)cbm_ht_get(r->exact, qn);
 }
 
 int cbm_registry_find_by_name(const cbm_registry_t *r, const char *name, const char ***out,
@@ -454,7 +454,7 @@ struct ims_ctx {
 
 static void ims_scan(const char *key, void *value, void *ud) {
     (void)value;
-    struct ims_ctx *ctx = (ims_ctx*)ud;
+    struct ims_ctx *ctx = (ims_ctx *)ud;
     if (ctx->found_key) {
         return; /* already found */
     }
@@ -767,12 +767,13 @@ struct few_ctx {
 
 static void few_scan(const char *key, void *value, void *ud) {
     (void)value;
-    struct few_ctx *ctx = (few_ctx*)ud;
+    struct few_ctx *ctx = (few_ctx *)ud;
     size_t klen = strlen(key);
     if (klen >= ctx->target_len && strcmp(key + klen - ctx->target_len, ctx->target) == 0) {
         if (ctx->count >= ctx->cap) {
             ctx->cap = ctx->cap ? ctx->cap * PAIR_LEN : REG_INIT_CAP;
-            ctx->results = (__typeof__(ctx->results))safe_realloc(ctx->results, (size_t)ctx->cap * sizeof(char *));
+            ctx->results = (__typeof__(ctx->results))safe_realloc(ctx->results, (size_t)ctx->cap *
+                                                                                    sizeof(char *));
         }
         ctx->results[ctx->count++] = key;
     }

@@ -19,7 +19,6 @@
 #define CBM_ARTIFACT_META "artifact.json"
 #define CBM_ARTIFACT_DIR ".codebase-memory"
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

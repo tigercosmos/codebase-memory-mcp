@@ -353,7 +353,8 @@ static const tool_def_t TOOLS[] = {
      "\"description\":\"Filter CALLS-edge results by min resolution confidence "
      "(0..1). Default 0 returns all edges. Try 0.8 to keep precise-tier and same-module "
      "resolutions while dropping fuzzy-tail noise. Response also includes caller_edges/"
-     "callee_edges arrays with {from,to,type,confidence}.\"}},\"required\":[\"function_name\",\"project\"]}"},
+     "callee_edges arrays with "
+     "{from,to,type,confidence}.\"}},\"required\":[\"function_name\",\"project\"]}"},
 
     {"get_code_snippet",
      "Read source code for a function/class/symbol. IMPORTANT: First call search_graph to find the "
@@ -1358,7 +1359,8 @@ static void emit_search_results(yyjson_mut_doc *doc, yyjson_mut_val *root,
                                 const cbm_search_output_t *out, cbm_store_t *store,
                                 const char *relationship, bool include_connected, int offset,
                                 yyjson_doc ***out_pdocs, int *out_pdoc_count) {
-    yyjson_doc **pdocs = out->count > 0 ? (yyjson_doc **)malloc((size_t)out->count * sizeof(yyjson_doc *)) : NULL;
+    yyjson_doc **pdocs =
+        out->count > 0 ? (yyjson_doc **)malloc((size_t)out->count * sizeof(yyjson_doc *)) : NULL;
     int pdoc_count = 0;
     yyjson_mut_obj_add_int(doc, root, "total", out->total);
     yyjson_mut_val *results = yyjson_mut_arr(doc);
@@ -2224,8 +2226,7 @@ static yyjson_mut_val *bfs_to_json_array(yyjson_mut_doc *doc, cbm_traverse_resul
 /* Serialize the edge list from a BFS traversal, optionally filtered by
  * min_confidence. Surfacing edges (with type/confidence) lets agents reason
  * about resolution quality, not just connectivity. */
-static yyjson_mut_val *bfs_edges_to_json_array(yyjson_mut_doc *doc,
-                                               const cbm_traverse_result_t *tr,
+static yyjson_mut_val *bfs_edges_to_json_array(yyjson_mut_doc *doc, const cbm_traverse_result_t *tr,
                                                double min_confidence) {
     yyjson_mut_val *arr = yyjson_mut_arr(doc);
     for (int i = 0; i < tr->edge_count; i++) {

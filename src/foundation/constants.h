@@ -7,7 +7,6 @@
 #ifndef CBM_CONSTANTS_H
 #define CBM_CONSTANTS_H
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

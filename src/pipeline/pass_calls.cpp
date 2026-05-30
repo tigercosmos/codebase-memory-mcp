@@ -103,8 +103,10 @@ static int build_import_map(cbm_pipeline_ctx_t *ctx, const char *rel_path,
 
     /* Fast path: build from cached extraction result (no JSON parsing) */
     if (result && result->imports.count > 0) {
-        const char **keys = (const char **)calloc((size_t)result->imports.count, sizeof(const char *));
-        const char **vals = (const char **)calloc((size_t)result->imports.count, sizeof(const char *));
+        const char **keys =
+            (const char **)calloc((size_t)result->imports.count, sizeof(const char *));
+        const char **vals =
+            (const char **)calloc((size_t)result->imports.count, sizeof(const char *));
         int count = 0;
 
         for (int i = 0; i < result->imports.count; i++) {
@@ -379,10 +381,10 @@ static CBMFileResult *calls_get_or_extract(cbm_pipeline_ctx_t *ctx, int idx,
     if (!src) {
         return NULL;
     }
-    CBMFileResult *r = cbm_extract_file(src, slen, fi->language, ctx->project_name, fi->rel_path,
-                                        CBM_EXTRACT_BUDGET,
-                                        cbm_cc_index_defines(ctx->cc_index, fi->rel_path),
-                                        cbm_cc_index_includes(ctx->cc_index, fi->rel_path));
+    CBMFileResult *r =
+        cbm_extract_file(src, slen, fi->language, ctx->project_name, fi->rel_path,
+                         CBM_EXTRACT_BUDGET, cbm_cc_index_defines(ctx->cc_index, fi->rel_path),
+                         cbm_cc_index_includes(ctx->cc_index, fi->rel_path));
     free(src);
     if (r) {
         *owned = true;

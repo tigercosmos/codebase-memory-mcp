@@ -71,7 +71,8 @@ static char *heap_strndup(const char *s, size_t n) {
 static void lex_push(cbm_lex_result_t *r, cbm_token_type_t type, const char *text, int pos) {
     if (r->count >= r->capacity) {
         r->capacity = r->capacity ? r->capacity * PAIR_LEN : CBM_SZ_32;
-        r->tokens = (__typeof__(r->tokens))safe_realloc(r->tokens, r->capacity * sizeof(cbm_token_t));
+        r->tokens =
+            (__typeof__(r->tokens))safe_realloc(r->tokens, r->capacity * sizeof(cbm_token_t));
     }
     r->tokens[r->count++] = (cbm_token_t){.type = type, .text = heap_strdup(text), .pos = pos};
 }
@@ -80,7 +81,8 @@ static void lex_push_n(cbm_lex_result_t *r, cbm_token_type_t type, const char *s
                        int pos) {
     if (r->count >= r->capacity) {
         r->capacity = r->capacity ? r->capacity * PAIR_LEN : CBM_SZ_32;
-        r->tokens = (__typeof__(r->tokens))safe_realloc(r->tokens, r->capacity * sizeof(cbm_token_t));
+        r->tokens =
+            (__typeof__(r->tokens))safe_realloc(r->tokens, r->capacity * sizeof(cbm_token_t));
     }
     r->tokens[r->count++] =
         (cbm_token_t){.type = type, .text = heap_strndup(start, len), .pos = pos};
@@ -513,7 +515,7 @@ static int parse_props(parser_t *p, cbm_prop_filter_t **out, int *count) {
                 free(arr);
                 return CBM_NOT_FOUND;
             }
-            arr = (cbm_prop_filter_t*)tmp;
+            arr = (cbm_prop_filter_t *)tmp;
             cap = new_cap;
         }
         const char *new_key = heap_strdup(key->text);
@@ -1190,7 +1192,7 @@ static cbm_case_expr_t *parse_case_expr(parser_t *p) {
                 free(kase);
                 return NULL;
             }
-            kase->branches = (cbm_case_branch_t*)tmp;
+            kase->branches = (cbm_case_branch_t *)tmp;
             bcap = new_bcap;
         }
         kase->branches[kase->branch_count++] =
@@ -1341,7 +1343,8 @@ static int parse_return_or_with(parser_t *p, cbm_return_clause_t **out, bool is_
         return 0;
     }
 
-    cbm_return_clause_t *r = (cbm_return_clause_t *)calloc(CBM_ALLOC_ONE, sizeof(cbm_return_clause_t));
+    cbm_return_clause_t *r =
+        (cbm_return_clause_t *)calloc(CBM_ALLOC_ONE, sizeof(cbm_return_clause_t));
     int cap = CYP_INIT_CAP8;
     r->items = (__typeof__(r->items))malloc(cap * sizeof(cbm_return_item_t));
 
@@ -1368,7 +1371,8 @@ static int parse_return_or_with(parser_t *p, cbm_return_clause_t **out, bool is_
 
         if (r->count >= cap) {
             cap *= PAIR_LEN;
-            r->items = (__typeof__(r->items))safe_realloc(r->items, cap * sizeof(cbm_return_item_t));
+            r->items =
+                (__typeof__(r->items))safe_realloc(r->items, cap * sizeof(cbm_return_item_t));
         }
         r->items[r->count++] = item;
 
@@ -1421,7 +1425,8 @@ static int parse_match_pattern(parser_t *p, cbm_pattern_t *pat) {
     while (check(p, TOK_DASH) || check(p, TOK_LT)) {
         if (pat->rel_count >= rel_cap) {
             rel_cap *= PAIR_LEN;
-            pat->rels = (__typeof__(pat->rels))safe_realloc(pat->rels, rel_cap * sizeof(cbm_rel_pattern_t));
+            pat->rels =
+                (__typeof__(pat->rels))safe_realloc(pat->rels, rel_cap * sizeof(cbm_rel_pattern_t));
         }
         if (parse_rel(p, &pat->rels[pat->rel_count]) < 0) {
             return CBM_NOT_FOUND;
@@ -1430,7 +1435,8 @@ static int parse_match_pattern(parser_t *p, cbm_pattern_t *pat) {
 
         if (pat->node_count >= node_cap) {
             node_cap *= PAIR_LEN;
-            pat->nodes = (__typeof__(pat->nodes))safe_realloc(pat->nodes, node_cap * sizeof(cbm_node_pattern_t));
+            pat->nodes = (__typeof__(pat->nodes))safe_realloc(
+                pat->nodes, node_cap * sizeof(cbm_node_pattern_t));
         }
         if (parse_node(p, &pat->nodes[pat->node_count]) < 0) {
             return CBM_NOT_FOUND;
@@ -1491,8 +1497,10 @@ static int parse_match_chain(parser_t *p, cbm_query_t *q, int *pat_cap) {
         }
         if (q->pattern_count >= *pat_cap) {
             *pat_cap *= PAIR_LEN;
-            q->patterns = (__typeof__(q->patterns))safe_realloc(q->patterns, *pat_cap * sizeof(cbm_pattern_t));
-            q->pattern_optional = (__typeof__(q->pattern_optional))safe_realloc(q->pattern_optional, *pat_cap * sizeof(bool));
+            q->patterns = (__typeof__(q->patterns))safe_realloc(q->patterns,
+                                                                *pat_cap * sizeof(cbm_pattern_t));
+            q->pattern_optional = (__typeof__(q->pattern_optional))safe_realloc(
+                q->pattern_optional, *pat_cap * sizeof(bool));
         }
         if (parse_match_pattern(p, &q->patterns[q->pattern_count]) < 0) {
             return CBM_NOT_FOUND;
@@ -2183,7 +2191,8 @@ static void rb_init(result_builder_t *rb) {
 }
 
 static void rb_set_columns(result_builder_t *rb, const char **cols, int count) {
-    rb->columns = (__typeof__(rb->columns))malloc((count > 0 ? (size_t)count : (size_t)SKIP_ONE) * sizeof(const char *));
+    rb->columns = (__typeof__(rb->columns))malloc((count > 0 ? (size_t)count : (size_t)SKIP_ONE) *
+                                                  sizeof(const char *));
     for (int i = 0; i < count; i++) {
         rb->columns[i] = heap_strdup(cols[i]);
     }
@@ -2193,9 +2202,11 @@ static void rb_set_columns(result_builder_t *rb, const char **cols, int count) {
 static void rb_add_row(result_builder_t *rb, const char **values) {
     if (rb->row_count >= rb->row_cap) {
         rb->row_cap *= PAIR_LEN;
-        rb->rows = (__typeof__(rb->rows))safe_realloc(rb->rows, rb->row_cap * sizeof(const char **));
+        rb->rows =
+            (__typeof__(rb->rows))safe_realloc(rb->rows, rb->row_cap * sizeof(const char **));
     }
-    const char **row = (const char **)malloc((rb->col_count > 0 ? (size_t)rb->col_count : (size_t)SKIP_ONE) * sizeof(const char *));
+    const char **row = (const char **)malloc(
+        (rb->col_count > 0 ? (size_t)rb->col_count : (size_t)SKIP_ONE) * sizeof(const char *));
     for (int i = 0; i < rb->col_count; i++) {
         row[i] = values[i] ? heap_strdup(values[i]) : heap_strdup("");
     }
@@ -2456,7 +2467,8 @@ static void expand_pattern_rels(cbm_store_t *store, cbm_pattern_t *pat, binding_
 
         bool is_variable_length = (rel->min_hops != SKIP_ONE || rel->max_hops != SKIP_ONE);
 
-        binding_t *new_bindings = (binding_t *)malloc(((*bind_cap * CYP_GROWTH_10) + SKIP_ONE) * sizeof(binding_t));
+        binding_t *new_bindings =
+            (binding_t *)malloc(((*bind_cap * CYP_GROWTH_10) + SKIP_ONE) * sizeof(binding_t));
         int new_count = 0;
 
         for (int bi = 0; bi < *bind_count; bi++) {
@@ -2771,10 +2783,10 @@ static int with_agg_find_or_create(with_agg_t **aggs, int *agg_cnt, int *agg_cap
     int found = (*agg_cnt)++;
     snprintf((*aggs)[found].group_key, sizeof((*aggs)[found].group_key), "%s", key);
     (*aggs)[found].group_vals = (const char **)calloc(wc->count, sizeof(const char *));
-    (*aggs)[found].sums = (double*)calloc(wc->count, sizeof(double));
-    (*aggs)[found].counts = (int*)calloc(wc->count, sizeof(int));
-    (*aggs)[found].mins = (double*)calloc(wc->count, sizeof(double));
-    (*aggs)[found].maxs = (double*)calloc(wc->count, sizeof(double));
+    (*aggs)[found].sums = (double *)calloc(wc->count, sizeof(double));
+    (*aggs)[found].counts = (int *)calloc(wc->count, sizeof(int));
+    (*aggs)[found].mins = (double *)calloc(wc->count, sizeof(double));
+    (*aggs)[found].maxs = (double *)calloc(wc->count, sizeof(double));
     for (int ci = 0; ci < wc->count; ci++) {
         (*aggs)[found].mins[ci] = CYP_DBL_MAX;
         (*aggs)[found].maxs[ci] = -CYP_DBL_MAX;
@@ -2863,7 +2875,8 @@ static void execute_with_aggregate(cbm_return_clause_t *wc, binding_t *bindings,
         with_agg_accumulate(&aggs[found], wc, &bindings[bi]);
     }
 
-    *vbindings = (__typeof__(*vbindings))safe_realloc(*vbindings, (agg_cnt + SKIP_ONE) * sizeof(binding_t));
+    *vbindings =
+        (__typeof__(*vbindings))safe_realloc(*vbindings, (agg_cnt + SKIP_ONE) * sizeof(binding_t));
     if (!*vbindings) {
         with_agg_free(aggs, agg_cnt, wc->count);
         return;
@@ -3124,7 +3137,8 @@ static void ret_agg_accumulate(ret_agg_entry_t *entry, cbm_return_clause_t *ret,
         }
         if (strcmp(ret->items[ci].func, "COLLECT") == 0) {
             int idx = entry->collect_counts[ci]++;
-            entry->collect_lists[ci] = (__typeof__(entry->collect_lists[ci]))safe_realloc(entry->collect_lists[ci], (idx + SKIP_ONE) * sizeof(char *));
+            entry->collect_lists[ci] = (__typeof__(entry->collect_lists[ci]))safe_realloc(
+                entry->collect_lists[ci], (idx + SKIP_ONE) * sizeof(char *));
             entry->collect_lists[ci][idx] = heap_strdup(raw);
         }
     }
@@ -3316,7 +3330,8 @@ static void execute_default_projection(cbm_pattern_t *pat0, binding_t *bindings,
 /* Cross-join node-only pattern into existing bindings */
 static void cross_join_nodes(binding_t **bindings, int *bind_count, cbm_node_t *extra_nodes,
                              int extra_count, const char *nvar, bool opt) {
-    binding_t *new_bindings = (binding_t *)malloc(((*bind_count * extra_count) + SKIP_ONE) * sizeof(binding_t));
+    binding_t *new_bindings =
+        (binding_t *)malloc(((*bind_count * extra_count) + SKIP_ONE) * sizeof(binding_t));
     int new_count = 0;
     for (int bi = 0; bi < *bind_count; bi++) {
         for (int ni = 0; ni < extra_count; ni++) {
@@ -3343,7 +3358,8 @@ static void cross_join_nodes(binding_t **bindings, int *bind_count, cbm_node_t *
 static void cross_join_with_rels(cbm_store_t *store, cbm_pattern_t *patn, binding_t **bindings,
                                  int *bind_count, cbm_node_t *extra_nodes, int extra_count,
                                  const char *nvar, bool opt) {
-    binding_t *new_bindings = (binding_t *)malloc(((*bind_count * extra_count * CYP_GROWTH_10) + SKIP_ONE) * sizeof(binding_t));
+    binding_t *new_bindings = (binding_t *)malloc(
+        ((*bind_count * extra_count * CYP_GROWTH_10) + SKIP_ONE) * sizeof(binding_t));
     int new_count = 0;
     for (int bi = 0; bi < *bind_count; bi++) {
         for (int ni = 0; ni < extra_count; ni++) {

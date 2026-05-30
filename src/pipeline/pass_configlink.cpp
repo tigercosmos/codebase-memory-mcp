@@ -360,7 +360,7 @@ int cbm_pipeline_pass_configlink(cbm_pipeline_ctx_t *ctx) {
 
     const cbm_gbuf_node_t **vars_check = NULL;
     int var_check_count = 0;
-    if (!has_config && cbm_gbuf_find_by_label(gb, "Variable", &vars_check, &var_check_count) == 0) {
+    if (cbm_gbuf_find_by_label(gb, "Variable", &vars_check, &var_check_count) == 0) {
         for (int i = 0; i < var_check_count; i++) {
             if (cbm_has_config_extension(vars_check[i]->file_path)) {
                 has_config = true;

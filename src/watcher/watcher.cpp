@@ -224,7 +224,7 @@ static void state_free(project_state_t *s) {
 static void free_state_entry(const char *key, void *val, void *ud) {
     (void)key;
     (void)ud;
-    state_free((project_state_t*)val);
+    state_free((project_state_t *)val);
 }
 
 /* ── Watcher lifecycle ──────────────────────────────────────────── */
@@ -391,8 +391,8 @@ typedef struct {
 
 static void poll_project(const char *key, void *val, void *ud) {
     (void)key;
-    poll_ctx_t *ctx = (poll_ctx_t*)ud;
-    project_state_t *s = (project_state_t*)val;
+    poll_ctx_t *ctx = (poll_ctx_t *)ud;
+    project_state_t *s = (project_state_t *)val;
     if (!s) {
         return;
     }
@@ -448,9 +448,9 @@ typedef struct {
 
 static void snapshot_project(const char *key, void *val, void *ud) {
     (void)key;
-    snapshot_ctx_t *sc = (snapshot_ctx_t*)ud;
+    snapshot_ctx_t *sc = (snapshot_ctx_t *)ud;
     if (val && sc->count < sc->cap) {
-        sc->items[sc->count++] = (project_state_t*)val;
+        sc->items[sc->count++] = (project_state_t *)val;
     }
 }
 

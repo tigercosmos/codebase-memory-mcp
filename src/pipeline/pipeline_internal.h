@@ -17,7 +17,6 @@
 #include "lsp/go_lsp.h" /* CBMLSPDef for cbm_parallel_resolve cross-LSP inputs */
 #include "foundation/cbm_atomic.h"
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

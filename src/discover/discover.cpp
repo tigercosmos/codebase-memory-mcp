@@ -211,7 +211,8 @@ static void fl_add(file_list_t *fl, const char *abs_path, const char *rel_path, 
                    int64_t size) {
     if (fl->count >= fl->capacity) {
         int new_cap = fl->capacity ? fl->capacity * PAIR_LEN : CBM_SZ_256;
-        cbm_file_info_t *new_files = (cbm_file_info_t *)realloc(fl->files, new_cap * sizeof(cbm_file_info_t));
+        cbm_file_info_t *new_files =
+            (cbm_file_info_t *)realloc(fl->files, new_cap * sizeof(cbm_file_info_t));
         if (!new_files) {
             return;
         }

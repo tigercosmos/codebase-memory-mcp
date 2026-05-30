@@ -85,7 +85,8 @@ static void deferred_buf_push(deferred_edge_buf_t *buf, int64_t src, int64_t tgt
                               bool same_file) {
     if (buf->count >= buf->cap) {
         int nc = buf->cap < CBM_SZ_256 ? CBM_SZ_256 : buf->cap * GROW;
-        deferred_edge_t *grown = (deferred_edge_t *)realloc(buf->edges, (size_t)nc * sizeof(deferred_edge_t));
+        deferred_edge_t *grown =
+            (deferred_edge_t *)realloc(buf->edges, (size_t)nc * sizeof(deferred_edge_t));
         if (!grown) {
             return;
         }
@@ -578,7 +579,7 @@ typedef struct {
 
 static void tokenize_worker(int worker_id, void *ctx_ptr) {
     (void)worker_id;
-    tokenize_ctx_t *tc = (tokenize_ctx_t*)ctx_ptr;
+    tokenize_ctx_t *tc = (tokenize_ctx_t *)ctx_ptr;
     while (true) {
         int f = atomic_fetch_add_explicit(&tc->next_idx, SKIP_ONE, memory_order_relaxed);
         if (f >= tc->func_count) {
@@ -611,7 +612,7 @@ typedef struct {
 
 static void vec_build_worker(int worker_id, void *ctx_ptr) {
     (void)worker_id;
-    vec_build_ctx_t *vc = (vec_build_ctx_t*)ctx_ptr;
+    vec_build_ctx_t *vc = (vec_build_ctx_t *)ctx_ptr;
     while (true) {
         int f = atomic_fetch_add_explicit(&vc->next_idx, SKIP_ONE, memory_order_relaxed);
         if (f >= vc->func_count) {
@@ -688,7 +689,7 @@ typedef struct {
 
 static void sig_build_worker(int worker_id, void *ctx_ptr) {
     (void)worker_id;
-    sig_build_ctx_t *sc = (sig_build_ctx_t*)ctx_ptr;
+    sig_build_ctx_t *sc = (sig_build_ctx_t *)ctx_ptr;
     while (true) {
         int f = atomic_fetch_add_explicit(&sc->next_idx, SKIP_ONE, memory_order_relaxed);
         if (f >= sc->func_count) {
@@ -803,12 +804,14 @@ static void score_try_emit(score_ctx_t *sc, int i, int j, deferred_edge_buf_t *m
     bool same_file = sc->funcs[i].file_path && sc->funcs[j].file_path &&
                      strcmp(sc->funcs[i].file_path, sc->funcs[j].file_path) == 0;
     deferred_buf_push(my_buf, sc->funcs[i].node_id, sc->funcs[j].node_id, score, same_file);
-    atomic_fetch_add_explicit((std::atomic<int> *)&sc->edge_counts[i], SKIP_ONE, memory_order_relaxed);
-    atomic_fetch_add_explicit((std::atomic<int> *)&sc->edge_counts[j], SKIP_ONE, memory_order_relaxed);
+    atomic_fetch_add_explicit((std::atomic<int> *)&sc->edge_counts[i], SKIP_ONE,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit((std::atomic<int> *)&sc->edge_counts[j], SKIP_ONE,
+                              memory_order_relaxed);
 }
 
 static void score_worker(int worker_id, void *ctx_ptr) {
-    score_ctx_t *sc = (score_ctx_t*)ctx_ptr;
+    score_ctx_t *sc = (score_ctx_t *)ctx_ptr;
     deferred_edge_buf_t *my_buf = &sc->worker_bufs[worker_id];
 
     while (true) {
@@ -845,7 +848,7 @@ typedef struct {
 
 static void collect_worker(int worker_id, void *ctx_ptr) {
     (void)worker_id;
-    collect_ctx_t *cc = (collect_ctx_t*)ctx_ptr;
+    collect_ctx_t *cc = (collect_ctx_t *)ctx_ptr;
     while (true) {
         int f = atomic_fetch_add_explicit(&cc->next_idx, PSE_MOD_64, memory_order_relaxed);
         if (f >= cc->func_count) {
@@ -899,12 +902,14 @@ static int phase1_scan_functions(cbm_gbuf_t *gbuf, cbm_sem_func_t **out_funcs,
             }
             if (func_count >= func_cap) {
                 int new_cap = func_cap < MAX_FUNCS_INIT ? MAX_FUNCS_INIT : func_cap * GROW;
-                cbm_sem_func_t *grown = (cbm_sem_func_t *)realloc(funcs, (size_t)new_cap * sizeof(cbm_sem_func_t));
+                cbm_sem_func_t *grown =
+                    (cbm_sem_func_t *)realloc(funcs, (size_t)new_cap * sizeof(cbm_sem_func_t));
                 if (!grown) {
                     break;
                 }
                 funcs = grown;
-                const cbm_gbuf_node_t **np_grown = (const cbm_gbuf_node_t **)realloc(node_ptrs, (size_t)new_cap * sizeof(cbm_gbuf_node_t *));
+                const cbm_gbuf_node_t **np_grown = (const cbm_gbuf_node_t **)realloc(
+                    node_ptrs, (size_t)new_cap * sizeof(cbm_gbuf_node_t *));
                 if (!np_grown) {
                     break;
                 }
@@ -1000,7 +1005,8 @@ static void phase3c_export_token_vectors(cbm_gbuf_t *gbuf, cbm_sem_corpus_t *cor
 /* Phase 5a: generate NUM_HYPERPLANES × CBM_SEM_DIM deterministic random
  * float hyperplanes seeded from XXH3 so signatures are reproducible. */
 static hyperplane_row_t *phase5a_build_hyperplanes(void) {
-    hyperplane_row_t *hyperplanes = (hyperplane_row_t *)malloc(sizeof(hyperplane_row_t) * NUM_HYPERPLANES);
+    hyperplane_row_t *hyperplanes =
+        (hyperplane_row_t *)malloc(sizeof(hyperplane_row_t) * NUM_HYPERPLANES);
     if (!hyperplanes) {
         return NULL;
     }
@@ -1100,7 +1106,8 @@ static void phase5_lsh_build(cbm_sem_func_t *funcs, int func_count, int worker_c
     sem_bucket_t **band_buckets = (sem_bucket_t **)calloc(SEM_LSH_BANDS, sizeof(sem_bucket_t *));
     if (band_buckets) {
         for (int b = 0; b < SEM_LSH_BANDS; b++) {
-            band_buckets[b] = (__typeof__(band_buckets[b]))calloc(SEM_BUCKET_COUNT, sizeof(sem_bucket_t));
+            band_buckets[b] =
+                (__typeof__(band_buckets[b]))calloc(SEM_BUCKET_COUNT, sizeof(sem_bucket_t));
         }
         phase5c_build_lsh_buckets(signatures, func_count, band_buckets);
     }
@@ -1173,7 +1180,8 @@ static int run_scoring_phase(cbm_gbuf_t *gbuf, cbm_sem_func_t *funcs, uint64_t *
                              sem_bucket_t **band_buckets, cbm_sem_config_t cfg, int func_count,
                              int worker_count) {
     int *edge_counts = (int *)calloc((size_t)func_count, sizeof(int));
-    deferred_edge_buf_t *worker_bufs = (deferred_edge_buf_t *)calloc((size_t)worker_count, sizeof(deferred_edge_buf_t));
+    deferred_edge_buf_t *worker_bufs =
+        (deferred_edge_buf_t *)calloc((size_t)worker_count, sizeof(deferred_edge_buf_t));
     if (!edge_counts || !worker_bufs) {
         free(edge_counts);
         free(worker_bufs);

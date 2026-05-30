@@ -343,7 +343,7 @@ typedef struct {
 } gh_compute_arg_t;
 
 static void *gh_compute_thread_fn(void *arg) {
-    gh_compute_arg_t *a = (gh_compute_arg_t*)arg;
+    gh_compute_arg_t *a = (gh_compute_arg_t *)arg;
     cbm_pipeline_githistory_compute(a->repo_path, a->result);
     return NULL;
 }

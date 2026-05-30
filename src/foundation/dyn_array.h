@@ -21,7 +21,6 @@
 #include <stdlib.h>
 #include <string.h>
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -42,7 +41,7 @@ extern "C" {
             void *_new = realloc((da)->items, (size_t)_new_cap * sizeof(*(da)->items)); \
             if (!_new)                                                                  \
                 break;                                                                  \
-            (da)->items = (__typeof__((da)->items))_new;                                    \
+            (da)->items = (__typeof__((da)->items))_new;                                \
             (da)->cap = _new_cap;                                                       \
         }                                                                               \
         (da)->items[(da)->count++] = (item);                                            \

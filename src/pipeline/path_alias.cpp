@@ -163,7 +163,8 @@ static cbm_path_alias_map_t *load_tsconfig_file(const char *abs_path, const char
         bool capped = obj_size > CBM_PATH_ALIAS_MAX_ENTRIES;
         int capacity = (int)(capped ? (size_t)CBM_PATH_ALIAS_MAX_ENTRIES : obj_size);
         if (capacity > 0) {
-            map->entries = (__typeof__(map->entries))calloc((size_t)capacity, sizeof(cbm_path_alias_t));
+            map->entries =
+                (__typeof__(map->entries))calloc((size_t)capacity, sizeof(cbm_path_alias_t));
             if (!map->entries) {
                 free(map->base_url);
                 free(map);
@@ -365,7 +366,8 @@ cbm_path_alias_collection_t *cbm_load_path_aliases(const char *repo_path) {
     if (!repo_path) {
         return NULL;
     }
-    alias_config_hit_t *hits = (alias_config_hit_t *)calloc(CBM_PATH_ALIAS_MAX_FILES, sizeof(*hits));
+    alias_config_hit_t *hits =
+        (alias_config_hit_t *)calloc(CBM_PATH_ALIAS_MAX_FILES, sizeof(*hits));
     if (!hits) {
         return NULL;
     }

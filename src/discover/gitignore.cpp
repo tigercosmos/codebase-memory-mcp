@@ -238,7 +238,8 @@ static void gi_add_pattern(cbm_gitignore_t *gi, const char *line, int len) {
     /* Grow array if needed */
     if (gi->count >= gi->capacity) {
         int new_cap = gi->capacity ? gi->capacity * PAIR_LEN : GI_INIT_CAP;
-        gi_pattern_t *new_patterns = (gi_pattern_t *)realloc(gi->patterns, new_cap * sizeof(gi_pattern_t));
+        gi_pattern_t *new_patterns =
+            (gi_pattern_t *)realloc(gi->patterns, new_cap * sizeof(gi_pattern_t));
         if (!new_patterns) {
             free(p.pattern);
             return;

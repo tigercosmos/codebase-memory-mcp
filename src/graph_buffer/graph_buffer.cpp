@@ -142,7 +142,7 @@ static edge_ptr_array_t *get_or_create_edge_array(CBMHashTable *ht, const char *
 /* Free a node_ptr_array_t (callback for hash table iteration) */
 static void free_node_array(const char *key, void *value, void *ud) {
     (void)ud;
-    node_ptr_array_t *arr = (node_ptr_array_t*)value;
+    node_ptr_array_t *arr = (node_ptr_array_t *)value;
     if (arr) {
         cbm_da_free(arr);
         free(arr);
@@ -153,7 +153,7 @@ static void free_node_array(const char *key, void *value, void *ud) {
 /* Free an edge_ptr_array_t (callback) */
 static void free_edge_array(const char *key, void *value, void *ud) {
     (void)ud;
-    edge_ptr_array_t *arr = (edge_ptr_array_t*)value;
+    edge_ptr_array_t *arr = (edge_ptr_array_t *)value;
     if (arr) {
         cbm_da_free(arr);
         free(arr);
@@ -227,12 +227,14 @@ static void unindex_edge(cbm_gbuf_t *gb, const cbm_gbuf_edge_t *e) {
     free((void *)ekey);
 
     make_src_type_key(key, sizeof(key), e->source_id, e->type);
-    remove_edge_from_ptr_array((edge_ptr_array_t*)cbm_ht_get(gb->edges_by_source_type, key), e->id);
+    remove_edge_from_ptr_array((edge_ptr_array_t *)cbm_ht_get(gb->edges_by_source_type, key),
+                               e->id);
 
     make_src_type_key(key, sizeof(key), e->target_id, e->type);
-    remove_edge_from_ptr_array((edge_ptr_array_t*)cbm_ht_get(gb->edges_by_target_type, key), e->id);
+    remove_edge_from_ptr_array((edge_ptr_array_t *)cbm_ht_get(gb->edges_by_target_type, key),
+                               e->id);
 
-    remove_edge_from_ptr_array((edge_ptr_array_t*)cbm_ht_get(gb->edges_by_type, e->type), e->id);
+    remove_edge_from_ptr_array((edge_ptr_array_t *)cbm_ht_get(gb->edges_by_type, e->type), e->id);
 }
 
 /* Cascade-delete all edges touching nodes in deleted_set. */
@@ -464,7 +466,8 @@ int cbm_gbuf_store_vector(cbm_gbuf_t *gb, int64_t node_id, const uint8_t *vector
     if (gb->dump_vector_count >= gb->dump_vector_cap) {
         int new_cap =
             gb->dump_vector_cap < VEC_INIT_CAP ? VEC_INIT_CAP : gb->dump_vector_cap * VEC_GROW;
-        CBMDumpVector *grown = (CBMDumpVector *)realloc(gb->dump_vectors, (size_t)new_cap * sizeof(CBMDumpVector));
+        CBMDumpVector *grown =
+            (CBMDumpVector *)realloc(gb->dump_vectors, (size_t)new_cap * sizeof(CBMDumpVector));
         if (!grown) {
             return GB_ERR;
         }
@@ -496,7 +499,8 @@ int cbm_gbuf_store_token_vector(cbm_gbuf_t *gb, const char *token, const uint8_t
     if (gb->dump_token_vec_count >= gb->dump_token_vec_cap) {
         int new_cap =
             gb->dump_token_vec_cap < TV_INIT_CAP ? TV_INIT_CAP : gb->dump_token_vec_cap * TV_GROW;
-        CBMDumpTokenVec *grown = (CBMDumpTokenVec *)realloc(gb->dump_token_vecs, (size_t)new_cap * sizeof(CBMDumpTokenVec));
+        CBMDumpTokenVec *grown = (CBMDumpTokenVec *)realloc(
+            gb->dump_token_vecs, (size_t)new_cap * sizeof(CBMDumpTokenVec));
         if (!grown) {
             return GB_ERR;
         }
@@ -602,7 +606,7 @@ const cbm_gbuf_node_t *cbm_gbuf_find_by_qn(const cbm_gbuf_t *gb, const char *qn)
     if (!gb || !qn) {
         return NULL;
     }
-    return (const cbm_gbuf_node_t*)cbm_ht_get(gb->node_by_qn, qn);
+    return (const cbm_gbuf_node_t *)cbm_ht_get(gb->node_by_qn, qn);
 }
 
 const cbm_gbuf_node_t *cbm_gbuf_find_by_id(const cbm_gbuf_t *gb, int64_t id) {
@@ -611,7 +615,7 @@ const cbm_gbuf_node_t *cbm_gbuf_find_by_id(const cbm_gbuf_t *gb, int64_t id) {
     }
     char key[CBM_SZ_32];
     make_id_key(key, sizeof(key), id);
-    return (const cbm_gbuf_node_t*)cbm_ht_get(gb->node_by_id, key);
+    return (const cbm_gbuf_node_t *)cbm_ht_get(gb->node_by_id, key);
 }
 
 int cbm_gbuf_find_by_label(const cbm_gbuf_t *gb, const char *label, const cbm_gbuf_node_t ***out,
@@ -713,8 +717,10 @@ int cbm_gbuf_delete_by_file(cbm_gbuf_t *gb, const char *file_path) {
         cbm_ht_set(deleted_set, strdup(id_buf), intptr_to_ptr(SKIP_ONE));
 
         /* Remove from secondary indexes */
-        remove_node_from_ptr_array((node_ptr_array_t*)cbm_ht_get(gb->nodes_by_label, n->label), n->id);
-        remove_node_from_ptr_array((node_ptr_array_t*)cbm_ht_get(gb->nodes_by_name, n->name), n->id);
+        remove_node_from_ptr_array((node_ptr_array_t *)cbm_ht_get(gb->nodes_by_label, n->label),
+                                   n->id);
+        remove_node_from_ptr_array((node_ptr_array_t *)cbm_ht_get(gb->nodes_by_name, n->name),
+                                   n->id);
 
         /* Remove from primary indexes */
         cbm_ht_delete(gb->node_by_qn, n->qualified_name);
@@ -1118,7 +1124,8 @@ int cbm_gbuf_merge(cbm_gbuf_t *dst, cbm_gbuf_t *src) {
             continue;
         }
 
-        cbm_gbuf_node_t *existing = (cbm_gbuf_node_t *)cbm_ht_get(dst->node_by_qn, sn->qualified_name);
+        cbm_gbuf_node_t *existing =
+            (cbm_gbuf_node_t *)cbm_ht_get(dst->node_by_qn, sn->qualified_name);
         if (existing) {
             merge_update_existing(existing, sn, &remap);
         } else {
@@ -1169,7 +1176,8 @@ static bool dump_vector_id_less(const CBMDumpVector &a, const CBMDumpVector &b) 
 
 static CBMDumpNode *build_dump_nodes(cbm_gbuf_t *gb, int live_count, int64_t *temp_to_final,
                                      int64_t max_temp_id, int *out_count) {
-    CBMDumpNode *dump_nodes = (CBMDumpNode *)malloc((size_t)(live_count > 0 ? live_count : SKIP_ONE) * sizeof(CBMDumpNode));
+    CBMDumpNode *dump_nodes = (CBMDumpNode *)malloc(
+        (size_t)(live_count > 0 ? live_count : SKIP_ONE) * sizeof(CBMDumpNode));
     int idx = 0;
 
     for (int i = 0; i < gb->nodes.count; i++) {
@@ -1216,8 +1224,10 @@ static CBMDumpEdge *build_dump_edges(cbm_gbuf_t *gb, const int64_t *temp_to_fina
         }
     }
 
-    CBMDumpEdge *dump_edges = (CBMDumpEdge *)malloc((size_t)(valid_edges > 0 ? valid_edges : SKIP_ONE) * sizeof(CBMDumpEdge));
-    char **url_paths = (char **)calloc((size_t)(valid_edges > 0 ? valid_edges : SKIP_ONE), sizeof(char *));
+    CBMDumpEdge *dump_edges = (CBMDumpEdge *)malloc(
+        (size_t)(valid_edges > 0 ? valid_edges : SKIP_ONE) * sizeof(CBMDumpEdge));
+    char **url_paths =
+        (char **)calloc((size_t)(valid_edges > 0 ? valid_edges : SKIP_ONE), sizeof(char *));
     int idx = 0;
 
     for (int i = 0; i < gb->edges.count; i++) {
@@ -1275,8 +1285,7 @@ static void remap_sort_dedup_vectors(cbm_gbuf_t *gb, const int64_t *temp_to_fina
     gb->dump_vector_count = remapped;
 
     if (gb->dump_vector_count >= GB_MIN_FOR_DEDUP) {
-        std::sort(gb->dump_vectors, gb->dump_vectors + gb->dump_vector_count,
-                  dump_vector_id_less);
+        std::sort(gb->dump_vectors, gb->dump_vectors + gb->dump_vector_count, dump_vector_id_less);
         int deduped = 0;
         for (int i = 0; i < gb->dump_vector_count; i++) {
             if (i + GB_DEDUP_LOOKAHEAD < gb->dump_vector_count &&

@@ -37,7 +37,6 @@
 #include "pipeline/pipeline_internal.h"
 #include <stdbool.h>
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

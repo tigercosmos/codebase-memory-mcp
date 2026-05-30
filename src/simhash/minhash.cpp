@@ -381,7 +381,8 @@ void cbm_lsh_insert(cbm_lsh_index_t *idx, const cbm_lsh_entry_t *entry) {
     if (idx->entry_count >= idx->entry_cap) {
         int new_cap =
             idx->entry_cap < ENTRY_INIT_CAP ? ENTRY_INIT_CAP : idx->entry_cap * GROW_FACTOR;
-        cbm_lsh_entry_t *new_entries = (cbm_lsh_entry_t *)realloc(idx->entries, (size_t)new_cap * sizeof(cbm_lsh_entry_t));
+        cbm_lsh_entry_t *new_entries =
+            (cbm_lsh_entry_t *)realloc(idx->entries, (size_t)new_cap * sizeof(cbm_lsh_entry_t));
         if (!new_entries) {
             return;
         }
@@ -421,13 +422,13 @@ static bool seen_set_insert(seen_set_t *s, int64_t node_id) {
     return false; /* table full */
 }
 
-
 /* Append a candidate to the result buffer, growing if needed. */
 static bool result_push(cbm_lsh_index_t *idx, const cbm_lsh_entry_t *candidate) {
     if (idx->result_count >= idx->result_cap) {
         int new_cap =
             idx->result_cap < RESULT_INIT_CAP ? RESULT_INIT_CAP : idx->result_cap * GROW_FACTOR;
-        const cbm_lsh_entry_t **new_buf = (const cbm_lsh_entry_t **)realloc(idx->result_buf, (size_t)new_cap * sizeof(const cbm_lsh_entry_t *));
+        const cbm_lsh_entry_t **new_buf = (const cbm_lsh_entry_t **)realloc(
+            idx->result_buf, (size_t)new_cap * sizeof(const cbm_lsh_entry_t *));
         if (!new_buf) {
             return false;
         }

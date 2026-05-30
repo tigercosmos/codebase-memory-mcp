@@ -19,7 +19,6 @@
 
 #include "cbm.h" /* CBMLanguage */
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

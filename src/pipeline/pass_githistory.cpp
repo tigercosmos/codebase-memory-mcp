@@ -309,7 +309,7 @@ typedef struct {
 } collect_coupling_ctx_t;
 
 static void collect_coupling_cb(const char *pair_key, void *val, void *ud) {
-    collect_coupling_ctx_t *cctx = (collect_coupling_ctx_t*)ud;
+    collect_coupling_ctx_t *cctx = (collect_coupling_ctx_t *)ud;
     int co_count = *(int *)val;
     if (co_count < GH_MIN_COMMITS) {
         return;
@@ -468,7 +468,8 @@ int cbm_pipeline_githistory_compute(const char *repo_path, cbm_githistory_result
     result->commit_count = commit_count;
 
     /* Convert to testable format */
-    cbm_commit_files_t *cf = (cbm_commit_files_t *)calloc((size_t)commit_count, sizeof(cbm_commit_files_t));
+    cbm_commit_files_t *cf =
+        (cbm_commit_files_t *)calloc((size_t)commit_count, sizeof(cbm_commit_files_t));
     if (!cf) {
         for (int c = 0; c < commit_count; c++) {
             commit_free(&commits[c]);
@@ -482,14 +483,16 @@ int cbm_pipeline_githistory_compute(const char *repo_path, cbm_githistory_result
         cf[c].timestamp = commits[c].timestamp;
     }
 
-    cbm_change_coupling_t *couplings = (cbm_change_coupling_t *)malloc(MAX_COUPLINGS * sizeof(cbm_change_coupling_t));
+    cbm_change_coupling_t *couplings =
+        (cbm_change_coupling_t *)malloc(MAX_COUPLINGS * sizeof(cbm_change_coupling_t));
     int coupling_count = cbm_compute_change_coupling(cf, commit_count, couplings, MAX_COUPLINGS);
 
     /* Per-file temporal aggregation: change_count + last_modified.
      * Single hash-table pass over the same commit set used for coupling so
      * we don't re-scan history. NULL on OOM is fine — the caller still
      * gets the couplings. */
-    cbm_file_temporal_t *ft_arr = (cbm_file_temporal_t *)malloc(MAX_FILE_TEMPORAL * sizeof(cbm_file_temporal_t));
+    cbm_file_temporal_t *ft_arr =
+        (cbm_file_temporal_t *)malloc(MAX_FILE_TEMPORAL * sizeof(cbm_file_temporal_t));
     if (ft_arr) {
         int ft_count = 0;
         CBMHashTable *file_idx = cbm_ht_create(CBM_SZ_1K);

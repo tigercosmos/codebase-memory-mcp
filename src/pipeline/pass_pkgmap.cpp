@@ -93,7 +93,8 @@ void cbm_pkg_entries_init(cbm_pkg_entries_t *e) {
 static void pkg_entries_push(cbm_pkg_entries_t *e, char *pkg_name, char *entry_rel) {
     if (e->count >= e->cap) {
         int new_cap = e->cap == 0 ? PKGMAP_INIT_CAP : e->cap * SKIP_ONE * PAIR_LEN;
-        cbm_pkg_entry_t *tmp = (cbm_pkg_entry_t *)realloc(e->items, new_cap * sizeof(cbm_pkg_entry_t));
+        cbm_pkg_entry_t *tmp =
+            (cbm_pkg_entry_t *)realloc(e->items, new_cap * sizeof(cbm_pkg_entry_t));
         if (!tmp) {
             free(pkg_name);
             free(entry_rel);

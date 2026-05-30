@@ -1415,18 +1415,18 @@ typedef struct {
 } bind_proj_type_t;
 
 static void bind_source_id(sqlite3_stmt *stmt, const void *data) {
-    const bind_id_t *b = (const bind_id_t*)data;
+    const bind_id_t *b = (const bind_id_t *)data;
     sqlite3_bind_int64(stmt, SKIP_ONE, b->id);
 }
 
 static void bind_id_and_type(sqlite3_stmt *stmt, const void *data) {
-    const bind_id_type_t *b = (const bind_id_type_t*)data;
+    const bind_id_type_t *b = (const bind_id_type_t *)data;
     sqlite3_bind_int64(stmt, SKIP_ONE, b->id);
     bind_text(stmt, ST_COL_2, b->type);
 }
 
 static void bind_proj_and_type(sqlite3_stmt *stmt, const void *data) {
-    const bind_proj_type_t *b = (const bind_proj_type_t*)data;
+    const bind_proj_type_t *b = (const bind_proj_type_t *)data;
     bind_text(stmt, SKIP_ONE, b->project);
     bind_text(stmt, ST_COL_2, b->type);
 }
@@ -2881,7 +2881,7 @@ int cbm_store_get_schema(cbm_store_t *s, const char *project, cbm_schema_info_t 
                     sqlite3_finalize(stmt);
                     return CBM_NOT_FOUND;
                 }
-                arr = (cbm_label_count_t*)tmp;
+                arr = (cbm_label_count_t *)tmp;
                 cap = new_cap;
             }
             arr[n].label = heap_strdup((const char *)sqlite3_column_text(stmt, 0));
@@ -2949,7 +2949,7 @@ int cbm_store_get_schema(cbm_store_t *s, const char *project, cbm_schema_info_t 
                     cbm_store_schema_free(out);
                     return CBM_NOT_FOUND;
                 }
-                arr = (cbm_type_count_t*)tmp;
+                arr = (cbm_type_count_t *)tmp;
                 cap = new_cap;
             }
             arr[n].type = heap_strdup((const char *)sqlite3_column_text(stmt, 0));
@@ -3209,7 +3209,8 @@ static int arch_languages(cbm_store_t *s, const char *project, cbm_architecture_
         nlang = ST_MAX_LANG;
     }
 
-    out->languages = (nlang > 0) ? (cbm_language_count_t*)calloc(nlang, sizeof(cbm_language_count_t)) : NULL;
+    out->languages =
+        (nlang > 0) ? (cbm_language_count_t *)calloc(nlang, sizeof(cbm_language_count_t)) : NULL;
     out->language_count = nlang;
     for (int i = 0; i < nlang; i++) {
         out->languages[i].language = heap_strdup(lang_names[i]);
@@ -3486,7 +3487,7 @@ static int arch_boundaries(cbm_store_t *s, const char *project, cbm_cross_pkg_bo
     }
 
     cbm_cross_pkg_boundary_t *result =
-        (bn > 0) ? (cbm_cross_pkg_boundary_t*)calloc(bn, sizeof(cbm_cross_pkg_boundary_t)) : NULL;
+        (bn > 0) ? (cbm_cross_pkg_boundary_t *)calloc(bn, sizeof(cbm_cross_pkg_boundary_t)) : NULL;
     for (int i = 0; i < bn; i++) {
         result[i].from = bfroms[i];
         result[i].to = btos[i];
@@ -3560,7 +3561,8 @@ static int arch_packages_from_qn(cbm_store_t *s, const char *project,
         np = MAX_PREVIEW_NAMES;
     }
 
-    cbm_package_summary_t *arr = (np > 0) ? (cbm_package_summary_t*)calloc(np, sizeof(cbm_package_summary_t)) : NULL;
+    cbm_package_summary_t *arr =
+        (np > 0) ? (cbm_package_summary_t *)calloc(np, sizeof(cbm_package_summary_t)) : NULL;
     for (int i = 0; i < np; i++) {
         arr[i].name = pnames[i];
         arr[i].node_count = pcounts[i];
@@ -3584,7 +3586,8 @@ static int arch_packages(cbm_store_t *s, const char *project, cbm_architecture_i
 
     int cap = ST_INIT_CAP_16;
     int n = 0;
-    cbm_package_summary_t *arr = (cbm_package_summary_t *)calloc(cap, sizeof(cbm_package_summary_t));
+    cbm_package_summary_t *arr =
+        (cbm_package_summary_t *)calloc(cap, sizeof(cbm_package_summary_t));
     while (sqlite3_step(stmt) == SQLITE_ROW) {
         if (n >= cap) {
             cap *= ST_GROWTH;
@@ -3740,7 +3743,8 @@ static int arch_layers(cbm_store_t *s, const char *project, cbm_architecture_inf
     }
 
     /* Classify each package */
-    out->layers = (npkgs > 0) ? (cbm_package_layer_t*)calloc(npkgs, sizeof(cbm_package_layer_t)) : NULL;
+    out->layers =
+        (npkgs > 0) ? (cbm_package_layer_t *)calloc(npkgs, sizeof(cbm_package_layer_t)) : NULL;
     out->layer_count = npkgs;
     for (int i = 0; i < npkgs; i++) {
         bool has_route = pkg_in_list(all_pkgs[i], route_pkgs, nrpkgs);
@@ -3904,7 +3908,8 @@ static void push_tree_entry(cbm_file_tree_entry_t **entries, int *en, int *ecap,
                             cbm_file_tree_entry_t e) {
     if (*en >= *ecap) {
         *ecap *= ST_GROWTH;
-        *entries = (__typeof__(*entries))safe_realloc(*entries, *ecap * sizeof(cbm_file_tree_entry_t));
+        *entries =
+            (__typeof__(*entries))safe_realloc(*entries, *ecap * sizeof(cbm_file_tree_entry_t));
     }
     (*entries)[(*en)++] = e;
 }
@@ -3915,7 +3920,8 @@ static void arch_collect_entries(char **dir_paths, int *dir_child_counts, char *
                                  int *en_out) {
     int ecap = CBM_SZ_64;
     int en = 0;
-    cbm_file_tree_entry_t *entries = (cbm_file_tree_entry_t *)calloc(ecap, sizeof(cbm_file_tree_entry_t));
+    cbm_file_tree_entry_t *entries =
+        (cbm_file_tree_entry_t *)calloc(ecap, sizeof(cbm_file_tree_entry_t));
 
     /* Root children */
     for (int i = 0; i < dn; i++) {
@@ -4247,7 +4253,8 @@ int cbm_louvain(const int64_t *nodes, int node_count, const cbm_louvain_edge_t *
     }
 
     if (total_weight == 0) {
-        cbm_louvain_result_t *result = (cbm_louvain_result_t *)malloc(n * sizeof(cbm_louvain_result_t));
+        cbm_louvain_result_t *result =
+            (cbm_louvain_result_t *)malloc(n * sizeof(cbm_louvain_result_t));
         for (int i = 0; i < n; i++) {
             result[i].node_id = nodes[i];
             result[i].community = i;
@@ -5093,7 +5100,8 @@ static cbm_vector_result_t *vs_append_result(cbm_vector_result_t *results, int *
                                              const int8_t (*kw_vecs)[VS_VEC_DIM], int actual_kw) {
     if (*count >= *cap) {
         int nc = *cap < CBM_SZ_16 ? CBM_SZ_16 : *cap * ST_COL_2;
-        cbm_vector_result_t *grown = (cbm_vector_result_t *)realloc(results, (size_t)nc * sizeof(cbm_vector_result_t));
+        cbm_vector_result_t *grown =
+            (cbm_vector_result_t *)realloc(results, (size_t)nc * sizeof(cbm_vector_result_t));
         if (!grown) {
             return NULL;
         }

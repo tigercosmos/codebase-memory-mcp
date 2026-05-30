@@ -409,7 +409,7 @@ typedef struct {
 
     cbm_pkg_entries_t *pkg_entries; /* per-worker manifest arrays (separate allocation) */
 
-    const cbm_cc_index_t *cc_index; /* compile_commands flags (C/C++), borrowed */
+    const cbm_cc_index_t *cc_index;      /* compile_commands flags (C/C++), borrowed */
     std::atomic<int64_t> retained_bytes; /* total source bytes copied into result arenas */
 } extract_ctx_t;
 
@@ -453,7 +453,7 @@ static void log_extract_done(int pos, uint64_t ms, int defs, const char *path) {
 }
 
 static void extract_worker(int worker_id, void *ctx_ptr) {
-    extract_ctx_t *ec = (extract_ctx_t*)ctx_ptr;
+    extract_ctx_t *ec = (extract_ctx_t *)ctx_ptr;
     extract_worker_state_t *ws = &ec->workers[worker_id];
 
     /* Lazy gbuf creation */
@@ -492,10 +492,10 @@ static void extract_worker(int worker_id, void *ctx_ptr) {
 
         uint64_t file_t0 = extract_now_ns();
 
-        CBMFileResult *result = cbm_extract_file(source, source_len, fi->language, ec->project_name,
-                                                 fi->rel_path, CBM_EXTRACT_BUDGET,
-                                                 cbm_cc_index_defines(ec->cc_index, fi->rel_path),
-                                                 cbm_cc_index_includes(ec->cc_index, fi->rel_path));
+        CBMFileResult *result =
+            cbm_extract_file(source, source_len, fi->language, ec->project_name, fi->rel_path,
+                             CBM_EXTRACT_BUDGET, cbm_cc_index_defines(ec->cc_index, fi->rel_path),
+                             cbm_cc_index_includes(ec->cc_index, fi->rel_path));
 
         uint64_t file_elapsed_ms = (extract_now_ns() - file_t0) / PP_USEC_PER_MS;
 
@@ -656,7 +656,8 @@ int cbm_parallel_extract(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *files, 
     memset(workers, 0, (size_t)worker_count * sizeof(extract_worker_state_t));
 
     /* Per-worker manifest entry arrays (separate from cache-line-aligned worker state) */
-    cbm_pkg_entries_t *pkg_entries = (cbm_pkg_entries_t *)calloc(worker_count, sizeof(cbm_pkg_entries_t));
+    cbm_pkg_entries_t *pkg_entries =
+        (cbm_pkg_entries_t *)calloc(worker_count, sizeof(cbm_pkg_entries_t));
 
     extract_ctx_t ec = {
         .files = files,
@@ -1876,7 +1877,7 @@ static void resolve_file_semantic(resolve_ctx_t *rc, resolve_worker_state_t *ws,
 }
 
 static void resolve_worker(int worker_id, void *ctx_ptr) {
-    resolve_ctx_t *rc = (resolve_ctx_t*)ctx_ptr;
+    resolve_ctx_t *rc = (resolve_ctx_t *)ctx_ptr;
     resolve_worker_state_t *ws = &rc->workers[worker_id];
 
     if (!ws->local_edge_buf) {

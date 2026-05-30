@@ -329,8 +329,7 @@ int cbm_pipeline_pass_usages(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t *fil
                 continue;
             }
             result = cbm_extract_file(source, source_len, files[i].language, ctx->project_name, rel,
-                                      CBM_EXTRACT_BUDGET,
-                                      cbm_cc_index_defines(ctx->cc_index, rel),
+                                      CBM_EXTRACT_BUDGET, cbm_cc_index_defines(ctx->cc_index, rel),
                                       cbm_cc_index_includes(ctx->cc_index, rel));
             free(source);
             if (!result) {

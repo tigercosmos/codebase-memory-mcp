@@ -40,7 +40,7 @@ typedef struct {
 } pthread_worker_arg_t;
 
 static void *pthread_worker(void *arg) {
-    pthread_worker_arg_t *wa = (pthread_worker_arg_t*)arg;
+    pthread_worker_arg_t *wa = (pthread_worker_arg_t *)arg;
     while (WP_TRUE) {
         int idx = atomic_fetch_add_explicit(wa->next_idx, WP_STEP, memory_order_relaxed);
         if (idx >= wa->count) {

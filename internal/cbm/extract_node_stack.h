@@ -16,7 +16,6 @@
 #include "tree_sitter/api.h"
 #include <string.h> /* memcpy */
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

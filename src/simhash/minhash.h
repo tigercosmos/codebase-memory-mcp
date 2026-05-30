@@ -29,7 +29,6 @@
  * 30 leaf tokens ≈ BigCloneBench standard of 50 raw source tokens. */
 #define CBM_MINHASH_MIN_NODES 30
 
-
 #ifdef __cplusplus
 extern "C" {
 #endif

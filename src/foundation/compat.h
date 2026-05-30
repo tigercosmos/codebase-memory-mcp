@@ -92,7 +92,12 @@ static inline int cbm_nanosleep(const struct timespec *req, struct timespec *rem
     return 0;
 }
 #else
-#define cbm_clock_gettime clock_gettime
+/* clk_id is passed as int (matching the Windows decl + call sites); cast to
+ * clockid_t for the real call — on macOS clockid_t is an enum and C++ forbids
+ * the implicit int->enum conversion (on Linux clockid_t is int, so a no-op). */
+static inline int cbm_clock_gettime(int clk_id, struct timespec *tp) {
+    return clock_gettime((clockid_t)clk_id, tp);
+}
 #define cbm_nanosleep nanosleep
 #endif
 

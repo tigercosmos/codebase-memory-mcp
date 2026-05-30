@@ -9,6 +9,9 @@
 name: Dry Run
 
 on:
+  # CI: run the full pipeline automatically when code lands on the mainline.
+  push:
+    branches: [main, master]
   workflow_dispatch:
     inputs:
       skip_lint:
@@ -65,7 +68,7 @@ jobs:
 
   # ── Soak tests (optional, parallel with smoke) ────────────────
   soak:
-    if: ${{ inputs.soak_level != 'none' && !cancelled() && needs.build.result == 'success' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.soak_level != 'none' && !cancelled() && needs.build.result == 'success' }}
     needs: [build]
     uses: ./.github/workflows/_soak.yml
     with:

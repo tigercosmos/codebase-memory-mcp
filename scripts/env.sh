@@ -16,7 +16,7 @@ OS="$(uname -s | tr '[:upper:]' '[:lower:]')"
 case "$OS" in
     darwin)  OS="darwin" ;;
     linux)   OS="linux" ;;
-    mingw*|msys*|cygwin*) OS="windows" ;;
+    mingw*|msys*|cygwin*|clang*|ucrt*) OS="windows" ;;
     *)       OS="unknown" ;;
 esac
 

@@ -71,6 +71,7 @@ set(CBM_FIRSTPARTY_CXX_FLAGS
     -Wno-deprecated-declarations
     -Wno-deprecated-enum-enum-conversion
     -Wno-deprecated-enum-float-conversion
+    -Wno-missing-braces
     ${_gcc_only_flags})  # match the C side: -Wno-format-truncation / -unused-result / -stringop-truncation
 # -Wno-c99-designator is Clang-only; add conditionally
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")

@@ -89,6 +89,9 @@ CMAKE_ARGS=(-DCBM_SANITIZE=OFF -DCBM_WERROR=OFF -DCMAKE_BUILD_TYPE=None
             -DCMAKE_C_FLAGS=-O2 -DCMAKE_CXX_FLAGS=-O2)
 [[ -n "${CC:-}" ]]  && CMAKE_ARGS+=(-DCMAKE_C_COMPILER="$CC")
 [[ -n "${CXX:-}" ]] && CMAKE_ARGS+=(-DCMAKE_CXX_COMPILER="$CXX")
+# Windows (msys2): use Unix Makefiles + the msys2 clang toolchain, not the
+# default Visual Studio/MSVC generator (which rejects the GCC-style flags).
+[[ "$OS" == "windows" ]] && CMAKE_ARGS+=(-G "Unix Makefiles")
 [[ -n "$VERSION" ]] && CMAKE_ARGS+=(-DCBM_VERSION="${VERSION#v}")
 for a in "${EXTRA_MAKE_ARGS[@]+"${EXTRA_MAKE_ARGS[@]}"}"; do
     case "$a" in

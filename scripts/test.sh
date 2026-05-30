@@ -63,6 +63,9 @@ scripts/clean.sh
 CMAKE_ARGS=(-DCBM_SANITIZE=ON)
 [[ -n "${CC:-}" ]]  && CMAKE_ARGS+=(-DCMAKE_C_COMPILER="$CC")
 [[ -n "${CXX:-}" ]] && CMAKE_ARGS+=(-DCMAKE_CXX_COMPILER="$CXX")
+# Windows (msys2): use Unix Makefiles + the msys2 clang toolchain, not the
+# default Visual Studio/MSVC generator (which rejects the GCC-style flags).
+[[ "$OS" == "windows" ]] && CMAKE_ARGS+=(-G "Unix Makefiles")
 $ARCH_PREFIX cmake -S "$ROOT" -B "$ROOT/build/c" "${CMAKE_ARGS[@]}"
 
 # Step 3: Build the test runner

@@ -100,7 +100,7 @@ static char *cs_node_text(CSLSPContext *ctx, TSNode node) {
     return cbm_node_text(ctx->arena, node, ctx->source);
 }
 
-static char *cs_node_text_cached(CSLSPContext *ctx, TSNode node) {
+[[maybe_unused]] static char *cs_node_text_cached(CSLSPContext *ctx, TSNode node) {
     return cs_node_text(ctx, node);
 }
 
@@ -208,7 +208,7 @@ static const char *cs_predefined_alias(const char *name) {
     return NULL;
 }
 
-static bool cs_is_keyword_self(const char *name) {
+[[maybe_unused]] static bool cs_is_keyword_self(const char *name) {
     if (!name) return false;
     return strcmp(name, "this") == 0 || strcmp(name, "base") == 0;
 }
@@ -317,7 +317,7 @@ static const CBMRegisteredType *cs_lookup_type_qn(CSLSPContext *ctx, const char 
 }
 
 /* Try a candidate QN; if found, return it (interned in arena). */
-static const char *cs_try_type_qn(CSLSPContext *ctx, const char *qn) {
+[[maybe_unused]] static const char *cs_try_type_qn(CSLSPContext *ctx, const char *qn) {
     if (!qn) return NULL;
     if (cs_lookup_type_qn(ctx, qn)) return qn;
     return NULL;
@@ -941,7 +941,7 @@ static const CBMType *cs_eval_identifier_type(CSLSPContext *ctx, TSNode node) {
 
 /* ── invocation ─────────────────────────────────────────────────── */
 
-static int cs_count_args(TSNode args_node) {
+[[maybe_unused]] static int cs_count_args(TSNode args_node) {
     if (ts_node_is_null(args_node)) return 0;
     int count = 0;
     uint32_t nc = ts_node_child_count(args_node);
@@ -2238,7 +2238,7 @@ void cs_lsp_process_file(CSLSPContext *ctx, TSNode root) {
 /* Parse a parenthesized signature like `(int x, string s = "")` into
  * NULL-terminated arrays of param names + types. Best-effort: drops
  * default-value expressions, ignores ref/out/in modifiers. */
-static void cs_parse_signature(CBMArena *arena, const char *signature,
+[[maybe_unused]] static void cs_parse_signature(CBMArena *arena, const char *signature,
                                 CSLSPContext *ctx, const char ***out_names,
                                 const CBMType ***out_types) {
     *out_names = NULL;
@@ -2331,7 +2331,7 @@ static void cs_parse_signature(CBMArena *arena, const char *signature,
     }
 }
 
-static void cs_register_type_decls(CSLSPContext *ctx, CBMTypeRegistry *reg, TSNode root) {
+[[maybe_unused]] static void cs_register_type_decls(CSLSPContext *ctx, CBMTypeRegistry *reg, TSNode root) {
     /* We rely on CBMFileResult.defs entries already being filled by the
      * unified extractor. This function is reserved for future expansions
      * (e.g. parsing field declarations directly from the AST). */

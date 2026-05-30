@@ -2363,7 +2363,7 @@ static const CBMType* py_parse_type_text_qn(CBMArena* arena, const char* ann,
     return cbm_type_named(arena, ann);
 }
 
-static const CBMType* py_parse_type_text(CBMArena* arena, const char* ann) {
+[[maybe_unused]] static const CBMType* py_parse_type_text(CBMArena* arena, const char* ann) {
     return py_parse_type_text_qn(arena, ann, NULL);
 }
 

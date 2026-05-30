@@ -1748,7 +1748,7 @@ static void walk_with_narrowings(PHPLSPContext *ctx, TSNode body,
 }
 
 /* Backwards-compat single-binding wrapper. */
-static void walk_with_narrowing(PHPLSPContext *ctx, TSNode body, const php_narrowing_t *nw) {
+[[maybe_unused]] static void walk_with_narrowing(PHPLSPContext *ctx, TSNode body, const php_narrowing_t *nw) {
     walk_with_narrowings(ctx, body, nw, nw ? 1 : 0);
 }
 

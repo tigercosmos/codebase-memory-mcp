@@ -79,10 +79,14 @@ endif()
 
 if(CBM_WERROR)
     list(APPEND CBM_FIRSTPARTY_C_FLAGS -Werror)
-    # NB: we intentionally leave -Werror OFF for C++23 first-party TUs in
-    # Phase 1. The C-to-C++ port surfaces warnings that don't reflect
-    # genuine bugs (e.g. narrowing in initializer lists); we'll burn them
-    # down per-module in Phase 2 and re-enable then.
+    # Phase 2 complete: first-party C++ TUs are warning-clean under the
+    # first-party flag set, so -Werror is now enabled for them too. (Kept
+    # OFF for the prod build via build.sh's -DCBM_WERROR=OFF, where -O2 can
+    # surface optimizer-only warnings.) Historical note: this was deferred
+    # during Phase 1 because the C-to-C++ port surfaced non-bug warnings;
+    # those have since been burned down (suppressing only benign categories)
+    # and the residual unused-function helpers marked [[maybe_unused]].
+    list(APPEND CBM_FIRSTPARTY_CXX_FLAGS -Werror)
 endif()
 
 set(CBM_VENDORED_FLAGS -w) # mirrors -w on every vendored target in Makefile.cbm
@@ -211,7 +215,7 @@ cbm_add_vendored_library(cbm_grammars
 # TUs (cbm_lsp_tscs) and the generated tables are already warning-checked.
 add_library(cbm_lsp_all OBJECT ${CBM_INTERNAL}/lsp_all.cpp)
 set_target_properties(cbm_lsp_all PROPERTIES CXX_STANDARD 23)
-target_compile_options(cbm_lsp_all PRIVATE -w)
+target_compile_options(cbm_lsp_all PRIVATE ${CBM_FIRSTPARTY_CXX_FLAGS} -Wno-comment)
 # CBM_PYTHON_STDLIB_GENERATED suppresses py_lsp.cpp's no-op stdlib stub —
 # the real cbm_python_stdlib_register definition is in the cbm_lsp_generated
 # target (generated/python_stdlib_data.c), linked separately.

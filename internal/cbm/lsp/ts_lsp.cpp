@@ -111,7 +111,7 @@ static bool node_kind_is(TSNode node, const char* kind) {
 }
 
 // Find the first named child of `node` whose kind matches one of the listed kinds.
-static TSNode find_first_kind(TSNode node, const char* kind) {
+[[maybe_unused]] static TSNode find_first_kind(TSNode node, const char* kind) {
     if (ts_node_is_null(node)) return node;
     uint32_t nc = ts_node_named_child_count(node);
     for (uint32_t i = 0; i < nc; i++) {
@@ -1261,7 +1261,7 @@ static const CBMType* unwrap_passthrough_template(const CBMType* t) {
 
 // Build a UNION of LITERAL string types representing keyof T, where T is a registered
 // class/interface. Returns UNKNOWN if T has no fields or isn't registered.
-static const CBMType* eval_keyof(TSLSPContext* ctx, const CBMType* operand) {
+[[maybe_unused]] static const CBMType* eval_keyof(TSLSPContext* ctx, const CBMType* operand) {
     if (!ctx || !operand) return cbm_type_unknown();
     const CBMType* base = simplify_type(ctx, operand);
     if (!base || base->kind != CBM_TYPE_NAMED) return cbm_type_unknown();
@@ -1283,7 +1283,7 @@ static const CBMType* eval_keyof(TSLSPContext* ctx, const CBMType* operand) {
 
 // Evaluate T[K]: when K is a string literal, look up that field on T. When K is a
 // type parameter (or `keyof T` itself), return UNKNOWN — pragmatic v1.
-static const CBMType* eval_indexed_access(TSLSPContext* ctx, const CBMType* obj,
+[[maybe_unused]] static const CBMType* eval_indexed_access(TSLSPContext* ctx, const CBMType* obj,
                                           const CBMType* key) {
     if (!ctx || !obj || !key) return cbm_type_unknown();
     if (key->kind == CBM_TYPE_TS_LITERAL && key->data.literal_ts.value &&

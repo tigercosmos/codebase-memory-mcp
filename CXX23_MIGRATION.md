@@ -59,45 +59,44 @@ table records what each needed and how it was resolved.
 | `internal/cbm/lsp/generated/*.cpp` (6 files, ~55k LOC) | Auto-generated tables; 84 compound literals (cs 81, cpp 2, c 1) | ✅ Same `cbm_type_args` helper; register fns keep C linkage via the declaring `extern "C"` lsp header. `cbm_lsp_generated` is now a C++ target. Only `gen-py-stdlib.py` exists in-tree (emits the no-compound-literal python table); other generators aren't in the repo, so these `.cpp` are the source of truth. |
 | `src/foundation/hash_table.cpp` | Instantiates `verstable.h` (2069-line C99 macro lib, 26 `_Generic` sites) | ✅ Compiles as C++23 unchanged — the `_Generic` dispatch macros are never expanded (uses `cbm_vt_*` directly; overrides `HASH_FN`/`CMPR_FN`). **Verstable retained, no perf change** — *not* swapped for `std::unordered_map`. Folded into `cbm_foundation_cxx`. |
 
-#### Vendored C → compiled as C++ (no rename; LANGUAGE CXX)
+#### Scope: first-party = C++; third-party = C (unchanged)
 
-On the maintainer's "migrate ALL C to C++" directive, the vendored amalgamations
-that compile + link cleanly as C++ are now built with the C++ compiler via the
-`cbm_add_vendored_cxx_library` helper (CMake `LANGUAGE CXX`) — the upstream `.c`
-files stay pristine and re-vendorable, just compiled as C++. Their public headers
-are `extern "C"`, so the C ABI at call boundaries is preserved.
+Final scope (maintainer's clarification): **every source file this repo
+authors is C++; all third-party code stays C, untouched.**
 
-| Library (compiled TU) | Status |
-|---|---|
-| mimalloc, mongoose, yyjson, lz4, zstd | ✅ compiled as C++ (link + 3629/1 under ASan). Their `#include`d implementation files compile as C++ within these TUs too. |
+Verified: `find src internal -name '*.c'` excluding `vendored/` returns only
+zero-logic shims — `internal/cbm/ts_runtime.c` and the 154
+`internal/cbm/grammar_*.c` files each contain **0 lines of code**, just an
+`#include` of a vendored third-party amalgamation (tree-sitter
+`parser.c`/`scanner.c`/`lib.c`). They exist solely to compile that third-party
+C in isolated translation units, so they stay C with the code they include.
 
-zstd needed one upstream build knob (`ZSTD_ASAN_DONT_POISON_WORKSPACE=1`) to
-drop its non-`extern "C"` ASan-poisoning decls that mangled under C++; no
-source edit.
+Third-party C kept as-is (consumed from C++ via `extern "C"` ABIs):
+`vendored/sqlite3`, `vendored/mongoose`, `vendored/yyjson`,
+`vendored/mimalloc`, `internal/cbm/vendored/{lz4,zstd}`, `vendored/tre`,
+`internal/cbm/vendored/ts_runtime`, and `internal/cbm/vendored/grammars/**`.
 
-#### Stays C — confirmed un-migratable without forking generated/upstream code
+(An earlier pass briefly compiled mimalloc/mongoose/yyjson/lz4/zstd as C++
+via CMake `LANGUAGE CXX`; that was reverted on the scope clarification —
+third-party stays C. A migration workflow had independently confirmed
+sqlite3, the tree-sitter runtime, and the generated grammars cannot compile
+as C++ without forking generated/upstream code anyway; see the verdicts that
+follow.)
 
-A 4-way parallel migration workflow attempted each of these in an isolated
-worktree (real g++/build/link/test). Verdicts (evidence-based):
+#### Why the third-party C cannot be C++ even if we wanted (workflow evidence)
 
-| Target | C++ errors | Verdict & reason |
+A 4-way parallel workflow attempted each in an isolated worktree (real
+g++/build/link/test):
+
+| Target | C++ errors | Verdict |
 |---|---|---|
-| `vendored/sqlite3/sqlite3.c` (~266k LOC, SQLite 3.51) | 788 | **inadvisable.** Only 43% (void* casts) are mechanical; 57% are fundamental C-vs-C++ — nested struct-tag scoping (~430 errs across 14 structs), goto-crosses-init, a local named `new`, tentative-definition ODR. All require editing the checksum-pinned canonical amalgamation, breaking `vendor` re-pull on every release, for zero gain (already consumed via the `extern "C"` C ABI). |
-| `internal/cbm/ts_runtime.c` (+ tree-sitter runtime amalgamation) | 177 | **inadvisable.** Needs editing 27 sites in vendored upstream files (reorder designators, split mixed inits, restructure goto/init, `return false`→`nullptr`) **plus `-fpermissive` for ~150 void*/enum cases** — which breaks clang and the `-Werror` goal, and forks the verbatim-vendored runtime. Already a clean self-contained C TU with a stable C ABI. |
-| `internal/cbm/grammar_*.c` (154) + `vendored/grammars/**` (258 parser/scanner) | ~1300–1800 each (3199→81 on a sample after a designator swap) | **inadvisable.** The dominant designator-order error is mechanically swappable, but the residual class (interleaved `[N]=` array designators in multi-thousand-element generated tables) **cannot be regex-fixed — it requires semantically re-emitting the tables the way `tree-sitter generate` does.** Any in-tree transform diverges 154 parser.c + 98 scanner.c + 12 parser.h from generator output and breaks regeneration. The fix belongs in the vendoring pipeline / upstream CLI. |
-| `vendored/tre/tre_all.c` | 0 (compiles clean) | Windows-only target; compiles clean as C++ but not built/tested on Linux. Left as C pending a Windows validation run. |
-| `vendored/xxhash/xxhash.c` | — | Not compiled (dead/unused in the build). |
-| `tests/*.c` (62 files) | — | Test sources; call into the C++ libs via `extern "C"` headers and work as-is. |
-
-**Bottom line:** every first-party TU and every cleanly-portable vendored
-library is now compiled as C++. The only remaining C is generated
-(tree-sitter parsers) or canonical third-party (SQLite, tree-sitter runtime)
-code that the project re-vendors/regenerates verbatim — migrating it would
-fork those dependencies, break re-vendoring/regeneration, and (for the
-runtime) drop clang support, with no functional benefit. It is consumed from
-C++ across a stable `extern "C"` ABI, which is the correct pattern.
+| `vendored/sqlite3/sqlite3.c` (~266k LOC) | 788 | Only 43% mechanical (void* casts); 57% fundamental C-vs-C++ (struct-tag scoping, a local named `new`, goto-over-init, ODR) — only fixable by editing the checksum-pinned canonical amalgamation. |
+| `ts_runtime` (tree-sitter runtime) | 177 | Needs editing 27 upstream sites + `-fpermissive` for ~150 cases (breaks clang + `-Werror`); forks the verbatim-vendored runtime. |
+| 154 generated grammars | ~1300–1800 each | Residual errors need semantically re-emitting the parser tables like `tree-sitter generate`; not regex-able; any in-tree edit breaks regeneration. |
 
 ### Files now C++23
+
+
 
 Everything else: `src/foundation/` (15 TUs), `src/cli/`,
 `src/cypher/`, `src/discover/` (3 of 4), `src/graph_buffer/`,

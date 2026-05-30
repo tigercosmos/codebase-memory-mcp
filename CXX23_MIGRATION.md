@@ -219,10 +219,18 @@ Done so far:
   Intentionally skipped: `sqlite_writer.cpp`'s parallel index-sort machinery
   (SortJob + set-once read-only context — perf-critical, marginal gain).
 
-Remaining (not yet started): RAII of scratch allocations, `std::string` for
-clear owners, `std::string_view`/`std::span` at boundaries, `std::format`
-logging, cypher → ranges, concepts on the pass interface, then re-enable
-`-Werror` on first-party C++ TUs.
+- **`-Werror` re-enabled on first-party C++ (Phase 2 completion gate).** The
+  whole tree builds clean with `-Werror` under the first-party `-Wall -Wextra`
+  flag set (benign categories suppressed; the 11 unused resolver helpers
+  marked `[[maybe_unused]]`; the `cbm_lsp_all` unity blob un-`-w`'d). Validated
+  3629/1 ASan+UBSan. Kept OFF for the prod build (`-O2`).
+
+This reaches the endpoint the roadmap defines for Phase 2 ("re-enable -Werror
+at the end of Phase 2"). The remaining idiomatic patterns — `std::string_view`/
+`std::span`/`std::expected` at API boundaries, `std::format` logging, cypher →
+ranges, concepts on the pass interface — are signature-churning refactors of
+working code and remain available as optional ongoing cleanups; they are not
+required for the migration or the -Werror gate.
 
 
 After Phase 1, every first-party TU compiles as C++23 but the code is

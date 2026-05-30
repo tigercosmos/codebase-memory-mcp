@@ -32,6 +32,23 @@
 #include <math.h>
 #include <unistd.h>
 
+/* ── Sanitizer detection ───────────────────────────────────────── */
+/* CBM_TEST_ASAN is 1 when AddressSanitizer is active. GCC defines
+ * __SANITIZE_ADDRESS__; Clang exposes it only via __has_feature. The nested
+ * #if guards the __has_feature() call so GCC (which lacks it) never parses it
+ * — the single-expression `defined(__has_feature) && __has_feature(...)` form
+ * fails to compile on GCC. */
+#if defined(__SANITIZE_ADDRESS__)
+#define CBM_TEST_ASAN 1
+#elif defined(__has_feature)
+#if __has_feature(address_sanitizer)
+#define CBM_TEST_ASAN 1
+#endif
+#endif
+#ifndef CBM_TEST_ASAN
+#define CBM_TEST_ASAN 0
+#endif
+
 /* ── Global counters (defined in test_main.c) ──────────────────── */
 
 extern int tf_pass_count;

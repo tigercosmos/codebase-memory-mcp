@@ -241,12 +241,10 @@ TEST(cslsp_bench_resolution_ratio) {
 
     /* Time budget. ASan+UBSan instrumentation slows the parse ~5-10×, so
      * scale the budget when a sanitizer is active. Native: 200 ms for a
-     * ~260-line fixture; sanitized: 2000 ms. */
-#ifdef __SANITIZE_ADDRESS__
-    ASSERT(ms < 2000.0);
-#else
-    ASSERT(ms < 200.0);
-#endif
+     * ~260-line fixture; sanitized: 2000 ms. CBM_TEST_ASAN covers both GCC and
+     * Clang (Apple clang doesn't define __SANITIZE_ADDRESS__ — see
+     * test_framework.h). */
+    ASSERT(ms < (CBM_TEST_ASAN ? 2000.0 : 200.0));
     PASS();
 }
 

@@ -297,9 +297,14 @@ TEST(incr_full_index) {
         printf("    [PERF WARNING] full index: %.0fms (>30s)\n", ms);
     }
 
-    /* Memory: should not exceed 2GB for a 1100-file Python project */
+    /* Memory budget. CI clones a sparse FastAPI checkout (~7K files, docs/tests
+     * excluded — see the getenv("CI") branch above) for which 2GB is ample. A
+     * full local checkout (~18K files) builds a larger graph, and worker-pool
+     * RSS scales with host core count, so allow more headroom off-CI. Both run
+     * under ASan here. */
+    int rss_budget_mb = getenv("CI") ? 2048 : 4096;
     size_t rss_delta_mb = peak_mb - (g_rss_before_full / (1024 * 1024));
-    ASSERT_LT((int)rss_delta_mb, 2048);
+    ASSERT_LT((int)rss_delta_mb, rss_budget_mb);
 
     printf("    [perf] full: %d nodes, %d edges (%d CALLS, %d IMPORTS) "
            "in %.0fms, peak=%zuMB\n",

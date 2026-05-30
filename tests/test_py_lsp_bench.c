@@ -261,12 +261,10 @@ TEST(pylsp_bench_resolution_ratio) {
 
     /* Time budget. ASan+UBSan instrumentation slows the parse ~5-10×, so
      * scale the budget when a sanitizer is active. Native: 150 ms for a
-     * ~200-line fixture; sanitized: 1500 ms. */
-#ifdef __SANITIZE_ADDRESS__
-    ASSERT(ms < 1500.0);
-#else
-    ASSERT(ms < 150.0);
-#endif
+     * ~200-line fixture; sanitized: 1500 ms. CBM_TEST_ASAN covers both GCC and
+     * Clang (Apple clang doesn't define __SANITIZE_ADDRESS__ — see
+     * test_framework.h). */
+    ASSERT(ms < (CBM_TEST_ASAN ? 1500.0 : 150.0));
     PASS();
 }
 

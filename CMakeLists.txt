@@ -89,7 +89,16 @@ if(CBM_WERROR)
     # during Phase 1 because the C-to-C++ port surfaced non-bug warnings;
     # those have since been burned down (suppressing only benign categories)
     # and the residual unused-function helpers marked [[maybe_unused]].
-    list(APPEND CBM_FIRSTPARTY_CXX_FLAGS -Werror)
+    #
+    # -Werror on first-party C++ is scoped to GCC (the canonical CI compiler).
+    # clang (macOS AppleClang, Windows mingw-clang) emits a different, more
+    # pedantic warning set; promoting those to errors turns CI into per-platform
+    # whack-a-mole for no real benefit. clang still builds with -Wall -Wextra
+    # (warnings visible) and fails only on genuine errors. The C side keeps
+    # -Werror everywhere (it was already clang-clean as C pre-migration).
+    if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+        list(APPEND CBM_FIRSTPARTY_CXX_FLAGS -Werror)
+    endif()
 endif()
 
 set(CBM_VENDORED_FLAGS -w) # mirrors -w on every vendored target in Makefile.cbm

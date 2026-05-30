@@ -3239,7 +3239,7 @@ static char *assemble_search_output(search_result_t *sr, int sr_count, grep_matc
     yyjson_mut_val *root_obj = yyjson_mut_obj(doc);
     yyjson_mut_doc_set_root(doc, root_obj);
 
-    int output_count = sr_count < limit ? sr_count : limit;
+    int output_count = std::min(sr_count, limit);
 
     if (mode == MODE_FILES) {
         yyjson_mut_obj_add_val(doc, root_obj, "files",
@@ -3271,7 +3271,7 @@ static char *assemble_search_output(search_result_t *sr, int sr_count, grep_matc
 
         enum { MAX_RAW = 20 };
         yyjson_mut_val *raw_arr = yyjson_mut_arr(doc);
-        int raw_output = raw_count < MAX_RAW ? raw_count : MAX_RAW;
+        int raw_output = std::min(raw_count, (int)MAX_RAW);
         for (int ri = 0; ri < raw_output; ri++) {
             yyjson_mut_val *item = yyjson_mut_obj(doc);
             yyjson_mut_obj_add_str(doc, item, "file", raw[ri].file);

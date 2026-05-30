@@ -1685,7 +1685,6 @@ int cbm_store_find_nodes_by_file_overlap(cbm_store_t *s, const char *project, co
             cap *= ST_GROWTH;
             nodes = (__typeof__(nodes))safe_realloc(nodes, cap * sizeof(cbm_node_t));
         }
-        memset(&nodes[n], 0, sizeof(cbm_node_t));
         scan_node(stmt, &nodes[n]);
         n++;
     }
@@ -1741,7 +1740,6 @@ int cbm_store_find_nodes_by_qn_suffix(cbm_store_t *s, const char *project, const
             cap *= ST_GROWTH;
             nodes = (__typeof__(nodes))safe_realloc(nodes, cap * sizeof(cbm_node_t));
         }
-        memset(&nodes[n], 0, sizeof(cbm_node_t));
         scan_node(stmt, &nodes[n]);
         n++;
     }
@@ -2005,7 +2003,6 @@ int cbm_store_find_edges_by_url_path(cbm_store_t *s, const char *project, const 
             cap *= ST_GROWTH;
             edges = (__typeof__(edges))safe_realloc(edges, cap * sizeof(cbm_edge_t));
         }
-        memset(&edges[n], 0, sizeof(cbm_edge_t));
         scan_edge(stmt, &edges[n]);
         n++;
     }

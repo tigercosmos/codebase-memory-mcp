@@ -131,8 +131,6 @@ int64_t cbm_calculate_p99(int64_t *values, int count) {
 #define P99_PERCENTILE 0.99
 
     int idx = (int)((double)count * P99_PERCENTILE);
-    if (idx >= count) {
-        idx = count - SKIP_ONE;
-    }
+    idx = std::min(idx, count - SKIP_ONE);
     return values[idx];
 }

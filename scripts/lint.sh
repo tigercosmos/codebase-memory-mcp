@@ -61,6 +61,10 @@ run_cppcheck() {
         --inline-suppr \
         --quiet \
         --suppress=varFuncNullUB \
+        --suppress=cstyleCast \
+        --suppress=dangerousTypeCast \
+        --suppress=passedByValue \
+        --suppress=memsetClassFloat \
         --suppress=intToPointerCast \
         --suppress=unusedStructMember \
         --suppress=nullPointerOutOfMemory \

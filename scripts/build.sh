@@ -104,7 +104,7 @@ rm -rf "$ROOT/build/c"
 # embed_*.o linkables in build/embedded, which CMake picks up under CBM_WITH_UI.
 if $WITH_UI; then
     (cd "$ROOT/graph-ui" && npm ci && npm run build)
-    "$ROOT/scripts/embed-frontend.sh" "$ROOT/graph-ui/dist" "$ROOT/build/embedded"
+    "$ROOT/scripts/embed-frontend.sh" "$ROOT/graph-ui/dist" "build/embedded"
     CMAKE_ARGS+=(-DCBM_WITH_UI=ON)
 fi
 

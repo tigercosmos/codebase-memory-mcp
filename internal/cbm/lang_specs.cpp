@@ -3,6 +3,7 @@
 #include "tree_sitter/api.h" // TSLanguage
 
 #include <array>
+#include <tuple> // std::tuple_size_v (not transitively pulled in by <array> on older libc++)
 
 // -- Extern declarations for tree-sitter grammar functions --
 // These symbols are defined in the grammar C code compiled by Go tree-sitter modules.

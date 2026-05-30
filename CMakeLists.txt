@@ -134,19 +134,6 @@ function(cbm_add_c_library tgt)
     set_target_properties(${tgt} PROPERTIES C_STANDARD 11)
 endfunction()
 
-# ── Helper: vendored lib compiled AS C++ (no rename — keeps upstream files
-# pristine; LANGUAGE CXX runs the C++ compiler over the .c amalgamation).
-# Relaxed warnings (-w) like the C vendored helper; sanitizers are global.
-function(cbm_add_vendored_cxx_library tgt)
-    cmake_parse_arguments(A "" "" "SOURCES;DEFS;INCLUDES" ${ARGN})
-    add_library(${tgt} OBJECT ${A_SOURCES})
-    set_source_files_properties(${A_SOURCES} PROPERTIES LANGUAGE CXX)
-    target_compile_options(${tgt} PRIVATE ${CBM_VENDORED_FLAGS})
-    target_compile_definitions(${tgt} PRIVATE ${CBM_VENDORED_DEFS_C} ${A_DEFS})
-    target_include_directories(${tgt} PRIVATE ${A_INCLUDES})
-    set_target_properties(${tgt} PROPERTIES CXX_STANDARD 17)
-endfunction()
-
 # ── Helper: declare a first-party C++23 library ────────────────
 function(cbm_add_cxx_library tgt)
     cmake_parse_arguments(A "" "" "SOURCES;DEFS;INCLUDES" ${ARGN})
@@ -168,11 +155,10 @@ function(cbm_add_vendored_library tgt)
 endfunction()
 
 # ────────────────────────────────────────────────────────────────
-# Vendored libraries (mimalloc/mongoose/yyjson/lz4/zstd compiled as C++;
-# sqlite3 stays C — its amalgamation does not compile as C++; see notes)
+# Vendored libraries (stay as C — third-party, consumed via extern "C" ABI)
 # ────────────────────────────────────────────────────────────────
 
-cbm_add_vendored_cxx_library(cbm_mimalloc
+cbm_add_vendored_library(cbm_mimalloc
     SOURCES ${CMAKE_SOURCE_DIR}/vendored/mimalloc/src/static.c
     DEFS MI_OVERRIDE=0
     INCLUDES ${CMAKE_SOURCE_DIR}/vendored/mimalloc/include
@@ -183,31 +169,22 @@ cbm_add_vendored_library(cbm_sqlite3
     DEFS SQLITE_DQS=0 SQLITE_THREADSAFE=1 SQLITE_ENABLE_FTS5
     INCLUDES ${CMAKE_SOURCE_DIR}/vendored/sqlite3)
 
-cbm_add_vendored_cxx_library(cbm_mongoose
+cbm_add_vendored_library(cbm_mongoose
     SOURCES ${CMAKE_SOURCE_DIR}/vendored/mongoose/mongoose.c
     DEFS MG_ENABLE_LOG=0
     INCLUDES ${CMAKE_SOURCE_DIR}/vendored)
 
-cbm_add_vendored_cxx_library(cbm_yyjson
+cbm_add_vendored_library(cbm_yyjson
     SOURCES ${CMAKE_SOURCE_DIR}/vendored/yyjson/yyjson.c
     INCLUDES ${CMAKE_SOURCE_DIR}/vendored/yyjson)
 
-cbm_add_vendored_cxx_library(cbm_lz4
+cbm_add_vendored_library(cbm_lz4
     SOURCES ${CBM_INTERNAL}/vendored/lz4/lz4.c
             ${CBM_INTERNAL}/vendored/lz4/lz4hc.c
     INCLUDES ${CBM_INTERNAL} ${CBM_INTERNAL}/vendored/lz4)
 
-# zstd compiled AS C++ (no rename). zstd self-declares the manual ASan
-# poisoning API (__asan_(un)poison_memory_region) WITHOUT extern "C", so as
-# C++ those decls mangle and don't resolve to the ASan runtime's C-linkage
-# symbols (undefined-reference link error under -fsanitize=address).
-# ZSTD_ASAN_DONT_POISON_WORKSPACE=1 (an upstream zstd build knob) gates out
-# both those declarations and their call sites (zstd's optional custom
-# workspace redzone poisoning); ASan's normal compiler instrumentation is
-# unaffected, so the lib stays fully memory-checked.
-cbm_add_vendored_cxx_library(cbm_zstd
+cbm_add_vendored_library(cbm_zstd
     SOURCES ${CBM_INTERNAL}/vendored/zstd/zstd.c
-    DEFS ZSTD_ASAN_DONT_POISON_WORKSPACE=1
     INCLUDES ${CBM_INTERNAL}/vendored/zstd)
 
 if(WIN32)

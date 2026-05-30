@@ -2128,6 +2128,12 @@ static void resolve_worker(int worker_id, void *ctx_ptr) {
                     }
                 }
                 free(filtered);
+                /* Contract: cbm_slab_reclaim() requires the thread parser to be
+                 * destroyed first; otherwise its lexer holds slab pointers
+                 * (lexer.included_ranges) that get freed underneath it, causing
+                 * a heap-use-after-free on the next ts_lexer_goto. The next
+                 * cbm_extract_file on this thread will recreate the parser. */
+                cbm_destroy_thread_parser();
                 cbm_slab_reclaim();
                 uint64_t lsp_elapsed_ns = extract_now_ns() - lsp_t0;
                 atomic_fetch_add_explicit(&rc->time_ns_cross_lsp, lsp_elapsed_ns,

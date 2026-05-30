@@ -333,6 +333,11 @@ int cbm_pipeline_pass_definitions(cbm_pipeline_ctx_t *ctx, const cbm_file_info_t
     /* Ensure extraction library is initialized */
     cbm_init();
 
+    /* Defensive: a prior pipeline run may have left a thread-local parser whose
+     * lexer holds pointers into a slab that has since been reclaimed. Drop it
+     * here so the first cbm_extract_file below recreates a fresh parser. */
+    cbm_destroy_thread_parser();
+
     int total_defs = 0;
     int total_calls = 0;
     int total_imports = 0;

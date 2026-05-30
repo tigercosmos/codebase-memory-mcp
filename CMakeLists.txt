@@ -197,8 +197,17 @@ cbm_add_vendored_cxx_library(cbm_lz4
             ${CBM_INTERNAL}/vendored/lz4/lz4hc.c
     INCLUDES ${CBM_INTERNAL} ${CBM_INTERNAL}/vendored/lz4)
 
-cbm_add_vendored_library(cbm_zstd
+# zstd compiled AS C++ (no rename). zstd self-declares the manual ASan
+# poisoning API (__asan_(un)poison_memory_region) WITHOUT extern "C", so as
+# C++ those decls mangle and don't resolve to the ASan runtime's C-linkage
+# symbols (undefined-reference link error under -fsanitize=address).
+# ZSTD_ASAN_DONT_POISON_WORKSPACE=1 (an upstream zstd build knob) gates out
+# both those declarations and their call sites (zstd's optional custom
+# workspace redzone poisoning); ASan's normal compiler instrumentation is
+# unaffected, so the lib stays fully memory-checked.
+cbm_add_vendored_cxx_library(cbm_zstd
     SOURCES ${CBM_INTERNAL}/vendored/zstd/zstd.c
+    DEFS ZSTD_ASAN_DONT_POISON_WORKSPACE=1
     INCLUDES ${CBM_INTERNAL}/vendored/zstd)
 
 if(WIN32)

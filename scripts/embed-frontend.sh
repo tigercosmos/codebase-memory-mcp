@@ -72,6 +72,12 @@ for file in "${FILES[@]}"; do
         # Linux: ld -r -b binary (zero bloat, ELF only)
         abs_obj="$(cd "$(dirname "$0")/.." && pwd)/$obj"
         (cd "$DIST_DIR" && ld -r -b binary -o "$abs_obj" "$rel")
+        # `ld -r -b binary` emits no .note.GNU-stack section, so the final link
+        # warns "missing .note.GNU-stack section implies executable stack". Add
+        # an empty, non-executable note so the linked binary keeps a non-exec
+        # stack and the warning disappears.
+        objcopy --add-section .note.GNU-stack=/dev/null \
+                --set-section-flags .note.GNU-stack=contents,readonly "$abs_obj"
     else
         # macOS/Windows/MSYS2: generate C byte array + cc (no xxd dependency)
         local_c="$OUTPUT_DIR/embed_${mangled}.c"

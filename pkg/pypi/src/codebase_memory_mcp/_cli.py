@@ -12,7 +12,7 @@ import urllib.error
 import urllib.parse
 from pathlib import Path
 
-REPO = "DeusData/codebase-memory-mcp"
+REPO = "tigercosmos/cpp-codebase-memory-mcp"
 
 # Security: only permit https fetches. urllib's default handlers accept
 # file://, ftp://, and custom schemes — a redirect or tainted URL source

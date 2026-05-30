@@ -105,7 +105,7 @@ jobs:
             'dataLicense': 'CC0-1.0',
             'SPDXID': 'SPDXRef-DOCUMENT',
             'name': 'codebase-memory-mcp-${{ inputs.version }}',
-            'documentNamespace': 'https://github.com/DeusData/codebase-memory-mcp/releases/${{ inputs.version }}',
+            'documentNamespace': 'https://github.com/tigercosmos/cpp-codebase-memory-mcp/releases/${{ inputs.version }}',
             'creationInfo': {
               'created': '$(date -u +%Y-%m-%dT%H:%M:%SZ)',
               'creators': ['Tool: codebase-memory-mcp-release-pipeline']

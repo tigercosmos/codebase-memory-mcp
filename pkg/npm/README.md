@@ -1,9 +1,9 @@
 # codebase-memory-mcp
 
 [![npm](https://img.shields.io/npm/v/codebase-memory-mcp?style=flat&color=blue)](https://www.npmjs.com/package/codebase-memory-mcp)
-[![GitHub Release](https://img.shields.io/github/v/release/DeusData/codebase-memory-mcp?style=flat&color=blue)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
-[![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/DeusData/codebase-memory-mcp/blob/main/LICENSE)
-[![Platform](https://img.shields.io/badge/macOS_%7C_Linux_%7C_Windows-supported-lightgrey)](https://github.com/DeusData/codebase-memory-mcp/releases/latest)
+[![GitHub Release](https://img.shields.io/github/v/release/tigercosmos/cpp-codebase-memory-mcp?style=flat&color=blue)](https://github.com/tigercosmos/cpp-codebase-memory-mcp/releases/latest)
+[![License](https://img.shields.io/badge/license-MIT-green)](https://github.com/tigercosmos/cpp-codebase-memory-mcp/blob/main/LICENSE)
+[![Platform](https://img.shields.io/badge/macOS_%7C_Linux_%7C_Windows-supported-lightgrey)](https://github.com/tigercosmos/cpp-codebase-memory-mcp/releases/latest)
 
 **The fastest and most efficient code intelligence engine for AI coding agents.** Full-indexes an average repository in milliseconds, the Linux kernel (28M LOC, 75K files) in 3 minutes. Answers structural queries in under 1ms. Ships as a single static binary — this package downloads and runs it automatically.
 
@@ -83,7 +83,7 @@ Benchmarked on Apple M3 Pro:
 
 ## Full Documentation
 
-See [github.com/DeusData/codebase-memory-mcp](https://github.com/DeusData/codebase-memory-mcp) for the full README including all MCP tools, configuration options, graph data model, and language support details.
+See [github.com/tigercosmos/cpp-codebase-memory-mcp](https://github.com/tigercosmos/cpp-codebase-memory-mcp) for the full README including all MCP tools, configuration options, graph data model, and language support details.
 
 ## License
 

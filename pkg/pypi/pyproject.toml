@@ -24,9 +24,9 @@ classifiers = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/DeusData/codebase-memory-mcp"
-Repository = "https://github.com/DeusData/codebase-memory-mcp"
-Issues = "https://github.com/DeusData/codebase-memory-mcp/issues"
+Homepage = "https://github.com/tigercosmos/cpp-codebase-memory-mcp"
+Repository = "https://github.com/tigercosmos/cpp-codebase-memory-mcp"
+Issues = "https://github.com/tigercosmos/cpp-codebase-memory-mcp/issues"
 
 [project.scripts]
 codebase-memory-mcp = "codebase_memory_mcp:main"

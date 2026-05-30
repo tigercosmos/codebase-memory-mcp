@@ -10,7 +10,7 @@ const path = require('path');
 const os = require('os');
 const { execFileSync } = require('child_process');
 
-const REPO = 'DeusData/codebase-memory-mcp';
+const REPO = 'tigercosmos/cpp-codebase-memory-mcp';
 const VERSION = require('./package.json').version;
 const BIN_DIR = path.join(__dirname, 'bin');
 

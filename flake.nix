@@ -37,7 +37,7 @@
 
           meta = {
             description = "MCP server that builds and queries a semantic graph of your codebase";
-            homepage = "https://github.com/DeusData/codebase-memory-mcp";
+            homepage = "https://github.com/tigercosmos/cpp-codebase-memory-mcp";
             license = nixpkgs.lib.licenses.mit;
             mainProgram = "codebase-memory-mcp";
             platforms = systems;

@@ -6,7 +6,7 @@
 //
 // Install:
 //
-//	go install github.com/DeusData/codebase-memory-mcp/pkg/go/cmd/codebase-memory-mcp@latest
+//	go install github.com/tigercosmos/cpp-codebase-memory-mcp/pkg/go/cmd/codebase-memory-mcp@latest
 package main
 
 import (
@@ -27,7 +27,7 @@ import (
 )
 
 const (
-	repo    = "DeusData/codebase-memory-mcp"
+	repo    = "tigercosmos/cpp-codebase-memory-mcp"
 	version = "0.6.0"
 )
 

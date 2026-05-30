@@ -53,3 +53,10 @@ CHANGELOG.md
 
 # Soak test output
 soak-results/
+
+# Claude Code tooling + local session/index artifacts (not part of the repo)
+.claude/
+.codebase-memory/
+/issue.md
+/plan.md
+/pr.md

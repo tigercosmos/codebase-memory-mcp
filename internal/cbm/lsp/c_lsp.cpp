@@ -280,10 +280,11 @@ static void c_add_pending_template_call(CLSPContext* ctx, const char* func_qn,
         ctx->pending_template_calls = (__typeof__(ctx->pending_template_calls))new_arr;
         ctx->pending_tc_cap = new_cap;
     }
-    const char* func_qn_copy = cbm_arena_strdup(ctx->arena, func_qn);
-    const char* type_param_copy = cbm_arena_strdup(ctx->arena, type_param);
-    const char* method_name_copy = cbm_arena_strdup(ctx->arena, method_name);
-    if (!func_qn_copy || !type_param_copy || !method_name_copy) return;
+    const char *func_qn_copy = cbm_arena_strdup(ctx->arena, func_qn);
+    const char *type_param_copy = cbm_arena_strdup(ctx->arena, type_param);
+    const char *method_name_copy = cbm_arena_strdup(ctx->arena, method_name);
+    if (!func_qn_copy || !type_param_copy || !method_name_copy)
+        return;
 
     int i = ctx->pending_tc_count++;
     ctx->pending_template_calls[i].func_qn = func_qn_copy;
@@ -493,13 +494,20 @@ static bool is_c_builtin_type(const char* name) {
 static bool is_c_builtin_func(const char* name) {
     // C stdlib functions are registered in the registry, not hardcoded here.
     // But we skip certain compiler builtins that should not generate CALLS edges.
-    static const char* skip[] = {
-        "__builtin_expect", "__builtin_unreachable", "__builtin_offsetof",
-        "__builtin_va_start", "__builtin_va_end", "__builtin_va_arg",
-        "sizeof", "alignof", "_Alignof", "typeof", "decltype",
-        "static_assert", "_Static_assert",
-        NULL
-    };
+    static const char *skip[] = {"__builtin_expect",
+                                 "__builtin_unreachable",
+                                 "__builtin_offsetof",
+                                 "__builtin_va_start",
+                                 "__builtin_va_end",
+                                 "__builtin_va_arg",
+                                 "sizeof",
+                                 "alignof",
+                                 "_Alignof",
+                                 "typeof",
+                                 "decltype",
+                                 "static_assert",
+                                 "_Static_assert",
+                                 NULL};
     for (const char** b = skip; *b; b++) {
         if (strcmp(name, *b) == 0) return true;
     }
@@ -1232,8 +1240,7 @@ const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
      * can repeatedly drive member/type lookup without increasing recursion
      * depth. Keep a generous per-file work budget so pathological expressions
      * degrade to unknown instead of hanging repository indexing. */
-    if (ctx->eval_depth > C_EVAL_DEPTH_LIMIT ||
-        ctx->eval_steps++ > C_EVAL_MAX_STEPS_PER_FILE) {
+    if (ctx->eval_depth > C_EVAL_DEPTH_LIMIT || ctx->eval_steps++ > C_EVAL_MAX_STEPS_PER_FILE) {
         if (ctx->debug && ctx->eval_steps == C_EVAL_MAX_STEPS_PER_FILE + 2) {
             fprintf(stderr, "  [clsp] expression eval step budget exhausted; returning unknown\n");
         }
@@ -1743,21 +1750,22 @@ static const CBMType* c_eval_expr_type_inner(CLSPContext* ctx, TSNode node) {
                     } else if (strcmp(fn_type, "template_function") == 0) {
                         TSNode name_node = ts_node_child_by_field_name(func_node, "name", 4);
                         if (!ts_node_is_null(name_node)) {
-                            char* fname = c_node_text(ctx, name_node);
+                            char *fname = c_node_text(ctx, name_node);
                             if (fname) {
-                                const char* nk = ts_node_type(name_node);
+                                const char *nk = ts_node_type(name_node);
                                 if (strcmp(nk, "qualified_identifier") == 0 ||
                                     strcmp(nk, "scoped_identifier") == 0) {
-                                    const char* qn = c_build_qn(ctx, fname);
+                                    const char *qn = c_build_qn(ctx, fname);
                                     rf = cbm_registry_lookup_func(ctx->registry, qn);
                                     if (!rf && ctx->module_qn) {
-                                        rf = cbm_registry_lookup_func(ctx->registry,
-                                            cbm_arena_sprintf(ctx->arena, "%s.%s",
-                                                ctx->module_qn, qn));
+                                        rf = cbm_registry_lookup_func(
+                                            ctx->registry, cbm_arena_sprintf(ctx->arena, "%s.%s",
+                                                                             ctx->module_qn, qn));
                                     }
                                 } else {
-                                    const char* fqn = c_resolve_name(ctx, fname);
-                                    if (fqn) rf = cbm_registry_lookup_func(ctx->registry, fqn);
+                                    const char *fqn = c_resolve_name(ctx, fname);
+                                    if (fqn)
+                                        rf = cbm_registry_lookup_func(ctx->registry, fqn);
                                 }
                             }
                         }
@@ -1815,9 +1823,10 @@ static const CBMType* c_eval_expr_type_inner(CLSPContext* ctx, TSNode node) {
                                 if (deduced[ti]) { any_deduced = true; break; }
                             }
                             if (any_deduced) {
-                                const CBMType* substituted_ret = cbm_type_substitute(ctx->arena, ret,
-                                    rf->type_param_names, deduced);
-                                if (substituted_ret) ret = substituted_ret;
+                                const CBMType *substituted_ret = cbm_type_substitute(
+                                    ctx->arena, ret, rf->type_param_names, deduced);
+                                if (substituted_ret)
+                                    ret = substituted_ret;
                             }
                         }
                     }

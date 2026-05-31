@@ -271,13 +271,17 @@ bool cbm_validate_shell_arg(const char *s) {
 }
 
 bool cbm_validate_project_name(const char *name) {
-    if (!name || !*name) return false;
+    if (!name || !*name)
+        return false;
     /* Reject directory traversal */
-    if (strcmp(name, "..") == 0 || strstr(name, "..") != NULL) return false;
+    if (strcmp(name, "..") == 0 || strstr(name, "..") != NULL)
+        return false;
     /* Reject path separators */
-    if (strchr(name, '/') || strchr(name, '\\')) return false;
+    if (strchr(name, '/') || strchr(name, '\\'))
+        return false;
     /* Reject leading dot (hidden files / relative refs) */
-    if (name[0] == '.') return false;
+    if (name[0] == '.')
+        return false;
     /* Allow only alphanumeric, dash, underscore, dot */
     for (const char *p = name; *p; p++) {
         if (!(((*p >= 'a') && (*p <= 'z')) || ((*p >= 'A') && (*p <= 'Z')) ||

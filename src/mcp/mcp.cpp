@@ -846,7 +846,8 @@ static int collect_db_project_names(const char *dir_path, char *out, size_t out_
         if (!is_project_db_file(n, len)) {
             continue;
         }
-        if ((size_t)offset >= out_sz) break; /* bounds check before write */
+        if ((size_t)offset >= out_sz)
+            break; /* bounds check before write */
         if (count > 0 && offset < (int)out_sz - MCP_SEPARATOR) {
             out[offset++] = ',';
         }

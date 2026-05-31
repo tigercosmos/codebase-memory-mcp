@@ -39,7 +39,8 @@ static const CBMType **cbm_type_args(CBMArena *arena,
                                      std::initializer_list<const CBMType *> xs) {
     const CBMType **p =
         (const CBMType **)cbm_arena_alloc(arena, xs.size() * sizeof(const CBMType *));
-    if (!p) return nullptr; /* arena OOM / block cap: do not write through NULL */
+    if (!p)
+        return nullptr; /* arena OOM / block cap: do not write through NULL */
     size_t i = 0;
     for (const CBMType *x : xs) {
         p[i++] = x;

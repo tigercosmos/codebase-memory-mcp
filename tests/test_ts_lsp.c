@@ -1913,6 +1913,35 @@ TEST(tslsp_crossfile_method_dispatch) {
     PASS();
 }
 
+/* Issue #344 / #340: SIGSEGV in the TS cross-file LSP pass when the collected
+ * def array exceeded ~1189 entries — scale-dependent, not file-specific. Drive
+ * the resolver with a def array far past that threshold; the v0.7.0 rewrite
+ * registers defs through the arena (no fixed-size def array), so this must
+ * resolve cleanly. Built under -fsanitize=address so a regression aborts. */
+TEST(tslsp_scale_many_defs_no_crash_issue344) {
+    enum { SCALE_N = 4000 };
+    CBMArena arena;
+    cbm_arena_init(&arena);
+
+    CBMLSPDef *defs = (CBMLSPDef *)cbm_arena_alloc(&arena, (size_t)SCALE_N * sizeof(CBMLSPDef));
+    ASSERT_NOT_NULL(defs);
+    memset(defs, 0, (size_t)SCALE_N * sizeof(CBMLSPDef));
+    for (int i = 0; i < SCALE_N; i++) {
+        defs[i].qualified_name = cbm_arena_sprintf(&arena, "test.mod%d.fn%d", i, i);
+        defs[i].short_name = cbm_arena_sprintf(&arena, "fn%d", i);
+        defs[i].label = "Function";
+        defs[i].def_module_qn = cbm_arena_sprintf(&arena, "test.mod%d", i);
+        defs[i].return_types = "number";
+    }
+    const char *source = "function go() { const v = fn0(); }\n";
+    CBMResolvedCallArray out = {0};
+    cbm_run_ts_lsp_cross(&arena, source, (int)strlen(source), "test.main",
+                         /*js_mode=*/false, /*jsx_mode=*/false, /*dts_mode=*/false, defs, SCALE_N,
+                         NULL, NULL, 0, NULL, &out);
+    cbm_arena_destroy(&arena);
+    PASS();
+}
+
 TEST(tslsp_crossfile_function_call) {
     const char *source =
         "import { greet } from './greetings';\n"
@@ -4227,6 +4256,7 @@ SUITE(ts_lsp) {
 
     /* Cross-file resolution */
     RUN_TEST(tslsp_crossfile_method_dispatch);
+    RUN_TEST(tslsp_scale_many_defs_no_crash_issue344);
     RUN_TEST(tslsp_crossfile_function_call);
     RUN_TEST(tslsp_crossfile_chain_through_return);
     RUN_TEST(tslsp_crossfile_no_def_match);

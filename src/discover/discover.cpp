@@ -13,6 +13,9 @@
 
 #include "foundation/constants.h"
 #include "foundation/compat_fs.h"
+#ifdef _WIN32
+#include "foundation/win_utf8.h"
+#endif
 #include <stdint.h> // int64_t
 #include <stdio.h>
 #include <stdlib.h>
@@ -41,7 +44,7 @@ static const char *ALWAYS_SKIP_DIRS[] = {
     /* Deploy */
     ".vercel", ".netlify",
     /* Misc */
-    ".qdrant_code_embeddings", ".tmp", "vendor", NULL};
+    ".qdrant_code_embeddings", ".tmp", "vendor", "vendored", NULL};
 
 static const char *FAST_SKIP_DIRS[] = {
     "generated", "gen",           "auto-generated", "fixtures",     "testdata",    "test_data",
@@ -316,12 +319,32 @@ static CBMLanguage detect_file_language(const char *entry_name, const char *abs_
     return lang;
 }
 
+/* UTF-8-safe stat: wide API on Windows, regular stat on POSIX. */
+static int wide_stat(const char *path, struct stat *st) {
+#ifdef _WIN32
+    wchar_t *wpath = cbm_utf8_to_wide(path);
+    if (!wpath) {
+        return CBM_NOT_FOUND;
+    }
+    struct _stat64 wst;
+    int ret = _wstat64(wpath, &wst);
+    free(wpath);
+    if (ret != 0) {
+        return CBM_NOT_FOUND;
+    }
+    st->st_mode = wst.st_mode;
+    st->st_size = wst.st_size;
+    st->st_mtime = wst.st_mtime;
+    return 0;
+#else
+    return stat(path, st);
+#endif
+}
+
 /* Stat a path, skipping symlinks. Returns 0 on success, -1 to skip. */
 static int safe_stat(const char *abs_path, struct stat *st) {
 #ifdef _WIN32
-    if (stat(abs_path, st) != 0) {
-        return CBM_NOT_FOUND;
-    }
+    return wide_stat(abs_path, st);
 #else
     if (lstat(abs_path, st) != 0) {
         return CBM_NOT_FOUND;
@@ -329,8 +352,8 @@ static int safe_stat(const char *abs_path, struct stat *st) {
     if (S_ISLNK(st->st_mode)) {
         return CBM_NOT_FOUND;
     }
-#endif
     return 0;
+#endif
 }
 
 /* Process a single regular file entry during directory walk. */
@@ -365,7 +388,7 @@ static cbm_gitignore_t *try_load_nested_gitignore(const walk_frame_t *frame) {
     char gi_path[CBM_SZ_4K];
     snprintf(gi_path, sizeof(gi_path), "%s/.gitignore", frame->dir);
     struct stat gi_st;
-    if (stat(gi_path, &gi_st) == 0 && S_ISREG(gi_st.st_mode)) {
+    if (wide_stat(gi_path, &gi_st) == 0 && S_ISREG(gi_st.st_mode)) {
         return cbm_gitignore_load(gi_path);
     }
     return NULL;
@@ -475,7 +498,7 @@ int cbm_discover(const char *repo_path, const cbm_discover_opts_t *opts, cbm_fil
 
     /* Verify directory exists */
     struct stat st;
-    if (stat(repo_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
+    if (wide_stat(repo_path, &st) != 0 || !S_ISDIR(st.st_mode)) {
         return CBM_NOT_FOUND;
     }
 
@@ -484,7 +507,7 @@ int cbm_discover(const char *repo_path, const cbm_discover_opts_t *opts, cbm_fil
     char gi_path[CBM_SZ_4K];
     snprintf(gi_path, sizeof(gi_path), "%s/.git", repo_path);
     struct stat gi_stat;
-    if (stat(gi_path, &gi_stat) == 0 && S_ISDIR(gi_stat.st_mode)) {
+    if (wide_stat(gi_path, &gi_stat) == 0 && S_ISDIR(gi_stat.st_mode)) {
         snprintf(gi_path, sizeof(gi_path), "%s/.gitignore", repo_path);
         gitignore = cbm_gitignore_load(gi_path);
     }

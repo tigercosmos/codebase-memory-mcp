@@ -63,6 +63,7 @@ enum {
 #include "foundation/compat.h"
 #include "foundation/log.h"
 #include "foundation/compat_regex.h"
+#include "foundation/str_util.h"
 
 #define XXH_INLINE_ALL
 #include "xxhash/xxhash.h"
@@ -339,6 +340,10 @@ static int configure_pragmas(cbm_store_t *s, bool in_memory) {
         if (rc != CBM_STORE_OK) {
             return rc;
         }
+        /* Recover stale WAL from previous crash (best-effort).
+         * PASSIVE never blocks readers and never ftruncates.
+         * May fail with SQLITE_BUSY if another process holds a lock. */
+        (void)sqlite3_exec(s->db, "PRAGMA wal_checkpoint(PASSIVE)", NULL, NULL, NULL);
         rc = exec_sql(s, "PRAGMA synchronous = NORMAL;");
         if (rc != CBM_STORE_OK) {
             return rc;
@@ -704,6 +709,9 @@ cbm_store_t *cbm_store_open(const char *project) {
     if (!project) {
         return NULL;
     }
+    if (!cbm_validate_project_name(project)) {
+        return NULL;
+    }
     const char *cdir = cbm_resolve_cache_dir();
     if (!cdir) {
         cdir = cbm_tmpdir();
@@ -723,6 +731,12 @@ static void finalize_stmt(sqlite3_stmt **s) {
 void cbm_store_close(cbm_store_t *s) {
     if (!s) {
         return;
+    }
+
+    /* Checkpoint WAL before close to prevent orphan WAL accumulation.
+     * Best-effort — silently skips if concurrent reader holds a lock. */
+    if (s->db && s->db_path) {
+        (void)sqlite3_wal_checkpoint_v2(s->db, NULL, SQLITE_CHECKPOINT_PASSIVE, NULL, NULL);
     }
 
     /* Finalize all cached statements */
@@ -835,6 +849,9 @@ int cbm_store_create_indexes(cbm_store_t *s) {
 /* ── Checkpoint ─────────────────────────────────────────────────── */
 
 int cbm_store_checkpoint(cbm_store_t *s) {
+    if (!s) {
+        return CBM_STORE_ERR;
+    }
     /* PASSIVE never blocks readers and never ftruncate()s either file.
      * SQLite recommends PASSIVE for shared databases — TRUNCATE shrinks
      * the WAL via ftruncate(fd, 0) on success, which on macOS can raise
@@ -1752,6 +1769,13 @@ int cbm_store_find_nodes_by_qn_suffix(cbm_store_t *s, const char *project, const
 /* ── NodeDegree ────────────────────────────────────────────────── */
 
 void cbm_store_node_degree(cbm_store_t *s, int64_t node_id, int *in_deg, int *out_deg) {
+    if (!s) {
+        if (in_deg)
+            *in_deg = 0;
+        if (out_deg)
+            *out_deg = 0;
+        return;
+    }
     *in_deg = 0;
     *out_deg = 0;
 
@@ -1980,7 +2004,7 @@ int cbm_store_find_edges_by_url_path(cbm_store_t *s, const char *project, const 
 
     /* Search properties JSON for url_path containing keyword */
     char like_pattern[CBM_SZ_512];
-    snprintf(like_pattern, sizeof(like_pattern), "%%\"url_path\":\"%%%%%s%%%%\"%%", keyword);
+    snprintf(like_pattern, sizeof(like_pattern), "%%\"url_path\":\"%%%s%%\"%%", keyword);
 
     const char *sql = "SELECT id, project, source_id, target_id, type, properties FROM edges "
                       "WHERE project = ?1 AND properties LIKE ?2";
@@ -2015,6 +2039,9 @@ int cbm_store_find_edges_by_url_path(cbm_store_t *s, const char *project, const 
 /* ── RestoreFrom ───────────────────────────────────────────────── */
 
 int cbm_store_restore_from(cbm_store_t *dst, cbm_store_t *src) {
+    if (!dst || !src) {
+        return CBM_STORE_ERR;
+    }
     sqlite3_backup *bk = sqlite3_backup_init(dst->db, "main", src->db, "main");
     if (!bk) {
         store_set_error_sqlite(dst, "backup init");
@@ -2289,7 +2316,10 @@ static void where_add_like_hints(const char *column, const char *pattern, char *
         free(hints[i]);
         if (!lp)
             continue;
+        int pool_was_full = (pool->count >= ST_LIKE_POOL_MAX);
         like_pool_add(pool, lp);
+        if (pool_was_full)
+            continue; /* lp was freed — skip bind */
         snprintf(bind_buf, sizeof(bind_buf), "%s LIKE ?%d", column, *bind_idx + SKIP_ONE);
         *wlen = where_append(where, where_sz, *wlen, nparams, bind_buf);
         where_bind_text(binds, bind_idx, lp);
@@ -2326,10 +2356,13 @@ static int search_where_basic(const cbm_search_params_t *params, char *where, in
     }
     if (params->file_pattern) {
         char *lp = cbm_glob_to_like(params->file_pattern);
+        int pool_was_full = (pool->count >= ST_LIKE_POOL_MAX);
         like_pool_add(pool, lp);
-        snprintf(bind_buf, sizeof(bind_buf), "n.file_path LIKE ?%d", *bind_idx + SKIP_ONE);
-        *wlen = where_append(where, where_sz, *wlen, nparams, bind_buf);
-        where_bind_text(binds, bind_idx, lp);
+        if (!pool_was_full && lp) {
+            snprintf(bind_buf, sizeof(bind_buf), "n.file_path LIKE ?%d", *bind_idx + SKIP_ONE);
+            *wlen = where_append(where, where_sz, *wlen, nparams, bind_buf);
+            where_bind_text(binds, bind_idx, lp);
+        }
     }
     return *nparams;
 }

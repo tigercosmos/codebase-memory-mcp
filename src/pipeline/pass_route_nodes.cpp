@@ -779,6 +779,280 @@ static void create_data_flows(cbm_gbuf_t *gb) {
     }
 }
 
+/* ── SvelteKit filesystem-based route extractor ──────────────────────
+ *
+ * SvelteKit derives REST endpoints and SSR loaders from the filesystem
+ * layout under `src/routes/`. No `app.get(...)` style call exists for
+ * pass_calls.c to pick up, so we walk File nodes and synthesise Route
+ * nodes + HANDLES edges directly here.
+ *
+ * Recognised filenames (TypeScript and JavaScript variants):
+ *
+ *   +server.{ts,js}            → REST endpoints, exports GET/POST/...
+ *   +page.server.{ts,js}       → SSR page server module: load + actions
+ *   +layout.server.{ts,js}     → SSR layout server module: load
+ *
+ * Route path is derived from the directory chain under `routes/`:
+ *
+ *   apps/x/src/routes/foo/+server.ts        → /foo
+ *   apps/x/src/routes/api/items/+server.ts  → /api/items
+ *   apps/x/src/routes/(grp)/foo/+server.ts  → /foo            (group stripped)
+ *   apps/x/src/routes/[slug]/+server.ts     → /:slug          (param rewrite)
+ *   apps/x/src/routes/+server.ts            → /               (root)
+ */
+
+enum {
+    SKR_PATH_BUF = 1024,
+    SKR_NAME_BUF = 64,
+};
+
+/* Detect the SvelteKit kind of a file path. Returns 1 for +server,
+ * 2 for +page.server, 3 for +layout.server; 0 if not a SvelteKit
+ * server-side route file. */
+static int sveltekit_file_kind(const char *file_path) {
+    if (!file_path) {
+        return 0;
+    }
+    /* The basename must match one of the three patterns. We also require
+     * a "/routes/" segment somewhere in the path so we don't snag files
+     * in unrelated directories that happen to be named "+server.ts". */
+    if (!strstr(file_path, "/routes/")) {
+        return 0;
+    }
+    const char *slash = strrchr(file_path, '/');
+    const char *base = slash ? slash + 1 : file_path;
+    if (strcmp(base, "+server.ts") == 0 || strcmp(base, "+server.js") == 0) {
+        return 1;
+    }
+    if (strcmp(base, "+page.server.ts") == 0 || strcmp(base, "+page.server.js") == 0) {
+        return 2;
+    }
+    if (strcmp(base, "+layout.server.ts") == 0 || strcmp(base, "+layout.server.js") == 0) {
+        return 3;
+    }
+    return 0;
+}
+
+/* Compute the URL route path for a SvelteKit file path. Writes into
+ * `out` (caller-provided buffer) and returns the buffer or NULL on
+ * error. The leading "/" is always present; "/" is used for the root
+ * route. Group segments wrapped in parentheses are stripped. Dynamic
+ * params `[slug]` become `:slug`, and rest params `[...slug]` become
+ * `*slug` so the result is recognisable as a path pattern. */
+static const char *sveltekit_route_path(const char *file_path, char *out, int outsz) {
+    if (!file_path || !out || outsz <= 1) {
+        return nullptr;
+    }
+    const char *routes_seg = strstr(file_path, "/routes/");
+    if (!routes_seg) {
+        return nullptr;
+    }
+    /* Walk segment-by-segment between "/routes/" and the trailing "+...". */
+    const char *p = routes_seg + strlen("/routes/");
+    const char *last_slash = strrchr(file_path, '/');
+    if (!last_slash || last_slash < p) {
+        /* File is directly under /routes/ — root route. */
+        out[0] = '/';
+        out[1] = '\0';
+        return out;
+    }
+    /* p points at first char after /routes/, last_slash points at the
+     * slash before the +...filename. Iterate segments between them. */
+    int pos = 0;
+    out[pos] = '\0';
+    while (p < last_slash) {
+        const char *seg_end = strchr(p, '/');
+        if (!seg_end || seg_end > last_slash) {
+            seg_end = last_slash;
+        }
+        size_t seg_len = (size_t)(seg_end - p);
+        if (seg_len > 0) {
+            /* Group `(name)` — skip entirely. */
+            if (p[0] == '(' && p[seg_len - 1] == ')') {
+                p = seg_end + 1;
+                continue;
+            }
+            /* Emit "/" then rewritten segment. */
+            if (pos + 1 < outsz - 1) {
+                out[pos++] = '/';
+            }
+            /* Dynamic param: `[slug]` → `:slug`, `[...slug]` → `*slug`. */
+            if (seg_len >= 2 && p[0] == '[' && p[seg_len - 1] == ']') {
+                const char *inner = p + 1;
+                size_t inner_len = seg_len - 2;
+                if (inner_len >= 3 && strncmp(inner, "...", 3) == 0) {
+                    if (pos < outsz - 1) {
+                        out[pos++] = '*';
+                    }
+                    inner += 3;
+                    inner_len -= 3;
+                } else {
+                    if (pos < outsz - 1) {
+                        out[pos++] = ':';
+                    }
+                }
+                /* Strip an optional `=matcher` suffix after the param name. */
+                size_t copy_len = inner_len;
+                for (size_t i = 0; i < inner_len; i++) {
+                    if (inner[i] == '=') {
+                        copy_len = i;
+                        break;
+                    }
+                }
+                if ((int)copy_len > outsz - 1 - pos) {
+                    copy_len = (size_t)(outsz - 1 - pos);
+                }
+                memcpy(out + pos, inner, copy_len);
+                pos += (int)copy_len;
+            } else {
+                size_t copy_len = seg_len;
+                if ((int)copy_len > outsz - 1 - pos) {
+                    copy_len = (size_t)(outsz - 1 - pos);
+                }
+                memcpy(out + pos, p, copy_len);
+                pos += (int)copy_len;
+            }
+            out[pos] = '\0';
+        }
+        p = seg_end + 1;
+    }
+    if (pos == 0) {
+        out[pos++] = '/';
+        out[pos] = '\0';
+    }
+    return out;
+}
+
+/* Returns the HTTP method string a function name maps to for a +server
+ * file, or NULL if the function isn't a SvelteKit REST handler. The set
+ * mirrors SvelteKit's documented HTTP verb exports. */
+static const char *sveltekit_server_method(const char *name) {
+    if (!name) {
+        return nullptr;
+    }
+    static const char *const verbs[] = {
+        "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD",
+    };
+    for (size_t i = 0; i < sizeof(verbs) / sizeof(verbs[0]); i++) {
+        if (strcmp(name, verbs[i]) == 0) {
+            return verbs[i];
+        }
+    }
+    /* `fallback` catches any verb not explicitly exported. */
+    if (strcmp(name, "fallback") == 0) {
+        return "ANY";
+    }
+    return nullptr;
+}
+
+typedef struct {
+    cbm_gbuf_t *gb;
+    int routes_created;
+    int handles_created;
+    int files_seen;
+} sveltekit_ctx_t;
+
+/* Process one File node: if it matches a SvelteKit server-side file,
+ * synthesise a Route node and HANDLES edges from any handler functions
+ * (or actions Variable) defined in the file. */
+static void sveltekit_file_visitor(const cbm_gbuf_node_t *node, void *userdata) {
+    sveltekit_ctx_t *ctx = (sveltekit_ctx_t *)userdata;
+    if (!node || !node->label || strcmp(node->label, "File") != 0) {
+        return;
+    }
+    int kind = sveltekit_file_kind(node->file_path);
+    if (kind == 0) {
+        return;
+    }
+    ctx->files_seen++;
+
+    char route_path[SKR_PATH_BUF];
+    if (!sveltekit_route_path(node->file_path, route_path, sizeof(route_path))) {
+        return;
+    }
+
+    /* Find every DEFINES edge from this file to a Function or Variable. */
+    const cbm_gbuf_edge_t **edges = nullptr;
+    int edge_count = 0;
+    if (cbm_gbuf_find_edges_by_source_type(ctx->gb, node->id, "DEFINES", &edges, &edge_count) != 0
+        || edge_count == 0) {
+        return;
+    }
+
+    for (int i = 0; i < edge_count; i++) {
+        const cbm_gbuf_node_t *child = cbm_gbuf_find_by_id(ctx->gb, edges[i]->target_id);
+        if (!child || !child->name || !child->label) {
+            continue;
+        }
+        bool is_fn = strcmp(child->label, "Function") == 0;
+        bool is_var = strcmp(child->label, "Variable") == 0;
+        if (!is_fn && !is_var) {
+            continue;
+        }
+
+        const char *method = nullptr;
+        bool is_actions = false;
+        if (kind == 1) {
+            method = sveltekit_server_method(child->name);
+        } else if (kind == 2) {
+            if (is_fn && strcmp(child->name, "load") == 0) {
+                method = "LOAD";
+            } else if (strcmp(child->name, "actions") == 0) {
+                /* SvelteKit form actions: emit a single Route at this
+                 * path with method=ACTIONS; finer-grained action names
+                 * aren't exposed as top-level identifiers. */
+                method = "ACTIONS";
+                is_actions = is_var;
+            }
+        } else if (kind == 3) {
+            if (is_fn && strcmp(child->name, "load") == 0) {
+                method = "LOAD";
+            }
+        }
+        if (!method) {
+            continue;
+        }
+
+        char route_qn[CBM_ROUTE_QN_SIZE];
+        snprintf(route_qn, sizeof(route_qn), "__route__%s__%s", method, route_path);
+        char route_props[CBM_SZ_256];
+        snprintf(route_props, sizeof(route_props), "{\"method\":\"%s\",\"framework\":\"sveltekit\"}",
+                 method);
+        int64_t route_id =
+            cbm_gbuf_upsert_node(ctx->gb, "Route", route_path, route_qn, "", 0, 0, route_props);
+        if (route_id == 0) {
+            continue;
+        }
+        ctx->routes_created++;
+
+        char hprops[CBM_SZ_256];
+        snprintf(hprops, sizeof(hprops), "{\"handler\":\"%s\",\"framework\":\"sveltekit\"%s}",
+                 child->qualified_name ? child->qualified_name : child->name,
+                 is_actions ? ",\"via\":\"actions_object\"" : "");
+        cbm_gbuf_insert_edge(ctx->gb, child->id, route_id, "HANDLES", hprops);
+        ctx->handles_created++;
+    }
+}
+
+/* Public entry point: scan all File nodes for SvelteKit server modules
+ * and synthesise Route + HANDLES nodes from the filesystem convention. */
+static void create_sveltekit_routes(cbm_gbuf_t *gb) {
+    if (!gb) {
+        return;
+    }
+    sveltekit_ctx_t ctx = {.gb = gb, .routes_created = 0, .handles_created = 0, .files_seen = 0};
+    cbm_gbuf_foreach_node(gb, sveltekit_file_visitor, &ctx);
+    if (ctx.files_seen > 0) {
+        char b1[CBM_SZ_16];
+        char b2[CBM_SZ_16];
+        char b3[CBM_SZ_16];
+        snprintf(b1, sizeof(b1), "%d", ctx.files_seen);
+        snprintf(b2, sizeof(b2), "%d", ctx.routes_created);
+        snprintf(b3, sizeof(b3), "%d", ctx.handles_created);
+        cbm_log_info("pass.sveltekit_routes", "files", b1, "routes", b2, "handles", b3);
+    }
+}
+
 void cbm_pipeline_create_route_nodes(cbm_gbuf_t *gb) {
     if (!gb) {
         return;
@@ -812,4 +1086,9 @@ void cbm_pipeline_create_route_nodes(cbm_gbuf_t *gb) {
      * Scans Class nodes from .proto files, follows DEFINES_METHOD edges
      * to find rpc methods, creates __grpc__ServiceName/MethodName Route nodes. */
     create_grpc_routes(gb);
+
+    /* Phase 5: filesystem-based SvelteKit routes (+server / +page.server /
+     * +layout.server) — no call-site equivalent for pass_calls.c to pick
+     * up, so we walk File nodes directly here. */
+    create_sveltekit_routes(gb);
 }

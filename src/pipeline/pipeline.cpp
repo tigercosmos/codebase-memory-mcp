@@ -497,9 +497,12 @@ static int run_sequential_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
                                    struct timespec *t) {
     cbm_log_info("pipeline.mode", "mode", "sequential", "files", itoa_buf(file_count));
 
-    /* Build package map from manifest files (sequential: read manifests directly) */
-    /* Build package map from manifest files (sequential: read manifests directly) */
-    cbm_pipeline_set_pkgmap(cbm_pkgmap_build_from_files(files, file_count, ctx->project_name));
+    /* Build package map from manifest files (sequential: read manifests directly).
+     * Use the repo-walking variant so manifests filtered out by the main
+     * discoverer (package.json, composer.json) still feed pkgmap and let
+     * workspace imports like `@my/pkg` resolve to their target Module. */
+    cbm_pipeline_set_pkgmap(
+        cbm_pkgmap_build_from_repo(ctx->repo_path, files, file_count, ctx->project_name));
 
     CBMFileResult **seq_cache = (CBMFileResult **)calloc(file_count, sizeof(CBMFileResult *));
     if (seq_cache) {
@@ -590,8 +593,17 @@ static int run_parallel_pipeline(cbm_pipeline_t *p, cbm_pipeline_ctx_t *ctx,
      * extract. */
     cbm_clock_gettime(CLOCK_MONOTONIC, t);
     /* Cross-file LSP (type-aware call/usage resolution across files) — the
-     * most expensive phase — runs in every mode. */
-    const bool run_cross_lsp = true;
+     * most expensive phase. CBM_DISABLE_LSP_CROSS=1 opts out (it can SIGSEGV
+     * on large TS projects — see #340/#344); with cross-LSP off, all_defs
+     * stays NULL and the fused resolver simply no-ops cross-file resolution
+     * (per-file LSP already ran during extract). */
+    char cbm_lsp_cross_env[CBM_SZ_16];
+    const bool run_cross_lsp =
+        cbm_safe_getenv("CBM_DISABLE_LSP_CROSS", cbm_lsp_cross_env, sizeof(cbm_lsp_cross_env),
+                        nullptr) == nullptr;
+    if (!run_cross_lsp) {
+        cbm_log_info("lsp_cross.skipped", "reason", "CBM_DISABLE_LSP_CROSS env set");
+    }
     char **def_modules = NULL;
     int def_count = 0;
     CBMLSPDef *all_defs = NULL;

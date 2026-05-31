@@ -225,10 +225,19 @@ static int parse_git_log(const char *repo_path, commit_t **out, int *out_count) 
     }
 
     char cmd[CBM_SZ_1K];
+#ifdef _WIN32
+    /* cmd.exe does not recognize single quotes, and '/dev/null' is a POSIX path. */
+    const char *null_dev = "NUL";
+#else
+    const char *null_dev = "/dev/null";
+#endif
+    /* git -C "<path>" works on both cmd.exe and POSIX shells. Double quotes are
+     * safe here because cbm_validate_shell_arg (above) rejects ", $, `, \ and the
+     * other shell metacharacters that would otherwise be active inside them. */
     snprintf(cmd, sizeof(cmd),
-             "cd '%s' && git log --name-only --pretty=format:COMMIT:%%H:%%ct "
-             "--since='1 year ago' --max-count=10000 2>/dev/null",
-             repo_path);
+             "git -C \"%s\" log --name-only --pretty=format:COMMIT:%%H:%%ct "
+             "--since=\"1 year ago\" --max-count=10000 2>%s",
+             repo_path, null_dev);
 
     FILE *fp = cbm_popen(cmd, "r");
     if (!fp) {

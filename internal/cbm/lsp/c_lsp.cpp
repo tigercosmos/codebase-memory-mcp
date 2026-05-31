@@ -280,10 +280,15 @@ static void c_add_pending_template_call(CLSPContext* ctx, const char* func_qn,
         ctx->pending_template_calls = (__typeof__(ctx->pending_template_calls))new_arr;
         ctx->pending_tc_cap = new_cap;
     }
+    const char* func_qn_copy = cbm_arena_strdup(ctx->arena, func_qn);
+    const char* type_param_copy = cbm_arena_strdup(ctx->arena, type_param);
+    const char* method_name_copy = cbm_arena_strdup(ctx->arena, method_name);
+    if (!func_qn_copy || !type_param_copy || !method_name_copy) return;
+
     int i = ctx->pending_tc_count++;
-    ctx->pending_template_calls[i].func_qn = cbm_arena_strdup(ctx->arena, func_qn);
-    ctx->pending_template_calls[i].type_param = cbm_arena_strdup(ctx->arena, type_param);
-    ctx->pending_template_calls[i].method_name = cbm_arena_strdup(ctx->arena, method_name);
+    ctx->pending_template_calls[i].func_qn = func_qn_copy;
+    ctx->pending_template_calls[i].type_param = type_param_copy;
+    ctx->pending_template_calls[i].method_name = method_name_copy;
     ctx->pending_template_calls[i].arg_count = arg_count;
 }
 
@@ -1218,11 +1223,20 @@ static const char* type_to_qn(const CBMType* t) {
 
 static const CBMType* c_eval_expr_type_inner(CLSPContext* ctx, TSNode node);
 
+#define C_EVAL_DEPTH_LIMIT 256
+#define C_EVAL_MAX_STEPS_PER_FILE 10000
+
 const CBMType* c_eval_expr_type(CLSPContext* ctx, TSNode node) {
     if (ts_node_is_null(node)) return cbm_type_unknown();
-    /* Guard against unbounded recursion on deeply nested C++ templates.
-     * Prevents stack overflow and NULL-deref from unusual AST shapes. */
-    if (ctx->eval_depth > 256) {
+    /* Expression type evaluation is best-effort. Some recovery-mode C++ ASTs
+     * can repeatedly drive member/type lookup without increasing recursion
+     * depth. Keep a generous per-file work budget so pathological expressions
+     * degrade to unknown instead of hanging repository indexing. */
+    if (ctx->eval_depth > C_EVAL_DEPTH_LIMIT ||
+        ctx->eval_steps++ > C_EVAL_MAX_STEPS_PER_FILE) {
+        if (ctx->debug && ctx->eval_steps == C_EVAL_MAX_STEPS_PER_FILE + 2) {
+            fprintf(stderr, "  [clsp] expression eval step budget exhausted; returning unknown\n");
+        }
         return cbm_type_unknown();
     }
     ctx->eval_depth++;
@@ -1726,6 +1740,27 @@ static const CBMType* c_eval_expr_type_inner(CLSPContext* ctx, TSNode node) {
                             const char* qn = c_build_qn(ctx, fname);
                             rf = cbm_registry_lookup_func(ctx->registry, qn);
                         }
+                    } else if (strcmp(fn_type, "template_function") == 0) {
+                        TSNode name_node = ts_node_child_by_field_name(func_node, "name", 4);
+                        if (!ts_node_is_null(name_node)) {
+                            char* fname = c_node_text(ctx, name_node);
+                            if (fname) {
+                                const char* nk = ts_node_type(name_node);
+                                if (strcmp(nk, "qualified_identifier") == 0 ||
+                                    strcmp(nk, "scoped_identifier") == 0) {
+                                    const char* qn = c_build_qn(ctx, fname);
+                                    rf = cbm_registry_lookup_func(ctx->registry, qn);
+                                    if (!rf && ctx->module_qn) {
+                                        rf = cbm_registry_lookup_func(ctx->registry,
+                                            cbm_arena_sprintf(ctx->arena, "%s.%s",
+                                                ctx->module_qn, qn));
+                                    }
+                                } else {
+                                    const char* fqn = c_resolve_name(ctx, fname);
+                                    if (fqn) rf = cbm_registry_lookup_func(ctx->registry, fqn);
+                                }
+                            }
+                        }
                     }
 
                     if (rf && rf->type_param_names && rf->signature &&
@@ -1780,8 +1815,9 @@ static const CBMType* c_eval_expr_type_inner(CLSPContext* ctx, TSNode node) {
                                 if (deduced[ti]) { any_deduced = true; break; }
                             }
                             if (any_deduced) {
-                                ret = cbm_type_substitute(ctx->arena, ret,
+                                const CBMType* substituted_ret = cbm_type_substitute(ctx->arena, ret,
                                     rf->type_param_names, deduced);
+                                if (substituted_ret) ret = substituted_ret;
                             }
                         }
                     }

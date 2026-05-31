@@ -4,6 +4,7 @@
  * Covers: JSON-RPC parsing, MCP protocol, tool dispatch, tool handlers.
  */
 #include "../src/foundation/compat.h"
+#include "../src/foundation/compat_fs.h" /* cbm_unlink / cbm_rmdir */
 #include "test_framework.h"
 #include <mcp/mcp.h>
 #include <store/store.h>
@@ -1745,6 +1746,68 @@ TEST(mcp_server_run_rapid_messages) {
 }
 #endif /* !_WIN32 */
 
+/* Issue #235: passing an unrecognised project name to a tool crashed the
+ * binary with a buffer overflow while building the "available_projects"
+ * error list — collect_db_project_names overflowed projects[CBM_SZ_4K] via
+ * an unsigned underflow on (out_sz - offset) once the listed names exceeded
+ * the buffer. Fill a temp cache dir with enough long-named .db files to
+ * exceed 4 KB, then hit the bad-project path. Under ASan a regression aborts
+ * here; the fixed bounds-check keeps it clean and returns a normal error. */
+#define ISSUE235_DBNAME(buf, dir, i)                                                          \
+    snprintf((buf), sizeof(buf),                                                              \
+             "%s/proj_%02d_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"  \
+             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.db",                        \
+             (dir), (i))
+TEST(tool_bad_project_name_no_overflow_issue235) {
+    char cache[256];
+    snprintf(cache, sizeof(cache), "/tmp/cbm-badproj-XXXXXX");
+    if (!cbm_mkdtemp(cache)) {
+        PASS(); /* skip if mkdtemp fails */
+    }
+
+    const char *saved = getenv("CBM_CACHE_DIR");
+    char *saved_copy = saved ? strdup(saved) : NULL;
+    cbm_setenv("CBM_CACHE_DIR", cache, 1);
+
+    /* 40 * ~130-char names overflows the 4 KB available-projects buffer. */
+    enum { ISSUE235_N = 40 };
+    for (int i = 0; i < ISSUE235_N; i++) {
+        char name[512];
+        ISSUE235_DBNAME(name, cache, i);
+        FILE *fp = fopen(name, "w");
+        if (fp) {
+            fputc('x', fp);
+            fclose(fp);
+        }
+    }
+
+    cbm_mcp_server_t *srv = cbm_mcp_server_new(NULL);
+    ASSERT_NOT_NULL(srv);
+    char *resp = cbm_mcp_server_handle(
+        srv, "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"tools/call\",\"params\":{\"name\":"
+             "\"search_graph\",\"arguments\":{\"label\":\"Function\","
+             "\"project\":\"definitely-not-a-real-project-xyz\"}}}");
+    ASSERT_NOT_NULL(resp);
+    ASSERT_NOT_NULL(strstr(resp, "not found"));
+    free(resp);
+    cbm_mcp_server_free(srv);
+
+    if (saved_copy) {
+        cbm_setenv("CBM_CACHE_DIR", saved_copy, 1);
+        free(saved_copy);
+    } else {
+        cbm_unsetenv("CBM_CACHE_DIR");
+    }
+    for (int i = 0; i < ISSUE235_N; i++) {
+        char name[512];
+        ISSUE235_DBNAME(name, cache, i);
+        cbm_unlink(name);
+    }
+    cbm_rmdir(cache);
+    PASS();
+}
+#undef ISSUE235_DBNAME
+
 /* ══════════════════════════════════════════════════════════════════
  *  SUITE
  * ══════════════════════════════════════════════════════════════════ */
@@ -1877,4 +1940,5 @@ SUITE(mcp) {
     RUN_TEST(snippet_auto_resolve_enabled);
     RUN_TEST(snippet_include_neighbors_default);
     RUN_TEST(snippet_include_neighbors_enabled);
+    RUN_TEST(tool_bad_project_name_no_overflow_issue235);
 }

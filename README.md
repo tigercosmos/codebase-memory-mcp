@@ -170,6 +170,9 @@ codebase-memory-mcp config set auto_index_limit 50000 # max files for auto-index
 
 - **Index storage** — `~/.cache/codebase-memory-mcp/` (override with `CBM_CACHE_DIR`). WAL-mode
   SQLite, ACID-safe across restarts. Reset with `rm -rf ~/.cache/codebase-memory-mcp/`.
+- **Indexing parallelism** — auto-detected (cgroup-aware on Linux); override with `CBM_WORKERS`
+  (range 1–256, invalid values ignored). Useful in containers where the host CPU count differs
+  from the effective quota.
 - **Ignore rules** — hardcoded patterns → `.gitignore` hierarchy → `.cbmignore` (gitignore
   syntax). Symlinks always skipped.
 - **Custom extensions** — map extra extensions to languages via `.codebase-memory.json`

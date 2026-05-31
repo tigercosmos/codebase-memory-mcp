@@ -19,12 +19,14 @@
 #define WIN32_LEAN_AND_MEAN
 #endif
 #include <windows.h>
-#include <direct.h> /* _mkdir */
-#include <io.h>     /* _unlink */
+#include <direct.h> /* _wmkdir */
+#include <io.h>     /* _wunlink */
+#include "foundation/win_utf8.h"
 
 struct cbm_dir {
     HANDLE find_handle;
-    WIN32_FIND_DATAA find_data;
+    WIN32_FIND_DATAW find_data;
+    wchar_t wide_pattern[CBM_PATH_MAX];
     cbm_dirent_t entry;
     bool first;
     bool done;
@@ -34,27 +36,36 @@ cbm_dir_t *cbm_opendir(const char *path) {
     if (!path) {
         return NULL;
     }
-    /* Build search pattern: "path\*" */
-    size_t len = strlen(path);
-    char *pattern = (char *)malloc(len + 3);
-    if (!pattern) {
+    wchar_t *wpath = cbm_utf8_to_wide(path);
+    if (!wpath) {
         return NULL;
     }
-    memcpy(pattern, path, len);
-    if (len > 0 && path[len - SKIP_ONE] != '\\' && path[len - SKIP_ONE] != '/') {
-        pattern[len++] = '\\';
+
+    size_t wlen = wcslen(wpath);
+    if (wlen == 0 || wlen + 2 >= CBM_PATH_MAX) {
+        free(wpath);
+        return NULL;
     }
-    pattern[len++] = '*';
-    pattern[len] = '\0';
 
     cbm_dir_t *d = (cbm_dir_t *)calloc(CBM_ALLOC_ONE, sizeof(cbm_dir_t));
     if (!d) {
-        free(pattern);
+        free(wpath);
         return NULL;
     }
 
-    d->find_handle = FindFirstFileA(pattern, &d->find_data);
-    free(pattern);
+    wmemcpy(d->wide_pattern, wpath, wlen + 1);
+    wchar_t *p = d->wide_pattern + wlen - SKIP_ONE;
+    if (*p != L'\\' && *p != L'/') {
+        ++p;
+        *p++ = L'\\';
+    } else {
+        ++p;
+    }
+    *p++ = L'*';
+    *p = L'\0';
+    free(wpath);
+
+    d->find_handle = FindFirstFileW(d->wide_pattern, &d->find_data);
     if (d->find_handle == INVALID_HANDLE_VALUE) {
         free(d);
         return NULL;
@@ -69,31 +80,36 @@ cbm_dirent_t *cbm_readdir(cbm_dir_t *d) {
         return NULL;
     }
     if (!d->first) {
-        if (!FindNextFileA(d->find_handle, &d->find_data)) {
+        if (!FindNextFileW(d->find_handle, &d->find_data)) {
             d->done = true;
             return NULL;
         }
     }
     d->first = false;
 
-    /* Skip "." and ".." */
-    while (d->find_data.cFileName[0] == '.' &&
-           (d->find_data.cFileName[1] == '\0' ||
-            (d->find_data.cFileName[1] == '.' && d->find_data.cFileName[2] == '\0'))) {
-        if (!FindNextFileA(d->find_handle, &d->find_data)) {
+    while (d->find_data.cFileName[0] == L'.' &&
+           (d->find_data.cFileName[1] == L'\0' ||
+            (d->find_data.cFileName[1] == L'.' && d->find_data.cFileName[2] == L'\0'))) {
+        if (!FindNextFileW(d->find_handle, &d->find_data)) {
             d->done = true;
             return NULL;
         }
     }
 
-    size_t nlen = strlen(d->find_data.cFileName);
+    char *u8 = cbm_wide_to_utf8(d->find_data.cFileName);
+    if (!u8) {
+        d->done = true;
+        return NULL;
+    }
+    size_t nlen = strlen(u8);
     if (nlen >= CBM_DIRENT_NAME_MAX) {
         nlen = CBM_DIRENT_NAME_MAX - SKIP_ONE;
     }
-    memcpy(d->entry.name, d->find_data.cFileName, nlen);
+    memcpy(d->entry.name, u8, nlen);
     d->entry.name[nlen] = '\0';
+    free(u8);
     d->entry.is_dir = (d->find_data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-    d->entry.d_type = 0; /* Not meaningful on Windows */
+    d->entry.d_type = 0;
     return &d->entry;
 }
 
@@ -115,34 +131,54 @@ int cbm_pclose(FILE *f) {
 }
 
 bool cbm_mkdir_p(const char *path, int mode) {
-    (void)mode; /* Windows ignores POSIX permissions */
-    /* Simple recursive mkdir: try creating, if fail walk parents */
-    if (_mkdir(path) == 0) {
-        return true;
-    }
-    /* Walk path and create each component */
-    char *tmp = _strdup(path);
-    if (!tmp) {
+    (void)mode;
+    wchar_t *wpath = cbm_utf8_to_wide(path);
+    if (!wpath) {
         return false;
     }
-    for (char *p = tmp + SKIP_ONE; *p; p++) {
-        if (*p == '/' || *p == '\\') {
-            *p = '\0';
-            _mkdir(tmp); /* ignore errors for intermediate dirs */
-            *p = '\\';
+
+    if (_wmkdir(wpath) == 0) {
+        free(wpath);
+        return true;
+    }
+    size_t wlen = wcslen(wpath);
+    wchar_t *tmp = (wchar_t *)malloc((wlen + 1) * sizeof(wchar_t));
+    if (!tmp) {
+        free(wpath);
+        return false;
+    }
+    wmemcpy(tmp, wpath, wlen + 1);
+    for (wchar_t *p = tmp + SKIP_ONE; *p; p++) {
+        if (*p == L'/' || *p == L'\\') {
+            *p = L'\0';
+            _wmkdir(tmp);
+            *p = L'\\';
         }
     }
-    bool ok = _mkdir(tmp) == 0 || GetLastError() == ERROR_ALREADY_EXISTS;
+    bool ok = _wmkdir(tmp) == 0 || GetLastError() == ERROR_ALREADY_EXISTS;
     free(tmp);
+    free(wpath);
     return ok;
 }
 
 int cbm_unlink(const char *path) {
-    return _unlink(path);
+    wchar_t *wpath = cbm_utf8_to_wide(path);
+    if (!wpath) {
+        return CBM_NOT_FOUND;
+    }
+    int ret = _wunlink(wpath);
+    free(wpath);
+    return ret;
 }
 
 int cbm_rmdir(const char *path) {
-    return _rmdir(path);
+    wchar_t *wpath = cbm_utf8_to_wide(path);
+    if (!wpath) {
+        return CBM_NOT_FOUND;
+    }
+    int ret = _wrmdir(wpath);
+    free(wpath);
+    return ret;
 }
 
 int cbm_exec_no_shell(const char *const *argv) {

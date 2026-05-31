@@ -12,6 +12,7 @@
  */
 #include "pipeline/pipeline.h"
 #include "pipeline/pipeline_internal.h"
+#include "discover/discover.h"
 #include "foundation/compat.h"
 #include "foundation/constants.h"
 #include "foundation/hash_table.h"
@@ -22,10 +23,12 @@
 
 #include <yyjson/yyjson.h>
 
+#include <dirent.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 /* Read an entire file into a malloc'd buffer. Returns NULL on failure. */
 static char *pkgmap_read_file(const char *path, int *out_len) {
@@ -748,6 +751,125 @@ CBMHashTable *cbm_pkgmap_build(cbm_pkg_entries_t *worker_entries, int worker_cou
     return map;
 }
 
+/* Returns true if basename is a package manifest we know how to parse.
+ * Used by the filesystem walker; cbm_pkgmap_try_parse is the source of
+ * truth for which basenames produce entries. */
+static bool is_pkgmap_manifest_basename(const char *basename) {
+    if (!basename) {
+        return false;
+    }
+    if (strcmp(basename, "package.json") == 0 || strcmp(basename, "go.mod") == 0 ||
+        strcmp(basename, "Cargo.toml") == 0 || strcmp(basename, "pyproject.toml") == 0 ||
+        strcmp(basename, "composer.json") == 0 || strcmp(basename, "pubspec.yaml") == 0 ||
+        strcmp(basename, "pom.xml") == 0 || strcmp(basename, "build.gradle") == 0 ||
+        strcmp(basename, "build.gradle.kts") == 0 || strcmp(basename, "mix.exs") == 0) {
+        return true;
+    }
+    return ends_with(basename, ".gemspec");
+}
+
+/* Recursive filesystem walker that finds and parses package manifest
+ * files independently of the main discovery filter. The main discovery
+ * filter intentionally hides package.json / composer.json etc. from
+ * code indexing (they're config, not source), but pass_pkgmap still
+ * needs to read them to resolve workspace imports. Skips directories
+ * matched by the shared cbm_should_skip_dir helper so we don't walk
+ * node_modules, .git, build, etc. Returns the number of manifests
+ * parsed, accumulated across the whole walk.
+ *
+ * POSIX-only: lstat + S_ISLNK skipping avoids following symlink cycles.
+ * The Windows port (junction-safe descent) is a follow-up; cbm_pkgmap_scan_repo
+ * is a no-op on Windows so this is never reached there. */
+#ifndef _WIN32
+static int pkgmap_walk_dir(const char *abs_dir, const char *rel_dir, cbm_pkg_entries_t *entries) {
+    DIR *dir = opendir(abs_dir);
+    if (!dir) {
+        return 0;
+    }
+    int parsed = 0;
+    struct dirent *entry;
+    while ((entry = readdir(dir)) != NULL) {
+        const char *name = entry->d_name;
+        if (name[0] == '.' && (name[1] == '\0' || (name[1] == '.' && name[2] == '\0'))) {
+            continue;
+        }
+        char abs_path[PKGMAP_PATH_BUF];
+        char rel_path[PKGMAP_PATH_BUF];
+        snprintf(abs_path, sizeof(abs_path), "%s/%s", abs_dir, name);
+        if (rel_dir && rel_dir[0]) {
+            snprintf(rel_path, sizeof(rel_path), "%s/%s", rel_dir, name);
+        } else {
+            snprintf(rel_path, sizeof(rel_path), "%s", name);
+        }
+        struct stat st;
+#ifdef _WIN32
+        /* Windows has no lstat/S_ISLNK; symlinks aren't a concern for the
+         * MSYS2 build, so a plain stat is sufficient here. */
+        if (stat(abs_path, &st) != 0) {
+            continue;
+        }
+#else
+        if (lstat(abs_path, &st) != 0) {
+            continue;
+        }
+        if (S_ISLNK(st.st_mode)) {
+            continue;
+        }
+#endif
+        if (S_ISDIR(st.st_mode)) {
+            if (cbm_should_skip_dir(name, CBM_MODE_FULL)) {
+                continue;
+            }
+            parsed += pkgmap_walk_dir(abs_path, rel_path, entries);
+            continue;
+        }
+        if (!S_ISREG(st.st_mode)) {
+            continue;
+        }
+        if (!is_pkgmap_manifest_basename(name)) {
+            continue;
+        }
+        int source_len = 0;
+        char *source = pkgmap_read_file(abs_path, &source_len);
+        if (!source) {
+            continue;
+        }
+        if (cbm_pkgmap_try_parse(name, rel_path, source, source_len, entries)) {
+            parsed++;
+        }
+        free(source);
+    }
+    closedir(dir);
+    return parsed;
+}
+#endif /* !_WIN32 */
+
+/* Scan a repository for package manifest files via the filesystem
+ * walker above. Always-available companion to the parallel path's
+ * per-worker manifest parsing, which is bound to whatever `files[]`
+ * the discoverer produces and therefore misses ignored manifests like
+ * package.json. NULL-safe; returns 0 entries when repo_path is unset. */
+int cbm_pkgmap_scan_repo(const char *repo_path, cbm_pkg_entries_t *entries) {
+    if (!repo_path || !entries) {
+        return 0;
+    }
+#ifdef _WIN32
+    /* The repo-wide manifest walk is POSIX-only for now: on Windows the
+     * recursive descent has hung in CI (no lstat/reparse-point skipping, so
+     * directory junctions can be followed into cycles). Fall back to the
+     * files[]-based pkgmap (baseline behavior) until the walk is made
+     * junction-safe on Windows. Workspace-import resolution from ignored
+     * manifests (package.json) is therefore Linux/macOS-only for now. */
+    (void)entries;
+    cbm_log_info("pkgmap.scan_repo", "skipped", "win32");
+    return 0;
+#else
+    int parsed = pkgmap_walk_dir(repo_path, "", entries);
+    cbm_log_info("pkgmap.scan_repo", "manifests", pkgmap_itoa(parsed));
+    return parsed;
+#endif
+}
+
 /* Build pkgmap for sequential path (reads manifest files directly) */
 CBMHashTable *cbm_pkgmap_build_from_files(const cbm_file_info_t *files, int file_count,
                                           const char *project_name) {
@@ -756,15 +878,7 @@ CBMHashTable *cbm_pkgmap_build_from_files(const cbm_file_info_t *files, int file
 
     for (int i = 0; i < file_count; i++) {
         const char *basename = path_basename(files[i].rel_path);
-        /* Quick check: is this a manifest file? */
-        bool is_manifest =
-            (strcmp(basename, "package.json") == 0 || strcmp(basename, "go.mod") == 0 ||
-             strcmp(basename, "Cargo.toml") == 0 || strcmp(basename, "pyproject.toml") == 0 ||
-             strcmp(basename, "composer.json") == 0 || strcmp(basename, "pubspec.yaml") == 0 ||
-             strcmp(basename, "pom.xml") == 0 || strcmp(basename, "build.gradle") == 0 ||
-             strcmp(basename, "build.gradle.kts") == 0 || strcmp(basename, "mix.exs") == 0 ||
-             ends_with(basename, ".gemspec"));
-        if (!is_manifest) {
+        if (!is_pkgmap_manifest_basename(basename)) {
             continue;
         }
 
@@ -778,6 +892,44 @@ CBMHashTable *cbm_pkgmap_build_from_files(const cbm_file_info_t *files, int file
         free(source);
     }
 
+    CBMHashTable *map = cbm_pkgmap_build(&entries, SKIP_ONE, project_name);
+    cbm_pkg_entries_free(&entries);
+    return map;
+}
+
+/* Variant of cbm_pkgmap_build_from_files that ALSO walks the repo
+ * filesystem to pick up manifests filtered out by the main discoverer
+ * (the canonical case: package.json, which is in IGNORED_JSON_FILES).
+ * Falls back to the files[]-only behaviour if repo_path is NULL. */
+CBMHashTable *cbm_pkgmap_build_from_repo(const char *repo_path, const cbm_file_info_t *files,
+                                         int file_count, const char *project_name) {
+    cbm_pkg_entries_t entries;
+    cbm_pkg_entries_init(&entries);
+
+    /* Manifests already visible through discovery (Cargo.toml, go.mod,
+     * pyproject.toml, ...). package.json typically isn't, but we still
+     * harvest whatever the discovery filter exposed in case downstream
+     * filters change. */
+    int from_files = 0;
+    for (int i = 0; i < file_count; i++) {
+        const char *basename = path_basename(files[i].rel_path);
+        if (!is_pkgmap_manifest_basename(basename)) {
+            continue;
+        }
+        from_files++;
+        int source_len = 0;
+        char *source = pkgmap_read_file(files[i].path, &source_len);
+        if (!source) {
+            continue;
+        }
+        cbm_pkgmap_try_parse(basename, files[i].rel_path, source, source_len, &entries);
+        free(source);
+    }
+
+    int from_walk = cbm_pkgmap_scan_repo(repo_path, &entries);
+    cbm_log_info("pkgmap.scan", "manifests_from_files", pkgmap_itoa(from_files),
+                 "manifests_from_walk", pkgmap_itoa(from_walk), "entries",
+                 pkgmap_itoa(entries.count));
     CBMHashTable *map = cbm_pkgmap_build(&entries, SKIP_ONE, project_name);
     cbm_pkg_entries_free(&entries);
     return map;

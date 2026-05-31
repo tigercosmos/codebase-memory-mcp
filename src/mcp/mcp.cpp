@@ -203,6 +203,9 @@ char *cbm_jsonrpc_format_response(const cbm_jsonrpc_response_t *resp) {
             yyjson_mut_obj_add_val(doc, root, "result", res_val);
             yyjson_doc_free(res_doc);
         }
+    } else {
+        /* JSON-RPC 2.0 spec: response MUST contain "result" or "error" */
+        yyjson_mut_obj_add_null(doc, root, "result");
     }
 
     char *out = yy_doc_to_str(doc);
@@ -746,6 +749,10 @@ static const char *cache_dir(char *buf, size_t bufsz) {
 
 /* Returns full .db path for a project: <cache_dir>/<project>.db */
 static const char *project_db_path(const char *project, char *buf, size_t bufsz) {
+    if (!cbm_validate_project_name(project)) {
+        buf[0] = '\0';
+        return buf;
+    }
     char dir[CBM_SZ_1K];
     cache_dir(dir, sizeof(dir));
     snprintf(buf, bufsz, "%s/%s.db", dir, project);
@@ -839,12 +846,16 @@ static int collect_db_project_names(const char *dir_path, char *out, size_t out_
         if (!is_project_db_file(n, len)) {
             continue;
         }
+        if ((size_t)offset >= out_sz) break; /* bounds check before write */
         if (count > 0 && offset < (int)out_sz - MCP_SEPARATOR) {
             out[offset++] = ',';
         }
         int wrote = snprintf(out + offset, out_sz - (size_t)offset, "\"%.*s\"", (int)(len - 3), n);
         if (wrote > 0) {
             offset += wrote;
+            if ((size_t)offset >= out_sz) {
+                offset = (int)out_sz - 1; /* clamp on truncation */
+            }
         }
         count++;
     }
@@ -4388,6 +4399,8 @@ char *cbm_mcp_server_handle(cbm_mcp_server_t *srv, const char *line) {
         start_update_check(srv);
         detect_session(srv);
         maybe_auto_index(srv);
+    } else if (strcmp(req.method, "ping") == 0) {
+        result_json = heap_strdup("{}");
     } else if (strcmp(req.method, "tools/list") == 0) {
         result_json = cbm_mcp_tools_list();
     } else if (strcmp(req.method, "tools/call") == 0) {

@@ -690,7 +690,7 @@ const CBMType* cbm_type_substitute(CBMArena* a, const CBMType* t,
             for (int i = 0; type_params[i]; i++) {
                 if (strcmp(qn, type_params[i]) == 0 ||
                     strcmp(short_name, type_params[i]) == 0) {
-                    return type_args[i];
+                    return type_args[i] ? type_args[i] : t;
                 }
             }
         }

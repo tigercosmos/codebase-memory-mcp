@@ -7,8 +7,8 @@ sync with upstream **[`DeusData/codebase-memory-mcp`](https://github.com/DeusDat
 
 | | |
 |---|---|
-| **Upstream commit** | `b133a204d224f644ade0c07adaac3f5a04ead90b` (release v0.7.0, 2026-05-30) |
-| **Synced on** | 2026-05-30 |
+| **Upstream commit** | `d0e1e7782544effb3f5ec96dc79712b6cd1c4308` (post-v0.7.0, 2026-05-31) |
+| **Synced on** | 2026-05-31 |
 
 Update both fields whenever you pull new upstream work (see the log at the bottom).
 
@@ -53,7 +53,7 @@ git fetch upstream main
 
 # 1. List upstream commits NEWER than our last-synced marker that we DON'T
 #    already have (compare by message — SHAs diverge across the fork).
-MARKER=b133a204d224f644ade0c07adaac3f5a04ead90b   # <- the "Last synced" SHA above
+MARKER=d0e1e7782544effb3f5ec96dc79712b6cd1c4308   # <- the "Last synced" SHA above
 git log --format='%s' "$MARKER"..upstream/main | while IFS= read -r m; do
   git log --format='%s' main | grep -qxF "$m" || echo "NEW: $m"
 done
@@ -80,5 +80,5 @@ For each genuinely-new commit:
 
 | Date | Upstream → | Ported | Skipped |
 |------|-----------|--------|---------|
-| 2026-05-30 | `b133a20` (v0.7.0) | `82d5c84` parallel slab/parser use-after-free fix; `297003a` + `130b707` (test parts) sanitizer-aware LSP benches | `b133a20` pkg version bump, `130b707` release-notes doc, `d5211f6` notes-file removal |
+| 2026-05-31 | `d0e1e77` (post-v0.7.0) | **22 commits**: c-lsp crash/eval-cap fixes (`05f0a26` `926eb7f` `d895c16`); install `$CLAUDE_CONFIG_DIR` (`dedd33d`); security/correctness hardening (`21c73b5`); store WAL checkpoint (`a6ad401`); MCP ping (`9d6e28b`); platform `CBM_WORKERS` + cgroup detection (`d952238` `a5a3d1d`); pkgmap workspace-imports + SvelteKit routes (`9bcfaab` `fcf98ac` `bcf73b2`); arena NULL-guard + vendored-skip (`9e2bb92`); extract_channels growable stack (`4d84406`); CLOCK_MONOTONIC (`2e110fc`); Windows path/git-log fixes (`2389d82` `df38e33`); tests (`7dafde4` `ba49137` `de069d1` `d848347` `34864c8`); CI bumps (`5c743e8` `694652f` `4fd6e1b`); stale-doc deletions. **Deviation:** repo-wide pkgmap manifest walk is POSIX-only (Windows no-op) — matches upstream `bcf73b2` (the unconditional walk hung Windows CI on directory-junction cycles); Windows workspace-import resolution awaits a junction-safe rewrite upstream. | `afd98bf` README rebrand-divergent; `c6c1d77`+`6c6b8c8`+`d0e1e77` net-zero temp bucket-B CI harness; pkg/version bumps |
 | (earlier) | `9a9488f`-era | full upstream history up to the "pad source read buffers / gate LSP benchmarks" era, brought in before the C++ migration | — |

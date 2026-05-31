@@ -404,10 +404,23 @@ void cbm_lsh_insert(cbm_lsh_index_t *idx, const cbm_lsh_entry_t *entry) {
 /* O(1) dedup scratch: open-addressing set on node_id. RAII — the slot
  * storage is owned by the std::vector (0 = empty; node_ids are always > 0). */
 struct seen_set_t {
-    std::vector<int64_t> slots = std::vector<int64_t>(SEEN_SET_SIZE, 0);
+    std::vector<int64_t> slots;
+    seen_set_t() noexcept {
+        try {
+            slots.assign(SEEN_SET_SIZE, 0);
+        } catch (...) {
+            /* OOM: leave slots empty so seen_set_insert degrades to "already
+             * seen", matching upstream's `if (!s->slots) return false;` path
+             * instead of letting std::bad_alloc escape into the pthread worker
+             * (which would call std::terminate). */
+        }
+    }
 };
 
 static bool seen_set_insert(seen_set_t *s, int64_t node_id) {
+    if (s->slots.empty()) {
+        return false; /* allocation failed; behave as upstream's null-slots guard */
+    }
     uint32_t idx = (uint32_t)(node_id * KNUTH_MULT) & SEEN_SET_MASK;
     for (int probe = 0; probe < SEEN_SET_SIZE; probe++) {
         uint32_t slot = (idx + (uint32_t)probe) & SEEN_SET_MASK;

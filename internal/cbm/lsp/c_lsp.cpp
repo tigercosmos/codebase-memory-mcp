@@ -491,8 +491,8 @@ static bool is_c_builtin_func(const char* name) {
     static const char* skip[] = {
         "__builtin_expect", "__builtin_unreachable", "__builtin_offsetof",
         "__builtin_va_start", "__builtin_va_end", "__builtin_va_arg",
-        "sizeof", "alignof", "alignof", "typeof", "decltype",
-        "static_assert", "static_assert",
+        "sizeof", "alignof", "_Alignof", "typeof", "decltype",
+        "static_assert", "_Static_assert",
         NULL
     };
     for (const char** b = skip; *b; b++) {

@@ -38,6 +38,7 @@ using std::atomic_long;
 using std::atomic_uint;
 using std::atomic_ullong;
 using std::atomic_ulong;
+using std::atomic_size_t;
 
 using cbm_atomic_int = std::atomic<int>;
 using cbm_atomic_int32 = std::atomic<int32_t>;
